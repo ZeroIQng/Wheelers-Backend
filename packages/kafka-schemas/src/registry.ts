@@ -1,61 +1,66 @@
-/**
- * Event registry - Union of all events for type narrowing
- * This allows for discriminated union types when consuming events
- */
+import { z } from 'zod';
+import { TOPICS, type Topic } from './topics';
+import { UserEvent }         from './events/user.events';
+import { DriverEvent }       from './events/driver.events';
+import { RideEvent }         from './events/ride.events';
+import { PaymentEvent }      from './events/payment.events';
+import { WalletEvent }       from './events/wallet.events';
+import { GpsUpdateEvent, GpsProcessedEvent } from './events/gps.events';
+import { ComplianceEvent }   from './events/compliance.events';
+import { DefiEvent }         from './events/defi.events';
+import { NotificationEvent } from './events/notification.events';
 
-import type { RideEvent } from './events/ride.events';
-import type { PaymentEvent } from './events/payment.events';
-import type { WalletEvent } from './events/wallet.events';
-import type { GPSEvent } from './events/gps.events';
-import type { DefiEvent } from './events/defi.events';
-import type { ComplianceEvent } from './events/compliance.events';
+// Maps every live topic to its Zod discriminated union schema.
+// DLQ topics are intentionally omitted — DLQ messages are raw strings
+// stored for manual inspection, not typed events.
+const TOPIC_SCHEMAS = {
+  [TOPICS.USER_EVENTS]:         UserEvent,
+  [TOPICS.DRIVER_EVENTS]:       DriverEvent,
+  [TOPICS.RIDE_EVENTS]:         RideEvent,
+  [TOPICS.PAYMENT_EVENTS]:      PaymentEvent,
+  [TOPICS.WALLET_EVENTS]:       WalletEvent,
+  [TOPICS.GPS_STREAM]:          GpsUpdateEvent,
+  [TOPICS.GPS_PROCESSED]:       GpsProcessedEvent,
+  [TOPICS.COMPLIANCE_EVENTS]:   ComplianceEvent,
+  [TOPICS.DEFI_EVENTS]:         DefiEvent,
+  [TOPICS.NOTIFICATION_EVENTS]: NotificationEvent,
+} as const;
 
-export type AllEvents =
-  | RideEvent
-  | PaymentEvent
-  | WalletEvent
-  | GPSEvent
-  | DefiEvent
-  | ComplianceEvent;
+type LiveTopic = keyof typeof TOPIC_SCHEMAS;
 
-/**
- * Type guard to check if an event is a ride event
- */
-export function isRideEvent(event: AllEvents): event is RideEvent {
-  return event.type.startsWith('ride.');
+// Use this in every consumer.
+// Parses the raw Kafka message value and validates it against the topic's schema.
+// Throws a ZodError (caught by kafka-client's error boundary → DLQ) if invalid.
+//
+// Usage:
+//   const event = parseKafkaEvent(TOPICS.RIDE_EVENTS, message.value.toString());
+//   if (event.eventType === 'RIDE_COMPLETED') { ... }
+export function parseKafkaEvent<T extends LiveTopic>(
+  topic: T,
+  rawValue: string,
+): z.infer<(typeof TOPIC_SCHEMAS)[T]> {
+  const schema = TOPIC_SCHEMAS[topic] as z.ZodSchema;
+  const parsed = JSON.parse(rawValue);
+  return schema.parse(parsed) as z.infer<(typeof TOPIC_SCHEMAS)[T]>;
 }
 
-/**
- * Type guard to check if an event is a payment event
- */
-export function isPaymentEvent(event: AllEvents): event is PaymentEvent {
-  return event.type.startsWith('payment.');
+// Safe version — returns null instead of throwing.
+// Use when you want to log and skip bad messages without crashing the consumer.
+export function safeParseKafkaEvent<T extends LiveTopic>(
+  topic: T,
+  rawValue: string,
+): z.infer<(typeof TOPIC_SCHEMAS)[T]> | null {
+  try {
+    return parseKafkaEvent(topic, rawValue);
+  } catch {
+    return null;
+  }
 }
 
-/**
- * Type guard to check if an event is a wallet event
- */
-export function isWalletEvent(event: AllEvents): event is WalletEvent {
-  return event.type.startsWith('wallet.');
+// Serialises an event to a JSON string for Kafka producer.
+// Usage: produceMessage(TOPICS.RIDE_EVENTS, serializeEvent(rideCompletedEvent));
+export function serializeEvent(event: Record<string, unknown>): string {
+  return JSON.stringify(event);
 }
 
-/**
- * Type guard to check if an event is a GPS event
- */
-export function isGPSEvent(event: AllEvents): event is GPSEvent {
-  return event.type.startsWith('gps.');
-}
-
-/**
- * Type guard to check if an event is a DeFi event
- */
-export function isDefiEvent(event: AllEvents): event is DefiEvent {
-  return event.type.startsWith('defi.');
-}
-
-/**
- * Type guard to check if an event is a compliance event
- */
-export function isComplianceEvent(event: AllEvents): event is ComplianceEvent {
-  return event.type.startsWith('compliance.');
-}
+export type { LiveTopic };
