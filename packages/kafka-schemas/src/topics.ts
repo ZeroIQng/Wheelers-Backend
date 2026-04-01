@@ -1,47 +1,31 @@
-/**
- * Topic name constants
- * Never hardcode strings in your code - always use these constants
- */
-
 export const TOPICS = {
-  // Ride events
-  RIDE_REQUESTED: 'ride.requested',
-  RIDE_ACCEPTED: 'ride.accepted',
-  RIDE_STARTED: 'ride.started',
-  RIDE_COMPLETED: 'ride.completed',
-  RIDE_CANCELLED: 'ride.cancelled',
+  USER_EVENTS:          'user.events',
+  DRIVER_EVENTS:        'driver.events',
+  RIDE_EVENTS:          'ride.events',
+  PAYMENT_EVENTS:       'payment.events',
+  WALLET_EVENTS:        'wallet.events',
+  GPS_STREAM:           'gps.stream',
+  GPS_PROCESSED:        'gps.processed',
+  DEFI_EVENTS:          'defi.events',
+  COMPLIANCE_EVENTS:    'compliance.events',
+  NOTIFICATION_EVENTS:  'notification.events',
 
-  // Payment events
-  PAYMENT_INITIATED: 'payment.initiated',
-  PAYMENT_PROCESSED: 'payment.processed',
-  PAYMENT_FAILED: 'payment.failed',
-  PAYMENT_REFUNDED: 'payment.refunded',
-
-  // Wallet events
-  WALLET_CREATED: 'wallet.created',
-  WALLET_FUNDED: 'wallet.funded',
-  WALLET_WITHDRAWN: 'wallet.withdrawn',
-  WALLET_TRANSFERRED: 'wallet.transferred',
-
-  // GPS events
-  GPS_LOCATION_UPDATED: 'gps.location.updated',
-  GPS_ROUTE_PLANNED: 'gps.route.planned',
-  GPS_DEVIATION_DETECTED: 'gps.deviation.detected',
-
-  // DeFi events
-  DEFI_TOKEN_MINTED: 'defi.token.minted',
-  DEFI_TOKEN_BURNED: 'defi.token.burned',
-  DEFI_REWARD_CLAIMED: 'defi.reward.claimed',
-  DEFI_STAKING_INITIATED: 'defi.staking.initiated',
-  DEFI_STAKING_UNLOCKED: 'defi.staking.unlocked',
-
-  // Compliance events
-  COMPLIANCE_KYC_INITIATED: 'compliance.kyc.initiated',
-  COMPLIANCE_KYC_COMPLETED: 'compliance.kyc.completed',
-  COMPLIANCE_DOCUMENT_VERIFIED: 'compliance.document.verified',
-  COMPLIANCE_FRAUD_DETECTED: 'compliance.fraud.detected',
-  COMPLIANCE_ACCOUNT_SUSPENDED: 'compliance.account.suspended',
-  COMPLIANCE_REPORT_GENERATED: 'compliance.report.generated',
+  // Dead-letter queues — one per topic
+  USER_EVENTS_DLQ:          'user.events.dlq',
+  DRIVER_EVENTS_DLQ:        'driver.events.dlq',
+  RIDE_EVENTS_DLQ:          'ride.events.dlq',
+  PAYMENT_EVENTS_DLQ:       'payment.events.dlq',
+  WALLET_EVENTS_DLQ:        'wallet.events.dlq',
+  GPS_STREAM_DLQ:           'gps.stream.dlq',
+  GPS_PROCESSED_DLQ:        'gps.processed.dlq',
+  DEFI_EVENTS_DLQ:          'defi.events.dlq',
+  COMPLIANCE_EVENTS_DLQ:    'compliance.events.dlq',
+  NOTIFICATION_EVENTS_DLQ:  'notification.events.dlq',
 } as const;
 
-export type TopicType = typeof TOPICS[keyof typeof TOPICS];
+export type Topic = (typeof TOPICS)[keyof typeof TOPICS];
+
+// Convenience — given any topic, return its DLQ topic name
+export function dlqTopic(topic: Topic): string {
+  return `${topic}.dlq`;
+}
