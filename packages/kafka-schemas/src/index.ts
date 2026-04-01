@@ -55,7 +55,7 @@ export type {
 } from './events/compliance.events';
 
 // Export topic constants
-export { TOPICS, type TopicType } from './topics';
+// export { TOPICS, type TopicType } from './topics';
 
 // Export registry and type guards
 export {

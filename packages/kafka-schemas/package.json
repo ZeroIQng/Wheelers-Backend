@@ -19,5 +19,8 @@
   "license": "ISC",
   "devDependencies": {
     "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
   }
 }
