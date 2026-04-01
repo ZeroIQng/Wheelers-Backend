@@ -1,84 +1,50 @@
-import { Kafka, CompressionTypes } from 'kafkajs';
-import type { DLQMetadata } from './types';
+import type { Producer }    from 'kafkajs';
+import { getKafkaInstance } from './connection';
+import type { DlqPayload }  from './types';
 
-// DLQ producer is a separate singleton from the main producer.
-// It intentionally uses fewer retries — if we can't write to the DLQ,
-// we log to stderr and move on rather than crashing the consumer.
-let dlqProducer: ReturnType<Kafka['producer']> | null = null;
-let dlqConnected = false;
+let dlqProducer: Producer | null = null;
 
-async function getDLQProducer() {
-  if (dlqProducer && dlqConnected) return dlqProducer;
-
-  const brokers = process.env.KAFKA_BROKERS;
-  if (!brokers) throw new Error('KAFKA_BROKERS env var is required');
-
-  const kafka = new Kafka({
-    clientId: `${process.env.SERVICE_NAME ?? 'wheleers'}-dlq`,
-    brokers: brokers.split(','),
-    retry: { retries: 2 },
-  });
-
-  dlqProducer = kafka.producer({ idempotent: false });
+async function getDlqProducer(): Promise<Producer> {
+  if (dlqProducer) return dlqProducer;
+  const kafka  = getKafkaInstance();
+  dlqProducer  = kafka.producer({ allowAutoTopicCreation: false });
   await dlqProducer.connect();
-  dlqConnected = true;
   return dlqProducer;
 }
 
-// Sends a failed message to its DLQ topic ({originalTopic}.dlq).
-// Enriches headers with full error context for post-mortem debugging.
-// NEVER throws — a failing DLQ send must not crash the consumer loop.
-export async function sendToDLQ(
-  originalTopic: string,
-  rawMessage: string | Buffer | null,
-  error: unknown,
-  metadata: Partial<DLQMetadata> = {},
-): Promise<void> {
-  const err = error instanceof Error ? error : new Error(String(error));
-  const dlqTopic = `${originalTopic}.dlq`;
-
-  const enrichedMetadata: DLQMetadata = {
-    originalTopic,
-    failedAt:     new Date().toISOString(),
-    serviceId:    process.env.SERVICE_NAME ?? 'unknown',
-    errorMessage: err.message,
-    errorStack:   err.stack,
-    attemptCount: metadata.attemptCount ?? 1,
-  };
+// Parks a failed message in <originalTopic>.dlq for manual inspection.
+// Called automatically by the consumer — never call this in service code.
+export async function sendToDlq(payload: DlqPayload): Promise<void> {
+  const dlqTopic = `${payload.originalTopic}.dlq`;
 
   try {
-    const producer = await getDLQProducer();
-
+    const producer = await getDlqProducer();
     await producer.send({
-      topic: dlqTopic,
-      compression: CompressionTypes.GZIP,
-      messages: [
-        {
-          value: rawMessage ?? Buffer.from('null'),
-          headers: {
-            'x-dlq-original-topic':  originalTopic,
-            'x-dlq-failed-at':       enrichedMetadata.failedAt,
-            'x-dlq-service-id':      enrichedMetadata.serviceId,
-            'x-dlq-error-message':   enrichedMetadata.errorMessage,
-            'x-dlq-error-stack':     enrichedMetadata.errorStack ?? '',
-            'x-dlq-attempt-count':   String(enrichedMetadata.attemptCount),
-            'x-dlq-metadata':        JSON.stringify(enrichedMetadata),
-          },
+      topic:    dlqTopic,
+      messages: [{
+        key:   Buffer.from(payload.originalTopic),
+        value: Buffer.from(JSON.stringify(payload)),
+        headers: {
+          'x-dlq-source':    payload.originalTopic,
+          'x-dlq-reason':    payload.error.slice(0, 200),
+          'x-dlq-failed-at': payload.failedAt,
         },
-      ],
+      }],
     });
-  } catch (dlqError) {
-    // DLQ send failed — last resort is stderr. Never throw.
-    process.stderr.write(
-      JSON.stringify({
-        level:    'error',
-        msg:      'Failed to write to DLQ — message lost',
-        dlqTopic,
-        originalError: err.message,
-        dlqError: dlqError instanceof Error ? dlqError.message : String(dlqError),
-        rawMessage: rawMessage?.toString().slice(0, 500), // truncate for log safety
-        timestamp: new Date().toISOString(),
-      }) + '\n',
+  } catch (err) {
+    // Log loudly but don't crash — losing a DLQ write is less critical
+    // than halting the consumer entirely.
+    console.error(
+      `[kafka-client] CRITICAL: Could not write to DLQ "${dlqTopic}". ` +
+      `Original error: ${payload.error}. ` +
+      `DLQ write error: ${err instanceof Error ? err.message : String(err)}`,
     );
+  }
+}
+
+export async function disconnectDlq(): Promise<void> {
+  if (dlqProducer) {
+    await dlqProducer.disconnect();
+    dlqProducer = null;
   }
 }

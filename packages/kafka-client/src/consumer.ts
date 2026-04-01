@@ -1,109 +1,79 @@
-import { Kafka, Consumer } from 'kafkajs';
-import { withErrorBoundary } from './middleware';
-import type { MessageHandler, MessageMeta, ConsumerOptions } from './types';
+import type { IHeaders }    from 'kafkajs';
+import { getKafkaInstance } from './connection';
+import { sendToDlq }        from './dlq';
+import type {
+  ConsumerConfig,
+  MessageContext,
+  MessageHandler,
+  WheelersConsumer,
+} from './types';
 
-export interface WheleersConsumer {
-  // Register a typed handler for a topic.
-  // Call this before run() — you can subscribe to multiple topics.
-  subscribe<T>(
-    topic: string,
-    handler: MessageHandler<T>,
-    parser: (raw: string) => T,
-  ): void;
-
-  // Start the consumer loop. Blocks until disconnect() is called.
-  run(): Promise<void>;
-
-  // Cleanly disconnect — call in SIGTERM/SIGINT handler.
-  disconnect(): Promise<void>;
-}
-
-export function createConsumer(
-  groupId: string,
-  options: ConsumerOptions = {},
-): WheleersConsumer {
-  const brokers = process.env.KAFKA_BROKERS;
-  if (!brokers) throw new Error('KAFKA_BROKERS env var is required');
-
-  const {
-    fromBeginning    = false,
-    concurrency      = 1,
-    sessionTimeout   = 30_000,
-    heartbeatInterval = 3_000,
-  } = options;
-
-  const kafka = new Kafka({
-    clientId: `${process.env.SERVICE_NAME ?? 'wheleers'}-${groupId}`,
-    brokers: brokers.split(','),
-    retry: {
-      retries:          8,
-      initialRetryTime: 300,
-      factor:           2,
-    },
+export async function createConsumer(config: ConsumerConfig): Promise<WheelersConsumer> {
+  const kafka    = getKafkaInstance();
+  const consumer = kafka.consumer({
+    groupId:         config.groupId,
+    maxWaitTimeInMs: config.maxWaitTimeMs ?? 100,
+    retry:           { retries: 5, initialRetryTime: 300, factor: 2 },
   });
 
-  const consumer: Consumer = kafka.consumer({
-    groupId,
-    sessionTimeout,
-    heartbeatInterval,
-    // Allow some lag before rebalance — smooths over slow handlers
-    rebalanceTimeout: 60_000,
-  });
-
-  // Topic → { handler, parser } registry — built up via subscribe()
-  type HandlerEntry = {
-    handler: MessageHandler<unknown>;
-    parser:  (raw: string) => unknown;
-  };
-  const handlers = new Map<string, HandlerEntry>();
+  await consumer.connect();
 
   return {
-    subscribe(topic, handler, parser) {
-      handlers.set(topic, {
-        handler: handler as MessageHandler<unknown>,
-        parser:  parser as (raw: string) => unknown,
-      });
-    },
-
-    async run() {
-      await consumer.connect();
-
-      // Subscribe to all registered topics in one call
-      for (const topic of handlers.keys()) {
-        await consumer.subscribe({ topic, fromBeginning });
+    async subscribe(topics, handler) {
+      for (const topic of topics) {
+        await consumer.subscribe({
+          topic,
+          fromBeginning: config.fromBeginning ?? false,
+        });
       }
 
       await consumer.run({
-        // partitionsConsumedConcurrently controls parallel partition processing
-        partitionsConsumedConcurrently: concurrency,
+        // Offset committed after eachMessage resolves — handlers must be
+        // idempotent since a crash mid-handler will re-deliver on restart.
+        autoCommit: true,
+        partitionsConsumedConcurrently: config.concurrency ?? 1,
 
         eachMessage: async ({ topic, partition, message }) => {
-          const raw = message.value?.toString() ?? null;
-          const entry = handlers.get(topic);
+          const rawValue = message.value?.toString() ?? '';
+          const offset   = message.offset;
 
-          if (!entry) {
-            process.stderr.write(`No handler registered for topic: ${topic}\n`);
-            return;
-          }
-
-          const meta: MessageMeta = {
+          const context: MessageContext = {
             topic,
             partition,
-            offset:    message.offset,
+            offset,
             timestamp: message.timestamp,
-            headers:   message.headers as MessageMeta['headers'],
-            rawMessage: message,
+            headers:   flattenHeaders(message.headers),
           };
 
-          // Full middleware chain: parse → handler → retry on transient error → DLQ on exhaustion
-          await withErrorBoundary(
-            async () => {
-              if (!raw) throw new Error('Received null message value — skipping');
-              const parsed = entry.parser(raw);
-              await entry.handler(parsed, meta);
-            },
-            { topic, rawMessage: raw },
-          );
+          try {
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(rawValue);
+            } catch {
+              throw new Error(`JSON parse failed on topic "${topic}" offset ${offset}`);
+            }
+
+            await (handler as MessageHandler<unknown>)(parsed, context);
+
+          } catch (err) {
+            const error = err instanceof Error ? err : new Error(String(err));
+
+            console.error(
+              `[kafka-client] Handler error — topic="${topic}" ` +
+              `partition=${partition} offset=${offset}: ${error.message}`,
+            );
+
+            await sendToDlq({
+              originalTopic: topic,
+              rawValue,
+              error:         error.message,
+              stack:         error.stack,
+              failedAt:      new Date().toISOString(),
+              partition,
+              offset,
+            });
+            // Does not re-throw — offset commits, consumer keeps running
+          }
         },
       });
     },
@@ -112,4 +82,23 @@ export function createConsumer(
       await consumer.disconnect();
     },
   };
+}
+
+// ─── Internal ─────────────────────────────────────────────────────────────────
+
+function flattenHeaders(raw: IHeaders | undefined): Record<string, string> {
+  if (!raw) return {};
+  const out: Record<string, string> = {};
+  for (const [key, val] of Object.entries(raw)) {
+    if (val === undefined) continue;
+    if (Array.isArray(val)) {
+      const last = val[val.length - 1];
+      if (last !== undefined) {
+        out[key] = Buffer.isBuffer(last) ? last.toString('utf8') : String(last);
+      }
+    } else {
+      out[key] = Buffer.isBuffer(val) ? val.toString('utf8') : String(val);
+    }
+  }
+  return out;
 }

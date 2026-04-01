@@ -1,86 +1,74 @@
-import { Kafka } from 'kafkajs';
-import { TOPICS} from '@wheleers/kafka-schemas';
-// Partition counts per topic — sized based on expected throughput.
-// GPS topics handle ~133 events/sec at 400 concurrent users → 8 partitions.
-// Core domain topics handle bursts but not sustained volume → 4 partitions.
-// Low-frequency operational topics → 2 partitions.
-// DLQ topics never need more than 1 — they're for inspection, not throughput.
-const PARTITION_MAP: Record<string, number> = {
-  [TOPICS.GPS_STREAM]:           8,
-  [TOPICS.GPS_PROCESSED]:        8,
-  [TOPICS.RIDE_EVENTS]:          4,
-  [TOPICS.USER_EVENTS]:          4,
-  [TOPICS.DRIVER_EVENTS]:        4,
-  [TOPICS.PAYMENT_EVENTS]:       4,
-  [TOPICS.WALLET_EVENTS]:        4,
-  [TOPICS.DEFI_EVENTS]:          2,
-  [TOPICS.COMPLIANCE_EVENTS]:    2,
-  [TOPICS.NOTIFICATION_EVENTS]:  2,
-};
+import { getKafkaInstance }  from './connection';
+import type { TopicDefinition } from './types';
 
-// Idempotently creates all Kafka topics.
-// Safe to call on every service startup — existing topics are silently skipped.
-// Call this before starting any consumers or producers.
-export async function ensureTopics(): Promise<void> {
-  const brokers = process.env.KAFKA_BROKERS;
-  if (!brokers) throw new Error('KAFKA_BROKERS env var is required');
+export const TOPIC_PRESETS = {
+  GPS:        { numPartitions: 8, replicationFactor: 1, retentionMs: 86_400_000 },       // 1 day
+  STANDARD:   { numPartitions: 4, replicationFactor: 1, retentionMs: 604_800_000 },      // 7 days
+  LOW_VOLUME: { numPartitions: 2, replicationFactor: 1, retentionMs: 604_800_000 },      // 7 days
+  DLQ:        { numPartitions: 1, replicationFactor: 1, retentionMs: 2_592_000_000 },    // 30 days
+} as const;
 
-  const replicationFactor = Number(process.env.KAFKA_REPLICATION_FACTOR ?? '1');
-
-  const kafka = new Kafka({
-    clientId: `${process.env.SERVICE_NAME ?? 'wheleers'}-admin`,
-    brokers: brokers.split(','),
-  });
-
+// Creates topics that don't already exist. Safe to call on every startup.
+// Services call this before connecting producer/consumer so they never
+// produce to a non-existent topic.
+//
+// Usage:
+//   await ensureTopics([
+//     { name: TOPICS.RIDE_EVENTS,      ...TOPIC_PRESETS.STANDARD },
+//     { name: TOPICS.RIDE_EVENTS_DLQ,  ...TOPIC_PRESETS.DLQ     },
+//   ]);
+export async function ensureTopics(topics: TopicDefinition[]): Promise<void> {
+  const kafka = getKafkaInstance();
   const admin = kafka.admin();
   await admin.connect();
 
   try {
-    // Build the full topic list — live topics + their DLQ counterparts
-    const topicsToCreate = Object.entries(PARTITION_MAP).flatMap(
-      ([topic, numPartitions]) => [
-        { topic, numPartitions, replicationFactor },
-        // DLQ topic — always 1 partition, same replication
-        {
-          topic:             `${topic}.dlq`,
-          numPartitions:     1,
-          replicationFactor,
-          configEntries: [
-            // Retain DLQ messages for 7 days (longer than live topics)
-            { name: 'retention.ms', value: String(7 * 24 * 60 * 60 * 1000) },
-          ],
-        },
-      ],
-    );
+    const existing = new Set(await admin.listTopics());
+    const toCreate  = topics.filter(t => !existing.has(t.name));
+
+    if (toCreate.length === 0) {
+      console.log('[kafka-client] All required topics already exist.');
+      return;
+    }
 
     await admin.createTopics({
-      topics:           topicsToCreate,
-      waitForLeaders:   true,
-      // Don't throw if topics already exist — idempotent
+      waitForLeaders: true,
+      topics: toCreate.map(t => ({
+        topic:             t.name,
+        numPartitions:     t.numPartitions,
+        replicationFactor: t.replicationFactor,
+        configEntries: [{
+          name:  'retention.ms',
+          value: String(t.retentionMs ?? 604_800_000),
+        }],
+      })),
     });
 
+    console.log(
+      `[kafka-client] Created topics: ${toCreate.map(t => t.name).join(', ')}`,
+    );
   } finally {
     await admin.disconnect();
   }
 }
 
-// Returns a list of all topic names currently in Kafka.
-// Useful for health checks and startup validation.
-export async function listTopics(): Promise<string[]> {
-  const brokers = process.env.KAFKA_BROKERS;
-  if (!brokers) throw new Error('KAFKA_BROKERS env var is required');
-
-  const kafka = new Kafka({
-    clientId: `${process.env.SERVICE_NAME ?? 'wheleers'}-admin-list`,
-    brokers: brokers.split(','),
-  });
-
-  const admin = kafka.admin();
-  await admin.connect();
-
-  try {
-    return await admin.listTopics();
-  } finally {
-    await admin.disconnect();
+// Helper — builds a full topic list from name+preset pairs and automatically
+// appends the DLQ counterpart for each non-DLQ topic.
+//
+// Usage:
+//   await ensureTopics(buildTopicList([
+//     [TOPICS.RIDE_EVENTS,   TOPIC_PRESETS.STANDARD],
+//     [TOPICS.GPS_STREAM,    TOPIC_PRESETS.GPS],
+//   ]));
+export function buildTopicList(
+  entries: Array<[name: string, preset: typeof TOPIC_PRESETS[keyof typeof TOPIC_PRESETS]]>,
+): TopicDefinition[] {
+  const result: TopicDefinition[] = [];
+  for (const [name, preset] of entries) {
+    result.push({ name, ...preset });
+    if (!name.endsWith('.dlq')) {
+      result.push({ name: `${name}.dlq`, ...TOPIC_PRESETS.DLQ });
+    }
   }
+  return result;
 }
