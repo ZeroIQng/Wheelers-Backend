@@ -1,6 +1,5 @@
 import { Kafka } from 'kafkajs';
-import { TOPICS } from '@wheleers/kafka-schemas';
-
+import { TOPICS} from '@wheleers/kafka-schemas';
 // Partition counts per topic — sized based on expected throughput.
 // GPS topics handle ~133 events/sec at 400 concurrent users → 8 partitions.
 // Core domain topics handle bursts but not sustained volume → 4 partitions.
