@@ -25,6 +25,7 @@
   },
   "homepage": "https://github.com/ZeroIQng/Wheelers-Backend#readme",
   "dependencies": {
+    "@prisma/client": "^7.6.0",
     "kafkajs": "^2.2.4",
     "zod": "^4.3.6"
   },
