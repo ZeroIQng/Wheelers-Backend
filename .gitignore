@@ -10,3 +10,4 @@ build/
 coverage/
 kafka-schemas/node_modules/
 kafka-schemas/dist/
+kafka-schemas/build/

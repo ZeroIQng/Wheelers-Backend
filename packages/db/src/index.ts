@@ -4,7 +4,7 @@ export { prisma } from './prisma';
 // Scoped clients — import only the one your service owns
 export { userClient }       from './clients/user.client';
 export { driverClient }     from './clients/driver.client';
-export { rideClient }       from './clients/ride.client';
+export { rideClient }       from './clients/rider.client';
 export { paymentClient }    from './clients/payment.client';
 export { walletClient }     from './clients/wallet.client';
 export { complianceClient } from './clients/compliance.client';
