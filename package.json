@@ -23,5 +23,12 @@
   "bugs": {
     "url": "https://github.com/ZeroIQng/Wheelers-Backend/issues"
   },
-  "homepage": "https://github.com/ZeroIQng/Wheelers-Backend#readme"
+  "homepage": "https://github.com/ZeroIQng/Wheelers-Backend#readme",
+  "dependencies": {
+    "kafkajs": "^2.2.4",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0"
+  }
 }
