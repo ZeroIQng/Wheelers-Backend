@@ -1,56 +1,83 @@
-import type { KafkaMessage } from 'kafkajs';
+import type { CompressionTypes } from 'kafkajs';
 
-// The function signature every service passes to consumer.subscribe().
-// T is the parsed, validated event type from @wheleers/kafka-schemas.
-export type MessageHandler<T> = (
-  event: T,
-  meta: MessageMeta,
-) => Promise<void>;
+// ─── Producer ────────────────────────────────────────────────────────────────
 
-// Kafka metadata passed alongside every parsed event to the handler.
-// Useful for logging, idempotency checks, and debugging.
-export interface MessageMeta {
+export interface ProducerConfig {
+  // Unique name for this service — stamped into every message header
+  serviceId:        string;
+  retries?:         number;          // default: 5
+  initialRetryTime?: number;         // ms, default: 300
+  compression?:     CompressionTypes;
+}
+
+export interface SendOptions {
+  // Partition key — use userId / rideId so related events stay ordered
+  key?:         string;
+  headers?:     Record<string, string>;
+  compression?: CompressionTypes;
+}
+
+export interface WheelersProducer {
+  send(
+    topic:   string,
+    value:   Record<string, unknown>,
+    options?: SendOptions,
+  ): Promise<void>;
+
+  sendBatch(messages: Array<{
+    topic:    string;
+    value:    Record<string, unknown>;
+    options?: SendOptions;
+  }>): Promise<void>;
+
+  disconnect(): Promise<void>;
+}
+
+// ─── Consumer ────────────────────────────────────────────────────────────────
+
+export interface ConsumerConfig {
+  groupId:       string;
+  maxWaitTimeMs?: number;   // default: 100
+  concurrency?:  number;    // default: 1 — keep at 1 unless handler is stateless
+  fromBeginning?: boolean;  // default: false
+}
+
+export interface MessageContext {
   topic:      string;
   partition:  number;
   offset:     string;
-  timestamp:  string;        // epoch ms as string (Kafka standard)
-  headers:    KafkaHeaders;
-  rawMessage: KafkaMessage;  // escape hatch — avoid using directly
+  timestamp:  string;
+  headers:    Record<string, string>;
 }
 
-// Headers attached to every produced message by this package.
-export interface KafkaHeaders {
-  'x-service-id'?:     string;  // which service produced this message
-  'x-schema-version'?: string;  // for future schema migration tracking
-  [key: string]: string | Buffer | undefined;
+// The function you write in each consumer file
+export type MessageHandler<T = unknown> = (
+  value:   T,
+  context: MessageContext,
+) => Promise<void>;
+
+export interface WheelersConsumer {
+  subscribe(topics: string[], handler: MessageHandler): Promise<void>;
+  disconnect(): Promise<void>;
 }
 
-// Options passed to createProducer.
-export interface ProducerOptions {
-  // Max retries before giving up on a single produce call. Default: 5.
-  maxRetries?: number;
-  // Enable idempotent producer (exactly-once at broker level). Default: true.
-  idempotent?: boolean;
+// ─── Admin ───────────────────────────────────────────────────────────────────
+
+export interface TopicDefinition {
+  name:              string;
+  numPartitions:     number;
+  replicationFactor: number;
+  retentionMs?:      number;  // default: 7 days
 }
 
-// Options passed to createConsumer.
-export interface ConsumerOptions {
-  // Read from the beginning of the topic on first connect. Default: false.
-  fromBeginning?: boolean;
-  // How many messages to process in parallel per partition. Default: 1.
-  concurrency?: number;
-  // Session timeout ms before broker considers consumer dead. Default: 30000.
-  sessionTimeout?: number;
-  // Heartbeat interval ms — must be < sessionTimeout / 3. Default: 3000.
-  heartbeatInterval?: number;
-}
+// ─── DLQ ─────────────────────────────────────────────────────────────────────
 
-// Metadata written to the DLQ message for post-mortem inspection.
-export interface DLQMetadata {
+export interface DlqPayload {
   originalTopic: string;
-  failedAt:      string;  // ISO timestamp
-  serviceId:     string;
-  errorMessage:  string;
-  errorStack?:   string;
-  attemptCount:  number;
+  rawValue:      string;
+  error:         string;
+  stack?:        string;
+  failedAt:      string;
+  partition:     number;
+  offset:        string;
 }
