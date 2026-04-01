@@ -1,0 +1,23 @@
+{
+  "name": "@wheelers/kafka-schemas",
+  "version": "1.0.0",
+  "description": "Kafka event schemas and types for Wheelers platform",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "kafka",
+    "events",
+    "schemas",
+    "typescript"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
