@@ -1,0 +1,35 @@
+# infra/docker-compose.yml (abbreviated)
+services:
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    environment:
+      KAFKA_KRAFT_MODE: "true"
+
+  postgres:
+    image: postgres:16
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+
+  api-gateway:
+    build: ../apps/api-gateway
+    depends_on: [kafka, redis]
+    ports: ["3000:3000"]
+    env_file: ../apps/api-gateway/.env
+
+  ride-service:
+    build: ../apps/ride-service
+    depends_on: [kafka, postgres, redis]
+    env_file: ../apps/ride-service/.env
+
+  payment-service:
+    build: ../apps/payment-service
+    depends_on: [kafka, postgres]
+    env_file: ../apps/payment-service/.env
+
+  wallet-service:
+    build: ../apps/wallet-service
+    depends_on: [kafka, postgres]
+    env_file: ../apps/wallet-service/.env
