@@ -1,20 +1,28 @@
-export { createProducer }        from './producer';
-export type { WheleersProducer } from './producer';
+// Core factories
+export { createProducer } from './producer';
+export { createConsumer } from './consumer';
 
-export { createConsumer }        from './consumer';
-export type { WheleersConsumer } from './consumer';
+// Topic management
+export { ensureTopics, buildTopicList, TOPIC_PRESETS } from './admin';
 
-export { ensureTopics, listTopics } from './admin';
+// Graceful shutdown
+export { onShutdown, registerShutdownHandlers } from './shutdown';
 
-export { sendToDLQ }            from './dlq';
+// DLQ — used internally by consumer; exposed for replay scripts
+export { sendToDlq, disconnectDlq } from './dlq';
 
-export { withRetry, withErrorBoundary } from './middleware';
+// Connection — exposed for advanced use (e.g. testing)
+export { getKafkaInstance, resetKafkaInstance } from './connection';
 
+// Types
 export type {
+  ProducerConfig,
+  SendOptions,
+  WheelersProducer,
+  ConsumerConfig,
+  MessageContext,
   MessageHandler,
-  MessageMeta,
-  KafkaHeaders,
-  ProducerOptions,
-  ConsumerOptions,
-  DLQMetadata,
+  WheelersConsumer,
+  TopicDefinition,
+  DlqPayload,
 } from './types';

@@ -1,5 +1,5 @@
 import { ZodError } from 'zod';
-import { sendToDLQ } from './dlq';
+import { sendToDlq } from './dlq';
 
 // Errors that are worth retrying — transient infra problems.
 // Zod errors, business logic errors, and type errors are NOT retried
