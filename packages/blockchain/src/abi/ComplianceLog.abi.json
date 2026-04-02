@@ -1,0 +1,49 @@
+[
+  {
+    "name": "logConsent",
+    "type": "function",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      { "name": "userWallet",      "type": "address" },
+      { "name": "consentType",     "type": "string"  },
+      { "name": "consentVersion",  "type": "string"  },
+      { "name": "timestamp",       "type": "uint256" }
+    ],
+    "outputs": []
+  },
+  {
+    "name": "logFeedback",
+    "type": "function",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      { "name": "rideId",          "type": "string"  },
+      { "name": "revieweeWallet",  "type": "address" },
+      { "name": "rating",          "type": "uint8"   },
+      { "name": "commentHash",     "type": "bytes32" }
+    ],
+    "outputs": []
+  },
+  {
+    "name": "logRecording",
+    "type": "function",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      { "name": "rideId",      "type": "string"  },
+      { "name": "sha256Hash",  "type": "bytes32" }
+    ],
+    "outputs": []
+  },
+  {
+    "name": "hasValidConsent",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [
+      { "name": "userWallet",     "type": "address" },
+      { "name": "consentType",    "type": "string"  },
+      { "name": "consentVersion", "type": "string"  }
+    ],
+    "outputs": [
+      { "name": "", "type": "bool" }
+    ]
+  }
+]
