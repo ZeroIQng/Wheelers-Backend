@@ -1,8 +1,8 @@
-import { getPublicClient, getWalletClient } from '../src/evm.client';
-import { type SupportedEvmChain }           from '../src/chains/evm.config';
+import { getPublicClient, getWalletClient } from '../evm.client';
+import { type SupportedEvmChain }           from '../chains/evm.config';
 import { hexToBytes, keccak256, toHex }     from 'viem';
 import { createHash }                        from 'crypto';
-import ComplianceLogAbi                      from '../src/abi/ComplianceLog.abi.json';
+import ComplianceLogAbi                      from '../abi/ComplianceLog.abi.json';
 
 function getContractAddress(): `0x${string}` {
   const addr = process.env['COMPLIANCE_LOG_CONTRACT'];
