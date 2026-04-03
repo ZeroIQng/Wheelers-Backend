@@ -1,14 +1,15 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { UserCreatedEvent, UserRoleChangedEvent } from '@wheleers/kafka-schemas';
 import { UserRole, userClient } from '@wheleers/db';
-import { verifyHs256Jwt } from '../auth/jwt';
+import { verifyPrivyAccessToken } from '../auth/privy';
 import type { GatewayRole } from '../types';
 import { getString, isRecord } from '../utils/object';
 import type { GatewayPublisher } from '../websocket/publisher';
 import { readJsonBody, sendJson } from './utils';
 
 interface AuthRouteDeps {
-  jwtSecret: string;
+  privyAppId: string;
+  privyVerificationKey: string;
   publisher: GatewayPublisher;
 }
 
@@ -60,30 +61,39 @@ export async function handlePrivyAuthRoute(
       return;
     }
 
-    const token = getString(rawBody, 'token');
+    const token =
+      getString(rawBody, 'accessToken') ??
+      getString(rawBody, 'token') ??
+      extractBearerToken(
+        typeof req.headers.authorization === 'string'
+          ? req.headers.authorization
+          : undefined,
+      );
+
     if (!token) {
-      sendJson(res, 400, { error: 'token is required' });
+      sendJson(res, 400, { error: 'accessToken is required' });
       return;
     }
 
-    const claims = verifyHs256Jwt(token, deps.jwtSecret);
-    const privyDid =
-      (typeof claims['sub'] === 'string' ? claims['sub'] : undefined) ??
-      (typeof claims['privyDid'] === 'string' ? claims['privyDid'] : undefined) ??
-      getString(rawBody, 'privyDid');
+    const verifiedToken = verifyPrivyAccessToken({
+      accessToken: token,
+      appId: deps.privyAppId,
+      verificationKey: deps.privyVerificationKey,
+    });
+
+    const privyDid = verifiedToken.privyDid;
 
     const walletAddress =
       getString(rawBody, 'walletAddress') ??
-      (typeof claims['walletAddress'] === 'string' ? claims['walletAddress'] : undefined);
-
-    if (!privyDid || !walletAddress) {
-      sendJson(res, 400, { error: 'privyDid and walletAddress are required' });
-      return;
-    }
+      (typeof verifiedToken.claims['walletAddress'] === 'string'
+        ? verifiedToken.claims['walletAddress']
+        : undefined);
 
     const role = normalizeRole(
       getString(rawBody, 'role') ??
-      (typeof claims['role'] === 'string' ? claims['role'] : undefined) ??
+      (typeof verifiedToken.claims['role'] === 'string'
+        ? verifiedToken.claims['role']
+        : undefined) ??
       'RIDER',
     );
 
@@ -111,13 +121,20 @@ export async function handlePrivyAuthRoute(
       return;
     }
 
+    if (!walletAddress) {
+      sendJson(res, 400, { error: 'walletAddress is required for first-time registration' });
+      return;
+    }
+
     const created = await userClient.create({
       privyDid,
       walletAddress,
       role: ROLE_MAP[role],
       name:
         getString(rawBody, 'name') ??
-        (typeof claims['name'] === 'string' ? claims['name'] : undefined),
+        (typeof verifiedToken.claims['name'] === 'string'
+          ? verifiedToken.claims['name']
+          : undefined),
       phone: getString(rawBody, 'phone'),
     });
 
@@ -129,11 +146,15 @@ export async function handlePrivyAuthRoute(
       role: ROLE_MAP[role],
       email:
         getString(rawBody, 'email') ??
-        (typeof claims['email'] === 'string' ? claims['email'] : undefined),
+        (typeof verifiedToken.claims['email'] === 'string'
+          ? verifiedToken.claims['email']
+          : undefined),
       name: created.name ?? undefined,
       authMethod: normalizeAuthMethod(
         getString(rawBody, 'authMethod') ??
-        (typeof claims['authMethod'] === 'string' ? claims['authMethod'] : undefined),
+        (typeof verifiedToken.claims['authMethod'] === 'string'
+          ? verifiedToken.claims['authMethod']
+          : undefined),
       ),
       timestamp: new Date().toISOString(),
     });
@@ -150,4 +171,14 @@ export async function handlePrivyAuthRoute(
       error: error instanceof Error ? error.message : 'Privy auth failed',
     });
   }
+}
+
+function extractBearerToken(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+
+  const [scheme, token] = value.split(' ');
+  if (!scheme || !token) return undefined;
+
+  if (scheme.toLowerCase() !== 'bearer') return undefined;
+  return token;
 }

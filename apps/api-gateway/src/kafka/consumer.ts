@@ -36,7 +36,7 @@ export async function startGatewayKafkaConsumer(deps: StartGatewayConsumerDeps):
         if (!parsed.success) {
           throw new Error(`Invalid ride event: ${parsed.error.message}`);
         }
-        handleRideEvent(parsed.data, deps.registry, rideParticipants);
+        await handleRideEvent(parsed.data, deps.registry, rideParticipants);
         return;
       }
 
@@ -45,7 +45,7 @@ export async function startGatewayKafkaConsumer(deps: StartGatewayConsumerDeps):
         if (!parsed.success) {
           throw new Error(`Invalid wallet event: ${parsed.error.message}`);
         }
-        handleWalletEvent(parsed.data, deps.registry);
+        await handleWalletEvent(parsed.data, deps.registry);
         return;
       }
 
@@ -54,7 +54,7 @@ export async function startGatewayKafkaConsumer(deps: StartGatewayConsumerDeps):
         if (!parsed.success) {
           throw new Error(`Invalid notification event: ${parsed.error.message}`);
         }
-        handleNotificationEvent(parsed.data, deps.registry);
+        await handleNotificationEvent(parsed.data, deps.registry);
         return;
       }
 
@@ -63,7 +63,7 @@ export async function startGatewayKafkaConsumer(deps: StartGatewayConsumerDeps):
         if (!parsed.success) {
           throw new Error(`Invalid GPS processed event: ${parsed.error.message}`);
         }
-        handleGpsProcessedEvent(parsed.data, deps.registry, rideParticipants);
+        await handleGpsProcessedEvent(parsed.data, deps.registry, rideParticipants);
         return;
       }
 
@@ -72,17 +72,17 @@ export async function startGatewayKafkaConsumer(deps: StartGatewayConsumerDeps):
         if (!parsed.success) {
           throw new Error(`Invalid compliance event: ${parsed.error.message}`);
         }
-        handleComplianceEvent(parsed.data, deps.registry);
+        await handleComplianceEvent(parsed.data, deps.registry);
       }
     },
   );
 }
 
-function handleRideEvent(
+async function handleRideEvent(
   event: RideEvent,
   registry: SocketRegistry,
   rideParticipants: Map<string, RideParticipantState>,
-): void {
+): Promise<void> {
   if (event.eventType === 'RIDE_REQUESTED') {
     rideParticipants.set(event.rideId, { riderId: event.riderId });
     return;
@@ -94,7 +94,7 @@ function handleRideEvent(
       driverId: event.driverId,
     });
 
-    registry.sendToUser(event.riderId, 'ride:matched', {
+    await registry.sendToUser(event.riderId, 'ride:matched', {
       rideId: event.rideId,
       driverId: event.driverId,
       driverName: event.driverName,
@@ -114,12 +114,12 @@ function handleRideEvent(
       driverId: event.driverId,
     });
 
-    registry.sendToUser(event.riderId, 'ride:started', {
+    await registry.sendToUser(event.riderId, 'ride:started', {
       rideId: event.rideId,
       startedAt: event.startedAt,
     });
 
-    registry.sendToUser(event.driverId, 'ride:started', {
+    await registry.sendToUser(event.driverId, 'ride:started', {
       rideId: event.rideId,
       startedAt: event.startedAt,
     });
@@ -128,7 +128,7 @@ function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_COMPLETED') {
-    registry.sendToUser(event.riderId, 'ride:completed', {
+    await registry.sendToUser(event.riderId, 'ride:completed', {
       rideId: event.rideId,
       fareUsdt: event.fareUsdt,
       distanceKm: event.distanceKm,
@@ -136,7 +136,7 @@ function handleRideEvent(
       completedAt: event.completedAt,
     });
 
-    registry.sendToUser(event.driverId, 'ride:completed', {
+    await registry.sendToUser(event.driverId, 'ride:completed', {
       rideId: event.rideId,
       fareUsdt: event.fareUsdt,
       distanceKm: event.distanceKm,
@@ -149,7 +149,7 @@ function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_CANCELLED') {
-    registry.sendToUser(event.riderId, 'ride:cancelled', {
+    await registry.sendToUser(event.riderId, 'ride:cancelled', {
       rideId: event.rideId,
       reason: event.reason,
       cancelStage: event.cancelStage,
@@ -157,7 +157,7 @@ function handleRideEvent(
     });
 
     if (event.driverId) {
-      registry.sendToUser(event.driverId, 'ride:cancelled', {
+      await registry.sendToUser(event.driverId, 'ride:cancelled', {
         rideId: event.rideId,
         reason: event.reason,
         cancelStage: event.cancelStage,
@@ -169,16 +169,16 @@ function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_DRIVER_REJECTED') {
-    registry.sendToUser(event.riderId, 'ride:driver_rejected', {
+    await registry.sendToUser(event.riderId, 'ride:driver_rejected', {
       rideId: event.rideId,
       reason: event.reason,
     });
   }
 }
 
-function handleWalletEvent(event: WalletEvent, registry: SocketRegistry): void {
+async function handleWalletEvent(event: WalletEvent, registry: SocketRegistry): Promise<void> {
   if (event.eventType === 'WALLET_CREDITED') {
-    registry.sendToUser(event.userId, 'wallet:updated', {
+    await registry.sendToUser(event.userId, 'wallet:updated', {
       walletId: event.walletId,
       balanceUsdt: event.newBalanceUsdt,
       changeUsdt: event.amountUsdt,
@@ -190,7 +190,7 @@ function handleWalletEvent(event: WalletEvent, registry: SocketRegistry): void {
   }
 
   if (event.eventType === 'WALLET_DEBITED') {
-    registry.sendToUser(event.userId, 'wallet:updated', {
+    await registry.sendToUser(event.userId, 'wallet:updated', {
       walletId: event.walletId,
       balanceUsdt: event.newBalanceUsdt,
       changeUsdt: event.amountUsdt,
@@ -202,7 +202,7 @@ function handleWalletEvent(event: WalletEvent, registry: SocketRegistry): void {
   }
 
   if (event.eventType === 'WALLET_LOCKED') {
-    registry.sendToUser(event.userId, 'wallet:updated', {
+    await registry.sendToUser(event.userId, 'wallet:updated', {
       walletId: event.walletId,
       rideId: event.rideId,
       lockedAmountUsdt: event.lockedAmountUsdt,
@@ -212,7 +212,7 @@ function handleWalletEvent(event: WalletEvent, registry: SocketRegistry): void {
     return;
   }
 
-  registry.sendToUser(event.userId, 'wallet:updated', {
+  await registry.sendToUser(event.userId, 'wallet:updated', {
     walletId: event.walletId,
     rideId: event.rideId,
     unlockedAmountUsdt: event.unlockedAmountUsdt,
@@ -221,10 +221,10 @@ function handleWalletEvent(event: WalletEvent, registry: SocketRegistry): void {
   });
 }
 
-function handleNotificationEvent(event: NotificationEvent, registry: SocketRegistry): void {
+async function handleNotificationEvent(event: NotificationEvent, registry: SocketRegistry): Promise<void> {
   if (event.eventType !== 'IN_APP_SEND') return;
 
-  registry.sendToUser(event.userId, 'notification:new', {
+  await registry.sendToUser(event.userId, 'notification:new', {
     notificationId: event.notificationId,
     title: event.title,
     body: event.body,
@@ -235,17 +235,17 @@ function handleNotificationEvent(event: NotificationEvent, registry: SocketRegis
   });
 }
 
-function handleGpsProcessedEvent(
+async function handleGpsProcessedEvent(
   event: GpsProcessedEvent,
   registry: SocketRegistry,
   rideParticipants: Map<string, RideParticipantState>,
-): void {
+): Promise<void> {
   const participants = rideParticipants.get(event.rideId);
   if (!participants?.riderId) {
     return;
   }
 
-  registry.sendToUser(participants.riderId, 'ride:driver_location', {
+  await registry.sendToUser(participants.riderId, 'ride:driver_location', {
     rideId: event.rideId,
     lat: event.lat,
     lng: event.lng,
@@ -257,10 +257,10 @@ function handleGpsProcessedEvent(
   });
 }
 
-function handleComplianceEvent(event: ComplianceEvent, registry: SocketRegistry): void {
+async function handleComplianceEvent(event: ComplianceEvent, registry: SocketRegistry): Promise<void> {
   if (event.eventType !== 'GPS_STALE_WARNING') return;
 
-  registry.sendToUser(event.riderId, 'gps:stale_warning', {
+  await registry.sendToUser(event.riderId, 'gps:stale_warning', {
     rideId: event.rideId,
     staleMinutes: event.staleMinutes,
     lastKnownLat: event.lastKnownLat,

@@ -1,42 +1,37 @@
+import type { UserRole } from '@prisma/client';
 import type { GatewayAuthContext, GatewayRole } from '../types';
-import type { JwtClaims } from './jwt';
+import type { VerifiedPrivyToken } from './privy';
 
-const ROLES: GatewayRole[] = ['RIDER', 'DRIVER', 'BOTH'];
-
-function parseRole(value: unknown): GatewayRole {
-  if (typeof value === 'string' && ROLES.includes(value as GatewayRole)) {
-    return value as GatewayRole;
-  }
+function normalizeRole(role: UserRole): GatewayRole {
+  if (role === 'DRIVER' || role === 'BOTH') return role;
   return 'RIDER';
 }
 
-function readString(values: Array<unknown>): string | undefined {
-  for (const value of values) {
-    if (typeof value === 'string' && value.trim().length > 0) {
-      return value;
-    }
-  }
-  return undefined;
+interface UserSnapshot {
+  id: string;
+  privyDid: string;
+  walletAddress: string;
+  role: UserRole;
+  name: string | null;
 }
 
-export function buildGatewayAuthContext(claims: JwtClaims, params: URLSearchParams): GatewayAuthContext {
-  const userId = readString([claims['userId'], claims['uid'], params.get('userId')]);
-  const privyDid = readString([claims['privyDid'], claims['sub'], params.get('privyDid')]);
-  const walletAddress = readString([claims['walletAddress'], params.get('walletAddress')]);
+interface BuildGatewayAuthContextInput {
+  user: UserSnapshot;
+  verifiedToken: VerifiedPrivyToken;
+  driverId?: string;
+}
 
-  if (!userId || !privyDid || !walletAddress) {
-    throw new Error('JWT is missing required user claims');
-  }
-
-  const context: GatewayAuthContext = {
-    userId,
-    privyDid,
-    walletAddress: walletAddress.toLowerCase(),
-    role: parseRole(readString([claims['role'], params.get('role')]) ?? 'RIDER'),
-    driverId: readString([claims['driverId'], params.get('driverId')]),
-    email: readString([claims['email']]),
-    name: readString([claims['name']]),
+export function buildGatewayAuthContext(input: BuildGatewayAuthContextInput): GatewayAuthContext {
+  return {
+    userId: input.user.id,
+    privyDid: input.user.privyDid,
+    walletAddress: input.user.walletAddress.toLowerCase(),
+    role: normalizeRole(input.user.role),
+    driverId: input.driverId,
+    name: input.user.name ?? undefined,
+    email:
+      typeof input.verifiedToken.claims['email'] === 'string'
+        ? input.verifiedToken.claims['email']
+        : undefined,
   };
-
-  return context;
 }

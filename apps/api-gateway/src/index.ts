@@ -15,6 +15,7 @@ import { handleKorapayWebhookRoute } from './http/korapay.route';
 import { handleYellowCardWebhookRoute } from './http/yellowcard.route';
 import { applyCorsHeaders, sendJson } from './http/utils';
 import { startGatewayKafkaConsumer } from './kafka/consumer';
+import { RedisClient } from './redis/client';
 import { GatewayPublisher } from './websocket/publisher';
 import { SocketRegistry } from './websocket/registry';
 import { createGatewayWebSocketServer } from './websocket/server';
@@ -66,9 +67,19 @@ async function bootstrap(): Promise<void> {
 
   const producer = await createProducer({ serviceId: sharedEnv.KAFKA_CLIENT_ID });
   const consumer = await createConsumer({ groupId: sharedEnv.KAFKA_CLIENT_ID });
+  const redisCommandClient = new RedisClient(sharedEnv.REDIS_URL);
+  const redisSubscriberClient = new RedisClient(sharedEnv.REDIS_URL);
+
+  await redisCommandClient.connect();
+  await redisSubscriberClient.connect();
 
   const publisher = new GatewayPublisher(producer);
-  const registry = new SocketRegistry();
+  const registry = new SocketRegistry({
+    instanceId: `${sharedEnv.KAFKA_CLIENT_ID}-${process.pid}-${Math.random().toString(16).slice(2, 8)}`,
+    commandRedis: redisCommandClient,
+    subscriberRedis: redisSubscriberClient,
+  });
+  await registry.start();
   const allowedOrigins = parseAllowedOrigins(gatewayEnv.CORS_ORIGINS);
 
   const server = createServer(async (req, res) => {
@@ -95,7 +106,8 @@ async function bootstrap(): Promise<void> {
         return;
       }
       await handlePrivyAuthRoute(req, res, {
-        jwtSecret: gatewayEnv.JWT_SECRET,
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         publisher,
       });
       return;
@@ -124,7 +136,8 @@ async function bootstrap(): Promise<void> {
 
   createGatewayWebSocketServer({
     server,
-    jwtSecret: gatewayEnv.JWT_SECRET,
+    privyAppId: gatewayEnv.PRIVY_APP_ID,
+    privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
     allowedOrigins,
     idleTimeoutMs: Number(gatewayEnv.WS_IDLE_TIMEOUT_MS),
     registry,
@@ -155,6 +168,14 @@ async function bootstrap(): Promise<void> {
 
   onShutdown(async () => {
     await consumer.disconnect();
+  });
+
+  onShutdown(async () => {
+    await redisSubscriberClient.disconnect();
+  });
+
+  onShutdown(async () => {
+    await redisCommandClient.disconnect();
   });
 }
 

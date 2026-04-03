@@ -1,8 +1,9 @@
 import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { Duplex } from 'stream';
 import WebSocket, { Server as WebSocketServer } from 'ws';
+import { driverClient, userClient } from '@wheleers/db';
 import { buildGatewayAuthContext } from '../auth/context';
-import { extractBearerToken, verifyHs256Jwt } from '../auth/jwt';
+import { verifyPrivyAccessToken } from '../auth/privy';
 import type { InboundWsMessage } from '../types';
 import { isRecord } from '../utils/object';
 import { handleDriverMessage } from './handlers/driver.handler';
@@ -13,7 +14,8 @@ import { SocketRegistry } from './registry';
 
 interface WebSocketServerDeps {
   server: HttpServer;
-  jwtSecret: string;
+  privyAppId: string;
+  privyVerificationKey: string;
   allowedOrigins: Set<string>;
   idleTimeoutMs: number;
   registry: SocketRegistry;
@@ -25,6 +27,16 @@ function getRequestOrigin(request: IncomingMessage): string | null {
   return typeof origin === 'string' ? origin : null;
 }
 
+function extractBearerToken(value: string | undefined): string | null {
+  if (!value) return null;
+
+  const [scheme, token] = value.split(' ');
+  if (!scheme || !token) return null;
+
+  if (scheme.toLowerCase() !== 'bearer') return null;
+  return token;
+}
+
 function getConnectionToken(request: IncomingMessage, params: URLSearchParams): string | null {
   const headerToken = extractBearerToken(
     typeof request.headers.authorization === 'string' ? request.headers.authorization : undefined,
@@ -32,7 +44,7 @@ function getConnectionToken(request: IncomingMessage, params: URLSearchParams): 
 
   if (headerToken) return headerToken;
 
-  const queryToken = params.get('token');
+  const queryToken = params.get('accessToken') ?? params.get('token');
   if (queryToken && queryToken.trim().length > 0) {
     return queryToken;
   }
@@ -49,38 +61,58 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
   const wsServer = new WebSocketServer({ noServer: true });
 
   deps.server.on('upgrade', (request, socket, head) => {
-    const url = new URL(request.url ?? '/', 'http://localhost');
-    if (url.pathname !== '/ws') {
-      rejectUpgrade(socket, 404, 'Not Found');
-      return;
-    }
+    void (async () => {
+      const url = new URL(request.url ?? '/', 'http://localhost');
+      if (url.pathname !== '/ws') {
+        rejectUpgrade(socket, 404, 'Not Found');
+        return;
+      }
 
-    const requestOrigin = getRequestOrigin(request);
-    if (deps.allowedOrigins.size > 0 && requestOrigin && !deps.allowedOrigins.has(requestOrigin)) {
-      rejectUpgrade(socket, 403, 'Forbidden');
-      return;
-    }
+      const requestOrigin = getRequestOrigin(request);
+      if (deps.allowedOrigins.size > 0 && requestOrigin && !deps.allowedOrigins.has(requestOrigin)) {
+        rejectUpgrade(socket, 403, 'Forbidden');
+        return;
+      }
 
-    const token = getConnectionToken(request, url.searchParams);
-    if (!token) {
-      rejectUpgrade(socket, 401, 'Unauthorized');
-      return;
-    }
+      const token = getConnectionToken(request, url.searchParams);
+      if (!token) {
+        rejectUpgrade(socket, 401, 'Unauthorized');
+        return;
+      }
 
-    let auth;
-    try {
-      const claims = verifyHs256Jwt(token, deps.jwtSecret);
-      auth = buildGatewayAuthContext(claims, url.searchParams);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Invalid auth token';
-      rejectUpgrade(socket, 401, message);
-      return;
-    }
+      try {
+        const verifiedToken = verifyPrivyAccessToken({
+          accessToken: token,
+          appId: deps.privyAppId,
+          verificationKey: deps.privyVerificationKey,
+        });
 
-    wsServer.handleUpgrade(request, socket as never, head, (ws: WebSocket) => {
-      deps.registry.register(ws, auth);
-      wsServer.emit('connection', ws, request);
-    });
+        const user = await userClient.findByPrivyDid(verifiedToken.privyDid);
+        if (!user) {
+          rejectUpgrade(socket, 401, 'User not registered. Call POST /auth/privy first.');
+          return;
+        }
+
+        const driver = await driverClient.findByUserId(user.id);
+
+        const auth = buildGatewayAuthContext({
+          user,
+          verifiedToken,
+          driverId: driver?.id,
+        });
+
+        wsServer.handleUpgrade(request, socket as never, head, (ws: WebSocket) => {
+          void deps.registry.register(ws, auth).then(() => {
+            wsServer.emit('connection', ws, request);
+          }).catch((error) => {
+            ws.close(1011, error instanceof Error ? error.message : 'Socket registry error');
+          });
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Invalid auth token';
+        rejectUpgrade(socket, 401, message);
+      }
+    })();
   });
 
   wsServer.on('connection', (socket: WebSocket) => {
@@ -142,12 +174,12 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
 
     socket.on('close', () => {
       clearInterval(heartbeat);
-      deps.registry.unregister(socket);
+      void deps.registry.unregister(socket);
     });
 
     socket.on('error', () => {
       clearInterval(heartbeat);
-      deps.registry.unregister(socket);
+      void deps.registry.unregister(socket);
     });
   });
 }

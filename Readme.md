@@ -758,7 +758,8 @@ Every service validates its own env vars at startup using `@wheleers/config`. Be
 | Variable | Description |
 |----------|-------------|
 | `PORT` | HTTP/WS port (default: 3000) |
-| `JWT_SECRET` | Secret for JWT verification (min 32 chars) |
+| `PRIVY_VERIFICATION_KEY` | Privy public verification key (PEM) used for access-token signature validation |
+| `JWT_SECRET` | Legacy local JWT secret (optional; no longer used for Privy access tokens) |
 | `PRIVY_APP_ID` | Privy application ID |
 | `PRIVY_APP_SECRET` | Privy application secret |
 | `CORS_ORIGINS` | Allowed origins (comma-separated) |

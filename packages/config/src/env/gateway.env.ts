@@ -2,9 +2,10 @@ import { z } from 'zod';
 
 const GatewayEnvSchema = z.object({
   PORT:               z.string().default('3000'),
-  JWT_SECRET:         z.string().min(32),
+  JWT_SECRET:         z.string().min(32).optional(),
   PRIVY_APP_ID:       z.string().min(1),
   PRIVY_APP_SECRET:   z.string().min(1),
+  PRIVY_VERIFICATION_KEY: z.string().min(1),
   // Comma-separated list of allowed WebSocket/HTTP origins
   CORS_ORIGINS:       z.string().default('http://localhost:19006'),
   // How long a WebSocket connection can stay idle before being dropped (ms)
