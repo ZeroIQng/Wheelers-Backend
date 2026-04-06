@@ -2,7 +2,7 @@
   "name": "@wheleers/db",
   "version": "0.0.1",
   "private": true,
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
   "types": "./src/index.ts",
   "scripts": {
     "db:generate": "prisma generate",
@@ -10,8 +10,9 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "db:reset": "prisma migrate reset",
+    "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src --ext .ts"
+    "lint": "npm run typecheck"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0"

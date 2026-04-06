@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { TOPICS, type Topic } from './topics';
+import { TOPICS } from './topics';
 import { UserEvent }         from './events/user.events';
 import { DriverEvent }       from './events/driver.events';
 import { RideEvent }         from './events/ride.events';
@@ -37,18 +37,18 @@ type LiveTopic = keyof typeof TOPIC_SCHEMAS;
 //   if (event.eventType === 'RIDE_COMPLETED') { ... }
 export function parseKafkaEvent<T extends LiveTopic>(
   topic: T,
-  rawValue: string,
+  rawValue: unknown,
 ): z.infer<(typeof TOPIC_SCHEMAS)[T]> {
-  const schema = TOPIC_SCHEMAS[topic] as z.ZodSchema;
-  const parsed = JSON.parse(rawValue);
-  return schema.parse(parsed) as z.infer<(typeof TOPIC_SCHEMAS)[T]>;
+  const schema = TOPIC_SCHEMAS[topic];
+  const parsed = coerceAndParseJson(rawValue, topic);
+  return schema.parse(parsed);
 }
 
 // Safe version — returns null instead of throwing.
 // Use when you want to log and skip bad messages without crashing the consumer.
 export function safeParseKafkaEvent<T extends LiveTopic>(
   topic: T,
-  rawValue: string,
+  rawValue: unknown,
 ): z.infer<(typeof TOPIC_SCHEMAS)[T]> | null {
   try {
     return parseKafkaEvent(topic, rawValue);
@@ -64,3 +64,29 @@ export function serializeEvent(event: Record<string, unknown>): string {
 }
 
 export type { LiveTopic };
+
+function coerceAndParseJson(rawValue: unknown, topic: string): unknown {
+  if (rawValue === null || rawValue === undefined) {
+    throw new Error(`[kafka-schemas] Empty Kafka message value for topic "${topic}"`);
+  }
+
+  if (typeof rawValue === 'string') {
+    return parseJsonString(rawValue, topic);
+  }
+
+  if (rawValue instanceof Uint8Array) {
+    const text = Buffer.from(rawValue).toString('utf8');
+    return parseJsonString(text, topic);
+  }
+
+  return rawValue;
+}
+
+function parseJsonString(text: string, topic: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`[kafka-schemas] JSON parse failed for topic "${topic}": ${message}`);
+  }
+}

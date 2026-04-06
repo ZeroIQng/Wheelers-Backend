@@ -4,9 +4,23 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "turbo run dev",
-    "build": "turbo run build",
-    "lint": "turbo run lint"
+    "dev": "npm -ws --if-present run dev",
+    "build": "npm -ws --if-present run build",
+    "typecheck": "npm -ws --if-present run typecheck",
+    "lint": "npm -ws --if-present run lint",
+
+    "start:api-gateway": "npm -w @wheleers/api-gateway run start",
+    "start:ride-service": "npm -w @wheleers/ride-service run start",
+    "start:payment-service": "npm -w @wheleers/payment-service run start",
+    "start:wallet-service": "npm -w @wheleers/wallet-service run start",
+    "start:notification-worker": "npm -w @wheleers/notification-worker run start",
+    "start:compliance-worker": "npm -w @wheleers/compliance-worker run start",
+    "start:defi-scheduler": "npm -w @wheleers/defi-scheduler run start",
+
+    "db:generate": "npm -w @wheleers/db run db:generate",
+    "db:migrate:dev": "npm -w @wheleers/db run db:migrate:dev",
+    "db:migrate:deploy": "npm -w @wheleers/db run db:migrate:deploy",
+    "db:studio": "npm -w @wheleers/db run db:studio"
   },
   "name": "wheelers-backend",
   "version": "1.0.0",

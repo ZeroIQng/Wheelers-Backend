@@ -27,5 +27,6 @@ export type Topic = (typeof TOPICS)[keyof typeof TOPICS];
 
 // Convenience — given any topic, return its DLQ topic name
 export function dlqTopic(topic: Topic): string {
+  if (topic.endsWith('.dlq')) return topic;
   return `${topic}.dlq`;
 }
