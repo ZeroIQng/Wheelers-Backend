@@ -1,0 +1,25 @@
+{
+  "name": "@wheleers/api-gateway",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "tsc -w -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@wheleers/config": "0.0.1",
+    "@wheleers/db": "0.0.1",
+    "@wheleers/kafka-client": "0.0.1",
+    "@wheleers/kafka-schemas": "0.0.1",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.9.3"
+  }
+}
