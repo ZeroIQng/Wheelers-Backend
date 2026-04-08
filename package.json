@@ -20,7 +20,8 @@
     "db:generate": "npm -w @wheleers/db run db:generate",
     "db:migrate:dev": "npm -w @wheleers/db run db:migrate:dev",
     "db:migrate:deploy": "npm -w @wheleers/db run db:migrate:deploy",
-    "db:studio": "npm -w @wheleers/db run db:studio"
+    "db:studio": "npm -w @wheleers/db run db:studio",
+    "test:ride-service": "tsc -p test/tsconfig.json && node test/dist/ride-service.smoke.js"
   },
   "name": "wheelers-backend",
   "version": "1.0.0",
