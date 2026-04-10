@@ -73,8 +73,15 @@ export const rideClient = {
     destLng:          number;
     destAddress:      string;
     fareEstimateUsdt: number;
+    status?:          RideStatus;
   }) =>
     prisma.ride.create({ data }),
+
+  markMatching: (rideId: string) =>
+    prisma.ride.update({
+      where: { id: rideId },
+      data:  { status: 'MATCHING' },
+    }),
 
   // Assign driver once matched — also sets matchedAt timestamp.
   assignDriver: (rideId: string, driverId: string, etaSeconds: number) =>

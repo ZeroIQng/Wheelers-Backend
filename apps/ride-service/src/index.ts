@@ -11,6 +11,7 @@ import { createGpsUpdateConsumer } from './consumers/gps-update.consumer';
 
 import { startGpsMonitor } from './handlers/gps-monitor.handler';
 import { createTripLifecycleHandler } from './handlers/trip-lifecycle.handler';
+import type { RideRequestedEvent } from '@wheleers/kafka-schemas';
 
 export type OnlineDriver = {
   driverId: string;
@@ -33,9 +34,25 @@ export type RideGpsState = {
   lastStaleWarningAt: Date | null;
 };
 
+export type PendingRideMatch = {
+  rideRequested: RideRequestedEvent;
+  candidates: OnlineDriver[];
+  attemptedDriverIds: Set<string>;
+  offeredDriverId: string | null;
+  timeout: NodeJS.Timeout | null;
+};
+
+export type RideParticipantState = {
+  riderId: string;
+  driverId: string;
+};
+
 export type RideServiceState = {
   onlineDrivers: Map<string, OnlineDriver>;
+  assignedDriversByRideId: Map<string, OnlineDriver>;
+  rideParticipantsByRideId: Map<string, RideParticipantState>;
   gpsByRideId: Map<string, RideGpsState>;
+  pendingMatchesByRideId: Map<string, PendingRideMatch>;
 };
 
 const SERVICE_ID = 'ride-service';
@@ -61,13 +78,16 @@ async function bootstrap(): Promise<void> {
 
   const state: RideServiceState = {
     onlineDrivers: new Map(),
+    assignedDriversByRideId: new Map(),
+    rideParticipantsByRideId: new Map(),
     gpsByRideId: new Map(),
+    pendingMatchesByRideId: new Map(),
   };
 
   const rideEventsProducer = createRideEventsProducer(producer);
   const gpsProcessedProducer = createGpsProcessedProducer(producer);
 
-  const tripLifecycle = createTripLifecycleHandler();
+  const tripLifecycle = createTripLifecycleHandler(state);
 
   const driverEventsConsumer = createDriverEventsConsumer({
     state,
@@ -92,14 +112,25 @@ async function bootstrap(): Promise<void> {
     rideEventsProducer,
   });
 
-  // One kafka-client subscription per topic to keep ownership clear,
-  // but still a single consumer group for ordering.
-  await consumer.subscribe([TOPICS.DRIVER_EVENTS], driverEventsConsumer.handle);
-  await consumer.subscribe([TOPICS.RIDE_EVENTS], async (value, ctx) => {
-    await rideRequestedConsumer.handle(value, ctx);
-    await tripLifecycle.handleRideEvent(value, ctx);
-  });
-  await consumer.subscribe([TOPICS.GPS_STREAM], gpsUpdateConsumer.handle);
+  await consumer.subscribe(
+    [TOPICS.DRIVER_EVENTS, TOPICS.RIDE_EVENTS, TOPICS.GPS_STREAM],
+    async (value, ctx) => {
+      if (ctx.topic === TOPICS.DRIVER_EVENTS) {
+        await driverEventsConsumer.handle(value, ctx);
+        return;
+      }
+
+      if (ctx.topic === TOPICS.RIDE_EVENTS) {
+        await rideRequestedConsumer.handle(value, ctx);
+        await tripLifecycle.handleRideEvent(value, ctx);
+        return;
+      }
+
+      if (ctx.topic === TOPICS.GPS_STREAM) {
+        await gpsUpdateConsumer.handle(value, ctx);
+      }
+    },
+  );
 
   startGpsMonitor({
     state,

@@ -1,3 +1,4 @@
+import { driverClient } from '@wheleers/db';
 import { safeParseKafkaEvent, TOPICS, type DriverOnlineEvent, type DriverOfflineEvent } from '@wheleers/kafka-schemas';
 import type { MessageContext } from '@wheleers/kafka-client';
 
@@ -25,14 +26,28 @@ export function createDriverEventsConsumer(params: {
           vehiclePlate: event.vehiclePlate,
           vehicleModel: event.vehicleModel,
         });
+        try {
+          await driverClient.markOnline(event.driverId, event.lat, event.lng);
+        } catch (err) {
+          console.warn(`[ride-service] driver online persistence skipped:`, (err as any)?.message ?? err);
+        }
         if (onDriverOnline) await onDriverOnline(event);
       }
 
       if (event.eventType === 'DRIVER_OFFLINE') {
         state.onlineDrivers.delete(event.driverId);
+        for (const [rideId, driver] of state.assignedDriversByRideId) {
+          if (driver.driverId === event.driverId) {
+            state.assignedDriversByRideId.delete(rideId);
+          }
+        }
+        try {
+          await driverClient.markOffline(event.driverId);
+        } catch (err) {
+          console.warn(`[ride-service] driver offline persistence skipped:`, (err as any)?.message ?? err);
+        }
         if (onDriverOffline) await onDriverOffline(event);
       }
     },
   };
 }
-

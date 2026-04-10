@@ -79,6 +79,18 @@ export const driverClient = {
       data:  { status, lastSeenAt: new Date() },
     }),
 
+  markOnline: (driverId: string, lat: number, lng: number) =>
+    prisma.driver.update({
+      where: { id: driverId },
+      data:  { status: 'ONLINE', lat, lng, lastSeenAt: new Date() },
+    }),
+
+  markOffline: (driverId: string) =>
+    prisma.driver.update({
+      where: { id: driverId },
+      data:  { status: 'OFFLINE', lastSeenAt: new Date() },
+    }),
+
   // Called every time driver goes online or sends a GPS ping during availability.
   // Live ride GPS is handled separately — this is just "driver is at this location".
   updateLocation: (driverId: string, lat: number, lng: number) =>

@@ -1,11 +1,21 @@
 # Ride-service smoke test
 
-This folder contains a simple “smoke test” script that produces a minimal event flow into Kafka and waits for the `ride-service` to respond.
+This folder contains a simple smoke test script that produces a minimal event flow into Kafka and waits for the `ride-service` to respond.
+
+The flow covers:
+
+- two drivers going online
+- a rider request producing a ride offer notification
+- first driver rejection causing retry to the next driver
+- simulated driver acceptance through `RIDE_DRIVER_ASSIGNED`
+- one GPS ping producing `GPS_PROCESSED`
 
 ## Prerequisites
 
 - Kafka running (default broker: `localhost:29092`)
+- Postgres running (default database: `postgresql://postgres:postgres@localhost:5432/wheelers`) with migrations applied
 - `ride-service` running (it must be consuming `driver.events`, `ride.events`, `gps.stream`)
+- Kafka topics for `driver.events`, `ride.events`, `gps.stream`, `gps.processed`, `compliance.events`, and `notification.events`
 
 If Kafka was just started, give it ~10–30 seconds to finish leader election (the test also waits, but startup can be slow on first boot).
 
@@ -17,9 +27,7 @@ Start ride-service (in another terminal):
 
 From repo root:
 
-`cmd /c npx tsc -p test/tsconfig.json`
-
-`cmd /c node test/dist/ride-service.smoke.js`
+`cmd /c npm run test:ride-service`
 
 Optional:
 

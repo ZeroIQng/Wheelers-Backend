@@ -78,7 +78,24 @@ export function createGpsUpdateConsumer(params: {
         (next.lastStaleWarningAt === null || (now.getTime() - next.lastStaleWarningAt.getTime()) >= staleWindowMs);
 
       if (shouldWarn) {
-        // We need riderId; resolve from DB (best-effort).
+        const participants = state.rideParticipantsByRideId.get(event.rideId);
+        if (participants) {
+          await rideEventsProducer.gpsStaleWarning({
+            eventType: 'GPS_STALE_WARNING',
+            rideId: event.rideId,
+            driverId: participants.driverId,
+            riderId: participants.riderId,
+            lastMovementAt: next.lastMovementAt.toISOString(),
+            staleMinutes: GPS.STALE_TIME_WINDOW_MINUTES,
+            lastKnownLat: event.lat,
+            lastKnownLng: event.lng,
+            timestamp: now.toISOString(),
+          });
+          next.lastStaleWarningAt = now;
+          return;
+        }
+
+        // Replay/restart fallback: participant state may not be warm yet.
         try {
           const ride = await rideClient.findById(event.rideId);
           if (ride.driverId) {
@@ -154,4 +171,3 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return r * c;
 }
-
