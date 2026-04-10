@@ -8,7 +8,7 @@ import {
   type RideRequestedEvent,
 } from '@wheleers/kafka-schemas';
 
-import type { RideServiceState } from '../index';
+import type { PendingRideMatch, RideServiceState } from '../index';
 import type { RideEventsProducer } from '../producers/ride-events.producer';
 import { matchDriver } from '../handlers/match-driver.handler';
 
@@ -132,10 +132,12 @@ export function createRideRequestedConsumer(params: {
     const pending = state.pendingMatchesByRideId.get(rideId);
     if (!pending) return;
 
-    const nextDriver = pending.candidates.find((driver) =>
-      !pending.attemptedDriverIds.has(driver.driverId) &&
-      state.onlineDrivers.has(driver.driverId)
-    );
+    let nextDriver = findNextAvailableCandidate(pending);
+
+    if (!nextDriver) {
+      await refreshCandidates(pending);
+      nextDriver = findNextAvailableCandidate(pending);
+    }
 
     if (!nextDriver) {
       await cancelNoDrivers(pending.rideRequested);
@@ -169,6 +171,31 @@ export function createRideRequestedConsumer(params: {
     pending.timeout.unref();
 
     console.log(`[ride-service] offered ride ${rideId} to driver ${nextDriver.driverId}`);
+  }
+
+  function findNextAvailableCandidate(pending: PendingRideMatch) {
+    return pending.candidates.find((driver) =>
+      !pending.attemptedDriverIds.has(driver.driverId) &&
+      state.onlineDrivers.has(driver.driverId)
+    );
+  }
+
+  async function refreshCandidates(pending: PendingRideMatch): Promise<void> {
+    const result = await matchDriver({
+      rideEnv,
+      onlineDrivers: state.onlineDrivers,
+      rideRequested: pending.rideRequested,
+    });
+    if (!result.ok) return;
+
+    const knownDriverIds = new Set(pending.candidates.map((driver) => driver.driverId));
+    for (const driver of result.drivers) {
+      if (knownDriverIds.has(driver.driverId) || pending.attemptedDriverIds.has(driver.driverId)) {
+        continue;
+      }
+      pending.candidates.push(driver);
+      knownDriverIds.add(driver.driverId);
+    }
   }
 
   async function cancelNoDrivers(event: RideRequestedEvent): Promise<void> {
