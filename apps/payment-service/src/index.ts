@@ -6,7 +6,6 @@ import { randomUUID } from 'node:crypto';
 import { convertNgnToUsdt } from './conversion';
 
 const SERVICE_ID = 'payment-service';
-const inflightDeposits = new Set<string>();
 
 bootstrap().catch((err) => {
   console.error(`[${SERVICE_ID}] fatal`, err);
@@ -39,15 +38,23 @@ async function bootstrap(): Promise<void> {
         if (!event) return;
 
         if (event.eventType === 'DEPOSIT_RECEIVED') {
-          if (inflightDeposits.has(event.providerReference)) {
-            return;
-          }
-
-          inflightDeposits.add(event.providerReference);
-
           try {
-            const alreadyProcessed = await paymentClient.depositAlreadyProcessed(event.providerReference);
-            if (alreadyProcessed) {
+            await paymentClient.recordDepositReceived({
+              paymentId: event.paymentId,
+              userId: event.userId,
+              provider: event.paymentProvider,
+              providerReference: event.providerReference,
+              userWallet: event.userWallet,
+              amountNgn: event.amountNgn,
+              metadata: {
+                paymentChannel: event.paymentChannel,
+                customerEmail: event.customerEmail,
+                virtualAccountNumber: event.virtualAccountNumber,
+              },
+            });
+
+            const claimed = await paymentClient.claimConversion(event.providerReference);
+            if (!claimed) {
               return;
             }
 
@@ -85,8 +92,21 @@ async function bootstrap(): Promise<void> {
               conversionReference,
               timestamp: new Date().toISOString(),
             } as any, { key: event.userId });
-          } finally {
-            inflightDeposits.delete(event.providerReference);
+            
+            await paymentClient.markConverted({
+              providerReference: event.providerReference,
+              amountUsdt: conversion.amountUsdt,
+              exchangeRate: conversion.exchangeRate,
+              metadata: {
+                paymentChannel: event.paymentChannel,
+                customerEmail: event.customerEmail,
+                virtualAccountNumber: event.virtualAccountNumber,
+                conversionReference,
+              },
+            });
+          } catch (error) {
+            await paymentClient.releaseConversionClaim(event.providerReference).catch(() => {});
+            throw error;
           }
         }
 

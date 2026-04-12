@@ -30,6 +30,7 @@ interface PaystackVerifyRouteDeps {
   privyAppId: string;
   privyVerificationKey: string;
   paystackClient: PaystackClient;
+  publisher: GatewayPublisher;
 }
 
 interface PaystackWebhookRouteDeps {
@@ -129,7 +130,16 @@ export async function handlePaystackVerifyRoute(
       return;
     }
 
-    sendJson(res, 200, buildVerifyResponse(reference, verified, metadata));
+    const normalized = normalizePaystackChargeSuccess({
+      ...verified,
+      metadata,
+    });
+
+    if (normalized) {
+      await deps.publisher.publishPaymentEvent(normalized);
+    }
+
+    sendJson(res, 200, buildVerifyResponse(reference, verified, metadata, normalized !== null));
   } catch (error) {
     sendPaystackError(res, error, 'Failed to verify Paystack transaction');
   }
@@ -247,12 +257,8 @@ function buildVerifyResponse(
   reference: string,
   verified: PaystackVerifyTransactionResponse,
   metadata: ReturnType<typeof readPaystackMetadata>,
+  reconciled: boolean,
 ): Record<string, unknown> {
-  const normalized = normalizePaystackChargeSuccess({
-    ...verified,
-    metadata,
-  });
-
   return {
     provider: 'paystack',
     reference,
@@ -265,7 +271,8 @@ function buildVerifyResponse(
     paidAt: verified.paid_at ?? null,
     gatewayResponse: verified.gateway_response ?? verified.message ?? null,
     userWallet: metadata?.walletAddress ?? null,
-    readyForWalletFunding: normalized !== null,
+    readyForWalletFunding: reconciled,
+    reconciliationTriggered: reconciled,
   };
 }
 

@@ -116,6 +116,12 @@ enum NotificationCategory {
   SYSTEM
 }
 
+enum PaymentRecordStatus {
+  RECEIVED
+  CONVERTING
+  CONVERTED
+}
+
 // ─── User & Auth ──────────────────────────────────────────────────────────────
 
 model User {
@@ -240,6 +246,25 @@ model VirtualAccount {
   accountName   String
   korapayRef    String   @unique  // provider reference retained for backwards compatibility
   createdAt     DateTime @default(now())
+}
+
+model PaymentRecord {
+  id                     String              @id @default(uuid())
+  paymentId              String              @unique
+  userId                 String
+  provider               String
+  providerReference      String              @unique
+  userWallet             String
+  amountNgn              Decimal             @db.Decimal(18, 2)
+  amountUsdt             Decimal?            @db.Decimal(18, 6)
+  exchangeRate           Decimal?            @db.Decimal(18, 6)
+  status                 PaymentRecordStatus @default(RECEIVED)
+  conversionLeaseExpiresAt DateTime?
+  metadata               Json?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  @@index([userId, status])
 }
 
 // Immutable record of every balance change.
