@@ -11,7 +11,7 @@ Current flow:
 3. Frontend sends the user through Paystack checkout.
 4. Paystack calls `POST /webhooks/paystack` on payment success.
 5. `api-gateway` validates `x-paystack-signature`, normalizes the payload into `DEPOSIT_RECEIVED`, and publishes to Kafka.
-6. `payment-service` consumes `DEPOSIT_RECEIVED`, applies idempotency checks, converts NGN to USDT using `PAYMENT_NGN_USDT_RATE`, and emits `NGN_CONVERTING` then `NGN_CONVERTED`.
+6. `payment-service` consumes `DEPOSIT_RECEIVED`, applies idempotency checks, fetches a live NGN/USD rate from Coinbase, converts NGN to USDT on that basis, and emits `NGN_CONVERTING` then `NGN_CONVERTED`.
 7. `wallet-service` consumes `NGN_CONVERTED` and credits the rider wallet ledger.
 8. Gateway and workers can push wallet updates and notifications back to the client.
 
@@ -102,7 +102,7 @@ They communicate through Kafka events, not direct service-to-service calls.
 
 1. Do you want Paystack only for rider cash-in, or also later for rider/driver bank withdrawals?
 2. Do you want standard checkout only, or should we add dedicated virtual accounts as a second funding path?
-3. Is `PAYMENT_NGN_USDT_RATE` a temporary fixed internal rate, or do you want a live FX/conversion provider next?
+3. Do you want to keep Coinbase as a quote-only FX source, or later replace it with a treasury/execution provider that can actually settle NGN into stablecoins?
 4. Should frontend verify success purely from wallet WebSocket updates, or should it also show the Paystack verify result immediately after checkout?
 
 ## Test coverage added

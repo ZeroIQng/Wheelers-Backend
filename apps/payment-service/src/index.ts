@@ -3,6 +3,7 @@ import { paymentClient } from '@wheleers/db';
 import { createConsumer, createProducer } from '@wheleers/kafka-client';
 import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
 import { randomUUID } from 'node:crypto';
+import { CoinbaseRatesClient } from './coinbase.client';
 import { convertNgnToUsdt } from './conversion';
 
 const SERVICE_ID = 'payment-service';
@@ -19,13 +20,12 @@ async function bootstrap(): Promise<void> {
   process.env['DATABASE_URL'] ??= 'postgresql://postgres:postgres@localhost:5432/wheelers';
   process.env['REDIS_URL'] ??= 'redis://localhost:6379';
 
-  // Dev placeholders for required payment env
-  process.env['PAYMENT_PROVIDER'] ??= 'paystack';
-  process.env['PAYMENT_NGN_USDT_RATE'] ??= '1500';
-  process.env['PLATFORM_WALLET_ADDRESS'] ??= '0x0000000000000000000000000000000000000000';
-
   validateSharedEnv();
   const paymentEnv = validatePaymentEnv();
+  const coinbaseRatesClient = new CoinbaseRatesClient(
+    paymentEnv.COINBASE_EXCHANGE_RATES_URL,
+    paymentEnv.FX_QUOTE_TTL_MS,
+  );
 
   const producer = await createProducer({ serviceId: SERVICE_ID });
   const consumer = await createConsumer({ groupId: SERVICE_ID });
@@ -58,9 +58,10 @@ async function bootstrap(): Promise<void> {
               return;
             }
 
+            const exchangeRate = await coinbaseRatesClient.getNgnPerUsdRate();
             const conversion = convertNgnToUsdt(
               event.amountNgn,
-              paymentEnv.PAYMENT_NGN_USDT_RATE,
+              exchangeRate,
             );
             const conversionJobId = `paystack-${event.providerReference}`;
             const conversionReference = `settlement-${event.providerReference}`;
@@ -76,8 +77,6 @@ async function bootstrap(): Promise<void> {
               conversionJobId,
               timestamp: new Date().toISOString(),
             } as any, { key: event.userId });
-
-            await sleep(250);
 
             await producer.send(TOPICS.PAYMENT_EVENTS, {
               eventType: 'NGN_CONVERTED',
@@ -101,6 +100,8 @@ async function bootstrap(): Promise<void> {
                 paymentChannel: event.paymentChannel,
                 customerEmail: event.customerEmail,
                 virtualAccountNumber: event.virtualAccountNumber,
+                fxProvider: paymentEnv.FX_PROVIDER,
+                ngnPerUsdRate: conversion.exchangeRate,
                 conversionReference,
               },
             });
@@ -190,8 +191,4 @@ function cancelReason(stage: string): string {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
 }
