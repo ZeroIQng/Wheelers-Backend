@@ -29,8 +29,6 @@ async function bootstrap(): Promise<void> {
   const producer = await createProducer({ serviceId: SERVICE_ID });
   const consumer = await createConsumer({ groupId: SERVICE_ID });
 
-  const rideLocks = new Map<string, { riderId: string; lockedFareUsdt: number }>();
-
   await consumer.subscribe(
     [TOPICS.USER_EVENTS, TOPICS.RIDE_EVENTS, TOPICS.PAYMENT_EVENTS, TOPICS.DEFI_EVENTS],
     async (value, ctx) => {
@@ -58,16 +56,24 @@ async function bootstrap(): Promise<void> {
         if (!event) return;
 
         if (event.eventType === 'RIDE_DRIVER_ASSIGNED') {
-          rideLocks.set(event.rideId, { riderId: event.riderId, lockedFareUsdt: event.lockedFareUsdt });
           try {
             const wallet = await walletClient.findByUserId(event.riderId);
-            await walletClient.lockFunds(wallet.id, event.lockedFareUsdt);
+            const holdResult = await walletClient.createRideHold({
+              rideId: event.rideId,
+              walletId: wallet.id,
+              riderId: event.riderId,
+              amountUsdt: event.lockedFareUsdt,
+            });
+
+            if (!holdResult.applied) {
+              return;
+            }
 
             await producer.send(TOPICS.WALLET_EVENTS, {
               eventType: 'WALLET_LOCKED',
-              walletId: wallet.id,
-              userId: wallet.userId,
-              walletAddress: wallet.address,
+              walletId: holdResult.wallet.id,
+              userId: holdResult.wallet.userId,
+              walletAddress: holdResult.wallet.address,
               lockedAmountUsdt: event.lockedFareUsdt,
               rideId: event.rideId,
               reason: 'ride_fare_hold',
@@ -79,73 +85,54 @@ async function bootstrap(): Promise<void> {
         }
 
         if (event.eventType === 'RIDE_COMPLETED') {
-          const lock = rideLocks.get(event.rideId);
-          if (!lock) return;
-
           try {
-            const wallet = await walletClient.findByUserId(lock.riderId);
-
-            await walletClient.unlockFunds(wallet.id, lock.lockedFareUsdt);
-            await producer.send(TOPICS.WALLET_EVENTS, {
-              eventType: 'WALLET_UNLOCKED',
-              walletId: wallet.id,
-              userId: wallet.userId,
-              walletAddress: wallet.address,
-              unlockedAmountUsdt: lock.lockedFareUsdt,
+            const holdResult = await walletClient.completeRideHold({
               rideId: event.rideId,
-              reason: 'ride_completed',
-              timestamp: new Date().toISOString(),
-            } as any, { key: event.rideId });
-
-            const debitResult = await walletClient.debit({
-              walletId: wallet.id,
-              amountUsdt: event.fareUsdt,
-              type: 'RIDE_PAYMENT' as any,
-              referenceId: event.rideId,
+              fareUsdt: event.fareUsdt,
             });
 
-            if (!debitResult.applied) {
+            if (!holdResult || !holdResult.applied) {
               return;
             }
 
+            const riderWallet = await walletClient.findByUserId(event.riderId);
+
             await producer.send(TOPICS.WALLET_EVENTS, {
               eventType: 'WALLET_DEBITED',
-              walletId: debitResult.wallet.id,
-              userId: debitResult.wallet.userId,
-              walletAddress: debitResult.wallet.address,
+              walletId: holdResult.wallet.id,
+              userId: riderWallet.userId,
+              walletAddress: riderWallet.address,
               amountUsdt: event.fareUsdt,
-              newBalanceUsdt: Number(debitResult.wallet.balanceUsdt),
+              newBalanceUsdt: Number(holdResult.wallet.balanceUsdt),
               debitType: 'ride_payment',
               referenceId: event.rideId,
               timestamp: new Date().toISOString(),
             } as any, { key: event.rideId });
           } catch (err) {
             console.warn(`[${SERVICE_ID}] ride debit failed:`, (err as any)?.message ?? err);
-          } finally {
-            rideLocks.delete(event.rideId);
           }
         }
 
         if (event.eventType === 'RIDE_CANCELLED') {
-          const lock = rideLocks.get(event.rideId);
-          if (!lock) return;
           try {
-            const wallet = await walletClient.findByUserId(lock.riderId);
-            await walletClient.unlockFunds(wallet.id, lock.lockedFareUsdt);
+            const holdResult = await walletClient.cancelRideHold(event.rideId);
+            if (!holdResult || !holdResult.applied) {
+              return;
+            }
+
+            const wallet = await walletClient.findByUserId(event.riderId);
             await producer.send(TOPICS.WALLET_EVENTS, {
               eventType: 'WALLET_UNLOCKED',
-              walletId: wallet.id,
+              walletId: holdResult.wallet.id,
               userId: wallet.userId,
               walletAddress: wallet.address,
-              unlockedAmountUsdt: lock.lockedFareUsdt,
+              unlockedAmountUsdt: holdResult.holdAmountUsdt,
               rideId: event.rideId,
               reason: 'ride_cancelled',
               timestamp: new Date().toISOString(),
             } as any, { key: event.rideId });
           } catch (err) {
             console.warn(`[${SERVICE_ID}] unlock failed:`, (err as any)?.message ?? err);
-          } finally {
-            rideLocks.delete(event.rideId);
           }
         }
 

@@ -122,6 +122,12 @@ enum PaymentRecordStatus {
   CONVERTED
 }
 
+enum RideHoldStatus {
+  ACTIVE
+  RELEASED
+  CHARGED
+}
+
 // ─── User & Auth ──────────────────────────────────────────────────────────────
 
 model User {
@@ -229,6 +235,7 @@ model Wallet {
   updatedAt       DateTime  @updatedAt
 
   virtualAccount  VirtualAccount?
+  rideHolds       RideHold[]
   transactions    Transaction[]
   defiPositions   DefiPosition[]
 
@@ -265,6 +272,23 @@ model PaymentRecord {
   updatedAt              DateTime            @updatedAt
 
   @@index([userId, status])
+}
+
+model RideHold {
+  id                String         @id @default(uuid())
+  rideId            String         @unique
+  walletId          String
+  wallet            Wallet         @relation(fields: [walletId], references: [id])
+  riderId           String
+  amountUsdt        Decimal        @db.Decimal(18, 6)
+  status            RideHoldStatus @default(ACTIVE)
+  settledAmountUsdt Decimal?       @db.Decimal(18, 6)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  settledAt         DateTime?
+
+  @@index([walletId, status])
+  @@index([riderId, status])
 }
 
 // Immutable record of every balance change.

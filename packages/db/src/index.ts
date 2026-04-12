@@ -17,6 +17,7 @@ export type {
   Ride,
   Wallet,
   VirtualAccount,
+  RideHold,
   Transaction,
   GpsLog,
   Recording,
@@ -44,4 +45,5 @@ export {
   DisputeResolution,
   ConsentType,
   NotificationCategory,
+  RideHoldStatus,
 } from '@prisma/client';

@@ -11,6 +11,12 @@ interface WalletMutationResult {
   applied: boolean;
 }
 
+interface RideHoldMutationResult {
+  wallet: Awaited<ReturnType<typeof prisma.wallet.update>>;
+  holdAmountUsdt: number;
+  applied: boolean;
+}
+
 export const walletClient = {
 
   // ── Reads ──────────────────────────────────────────────────────────────────
@@ -180,6 +186,168 @@ export const walletClient = {
         balanceUsdt: { increment: amountUsdt },
       },
     }),
+
+  createRideHold: async (params: {
+    rideId: string;
+    walletId: string;
+    riderId: string;
+    amountUsdt: number;
+  }): Promise<RideHoldMutationResult> => {
+    const { rideId, walletId, riderId, amountUsdt } = params;
+
+    try {
+      return await prisma.$transaction(async (tx: TxClient) => {
+        const current = await tx.wallet.findUniqueOrThrow({
+          where: { id: walletId },
+        });
+
+        if (Number(current.balanceUsdt) < amountUsdt) {
+          throw new Error(
+            `Cannot lock ${amountUsdt} USDT on wallet ${walletId}: ` +
+            `only ${current.balanceUsdt} available`,
+          );
+        }
+
+        const wallet = await tx.wallet.update({
+          where: { id: walletId },
+          data: {
+            balanceUsdt: { decrement: amountUsdt },
+            lockedUsdt: { increment: amountUsdt },
+          },
+        });
+
+        await tx.rideHold.create({
+          data: {
+            rideId,
+            walletId,
+            riderId,
+            amountUsdt,
+          },
+        });
+
+        return { wallet, holdAmountUsdt: amountUsdt, applied: true as const };
+      });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) {
+        throw error;
+      }
+
+      const wallet = await prisma.wallet.findUniqueOrThrow({ where: { id: walletId } });
+      const hold = await prisma.rideHold.findUniqueOrThrow({ where: { rideId } });
+      return { wallet, holdAmountUsdt: Number(hold.amountUsdt), applied: false };
+    }
+  },
+
+  completeRideHold: async (params: {
+    rideId: string;
+    fareUsdt: number;
+  }): Promise<RideHoldMutationResult | null> => {
+    const { rideId, fareUsdt } = params;
+
+    try {
+      return await prisma.$transaction(async (tx: TxClient) => {
+        const hold = await tx.rideHold.findUnique({
+          where: { rideId },
+        });
+
+        if (!hold) {
+          return null;
+        }
+
+        if (hold.status !== 'ACTIVE') {
+          const wallet = await tx.wallet.findUniqueOrThrow({ where: { id: hold.walletId } });
+          return { wallet, holdAmountUsdt: Number(hold.amountUsdt), applied: false as const };
+        }
+
+        const unlockedWallet = await tx.wallet.update({
+          where: { id: hold.walletId },
+          data: {
+            lockedUsdt: { decrement: hold.amountUsdt },
+            balanceUsdt: { increment: hold.amountUsdt },
+          },
+        });
+
+        if (Number(unlockedWallet.balanceUsdt) < fareUsdt) {
+          throw new Error(
+            `Insufficient balance on wallet ${hold.walletId} after unlocking ride hold: ` +
+            `has ${unlockedWallet.balanceUsdt} USDT, needs ${fareUsdt} USDT`,
+          );
+        }
+
+        const wallet = await tx.wallet.update({
+          where: { id: hold.walletId },
+          data: {
+            balanceUsdt: { decrement: fareUsdt },
+          },
+        });
+
+        await tx.transaction.create({
+          data: {
+            walletId: hold.walletId,
+            type: 'RIDE_PAYMENT',
+            direction: 'DEBIT',
+            amountUsdt: fareUsdt,
+            balanceAfter: wallet.balanceUsdt,
+            referenceId: rideId,
+          },
+        });
+
+        await tx.rideHold.update({
+          where: { rideId },
+          data: {
+            status: 'CHARGED',
+            settledAmountUsdt: fareUsdt,
+            settledAt: new Date(),
+          },
+        });
+
+        return { wallet, holdAmountUsdt: Number(hold.amountUsdt), applied: true as const };
+      });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) {
+        throw error;
+      }
+
+      const hold = await prisma.rideHold.findUniqueOrThrow({ where: { rideId } });
+      const wallet = await prisma.wallet.findUniqueOrThrow({ where: { id: hold.walletId } });
+      return { wallet, holdAmountUsdt: Number(hold.amountUsdt), applied: false };
+    }
+  },
+
+  cancelRideHold: async (rideId: string): Promise<RideHoldMutationResult | null> => {
+    return prisma.$transaction(async (tx: TxClient) => {
+      const hold = await tx.rideHold.findUnique({
+        where: { rideId },
+      });
+
+      if (!hold || hold.status !== 'ACTIVE') {
+        if (!hold) {
+          return null;
+        }
+
+        const wallet = await tx.wallet.findUniqueOrThrow({ where: { id: hold.walletId } });
+        return { wallet, holdAmountUsdt: Number(hold.amountUsdt), applied: false as const };
+      }
+
+      const wallet = await tx.wallet.update({
+        where: { id: hold.walletId },
+        data: {
+          lockedUsdt: { decrement: hold.amountUsdt },
+          balanceUsdt: { increment: hold.amountUsdt },
+        },
+      });
+
+      await tx.rideHold.update({
+        where: { rideId },
+        data: {
+          status: 'RELEASED',
+          settledAt: new Date(),
+        },
+      });
+
+      return { wallet, holdAmountUsdt: Number(hold.amountUsdt), applied: true as const };
+    });
+  },
 
   moveToStaked: (walletId: string, amountUsdt: number) =>
     prisma.$transaction(async (tx: TxClient) => {
