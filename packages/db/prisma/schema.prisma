@@ -387,6 +387,7 @@ model Recording {
   rideId          String   @unique
   ipfsCid         String   // content ID on IPFS
   sha256Hash      String   // hash of encrypted file — logged on-chain
+  onchainTxHash   String?
   consentTxHash   String   // on-chain consent that authorised this recording
   encryptedWith   String   // key scheme identifier e.g. "aes256-gcm-v1"
   durationSeconds Int

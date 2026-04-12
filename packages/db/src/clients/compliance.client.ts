@@ -6,9 +6,11 @@ export const complianceClient = {
   // ── Recordings ─────────────────────────────────────────────────────────────
 
   createRecording: (data: {
+    id?:             string;
     rideId:          string;
     ipfsCid:         string;
     sha256Hash:      string;
+    onchainTxHash?:  string;
     consentTxHash:   string;
     encryptedWith:   string;
     durationSeconds: number;
@@ -68,6 +70,7 @@ export const complianceClient = {
   // ── Feedback ───────────────────────────────────────────────────────────────
 
   createFeedback: (data: {
+    id:             string;
     rideId:         string;
     reviewerId:     string;
     reviewerRole:   string;
@@ -83,6 +86,12 @@ export const complianceClient = {
     prisma.feedback.update({
       where: { id: feedbackId },
       data:  { onchainTxHash },
+    }),
+
+  updateRecordingOnchainTx: (recordingId: string, onchainTxHash: string) =>
+    prisma.recording.update({
+      where: { id: recordingId },
+      data: { onchainTxHash },
     }),
 
   findFeedbackForRide: (rideId: string) =>

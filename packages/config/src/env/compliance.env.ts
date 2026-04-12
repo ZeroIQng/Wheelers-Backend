@@ -4,8 +4,9 @@ const ComplianceEnvSchema = z.object({
   // IPFS pinning service
   IPFS_API_URL:              z.string().url(),
   IPFS_API_KEY:              z.string().min(1),
-  // On-chain compliance log contract (EVM)
-  COMPLIANCE_LOG_CONTRACT:   z.string().min(1),
+  // Stellar network used for immutable compliance logging
+  STELLAR_NETWORK:           z.enum(['mainnet', 'testnet']).default('testnet'),
+  STELLAR_SECRET_KEY:        z.string().min(1),
   // AES-256-GCM encryption key for recordings (32 bytes hex)
   RECORDING_ENCRYPTION_KEY:  z.string().length(64),
   // Admin dashboard URL — for dispute notification deep-links

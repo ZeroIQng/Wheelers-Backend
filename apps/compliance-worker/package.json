@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@wheleers/blockchain": "*",
     "@wheleers/config": "*",
     "@wheleers/db": "*",
     "@wheleers/kafka-client": "*",
@@ -22,4 +23,3 @@
     "typescript": "^5.9.3"
   }
 }
-

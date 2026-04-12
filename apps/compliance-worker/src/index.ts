@@ -1,3 +1,4 @@
+import { logFeedbackOnStellar, logRecordingHashOnStellar } from '@wheleers/blockchain';
 import { validateComplianceEnv, validateSharedEnv } from '@wheleers/config';
 import { complianceClient } from '@wheleers/db';
 import { createConsumer } from '@wheleers/kafka-client';
@@ -17,14 +18,8 @@ async function bootstrap(): Promise<void> {
   process.env['DATABASE_URL'] ??= 'postgresql://postgres:postgres@localhost:5432/wheelers';
   process.env['REDIS_URL'] ??= 'redis://localhost:6379';
 
-  // Dev placeholders for required compliance env
-  process.env['IPFS_API_URL'] ??= 'http://localhost:5001';
-  process.env['IPFS_API_KEY'] ??= 'dev';
-  process.env['COMPLIANCE_LOG_CONTRACT'] ??= '0xdev';
-  process.env['RECORDING_ENCRYPTION_KEY'] ??= '0000000000000000000000000000000000000000000000000000000000000000';
-
   validateSharedEnv();
-  validateComplianceEnv();
+  const complianceEnv = validateComplianceEnv();
 
   const consumer = await createConsumer({ groupId: SERVICE_ID });
 
@@ -52,6 +47,7 @@ async function bootstrap(): Promise<void> {
       if (event.eventType === 'FEEDBACK_LOGGED') {
         try {
           await complianceClient.createFeedback({
+            id: event.feedbackId,
             rideId: event.rideId,
             reviewerId: event.reviewerId,
             reviewerRole: event.reviewerRole,
@@ -61,14 +57,27 @@ async function bootstrap(): Promise<void> {
             comment: event.comment,
             commentHash: event.commentHash,
           });
+
+          const txHash = await logFeedbackOnStellar({
+            feedbackId: event.feedbackId,
+            rideId: event.rideId,
+            revieweeWallet: event.revieweeWallet,
+            rating: event.rating,
+            commentHash: event.commentHash,
+            network: complianceEnv.STELLAR_NETWORK,
+          });
+
+          await complianceClient.updateFeedbackOnchainTx(event.feedbackId, txHash);
         } catch (err) {
           console.warn(`[${SERVICE_ID}] createFeedback failed:`, (err as any)?.message ?? err);
+          throw err;
         }
       }
 
       if (event.eventType === 'RECORDING_STORED') {
         try {
           await complianceClient.createRecording({
+            id: event.recordingId,
             rideId: event.rideId,
             ipfsCid: event.ipfsCid,
             sha256Hash: event.sha256Hash,
@@ -76,8 +85,18 @@ async function bootstrap(): Promise<void> {
             encryptedWith: event.encryptedWith,
             durationSeconds: event.durationSeconds,
           });
+
+          const txHash = await logRecordingHashOnStellar({
+            recordingId: event.recordingId,
+            rideId: event.rideId,
+            sha256Hex: event.sha256Hash,
+            network: complianceEnv.STELLAR_NETWORK,
+          });
+
+          await complianceClient.updateRecordingOnchainTx(event.recordingId, txHash);
         } catch (err) {
           console.warn(`[${SERVICE_ID}] createRecording failed:`, (err as any)?.message ?? err);
+          throw err;
         }
       }
 
@@ -87,4 +106,3 @@ async function bootstrap(): Promise<void> {
 
   console.log(`[${SERVICE_ID}] consuming`);
 }
-

@@ -38,6 +38,11 @@ export {
 } from "./contracts/compliance-log";
 
 export {
+  logFeedbackOnStellar,
+  logRecordingHashOnStellar,
+} from './contracts/stellar-compliance-log';
+
+export {
   createSessionKey,
   isSessionKeyValid,
   revokeSessionKey,
