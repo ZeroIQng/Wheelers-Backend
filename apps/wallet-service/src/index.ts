@@ -189,6 +189,7 @@ async function bootstrap(): Promise<void> {
             } as any, { key: event.userId });
           } catch (err) {
             console.warn(`[${SERVICE_ID}] credit failed:`, (err as any)?.message ?? err);
+            throw err;
           }
         }
 
@@ -220,6 +221,7 @@ async function bootstrap(): Promise<void> {
             } as any, { key: event.userId });
           } catch (err) {
             console.warn(`[${SERVICE_ID}] crypto credit failed:`, (err as any)?.message ?? err);
+            throw err;
           }
         }
 
@@ -251,6 +253,7 @@ async function bootstrap(): Promise<void> {
             } as any, { key: event.driverId });
           } catch (err) {
             console.warn(`[${SERVICE_ID}] payout credit failed:`, (err as any)?.message ?? err);
+            throw err;
           }
         }
 
@@ -281,6 +284,7 @@ async function bootstrap(): Promise<void> {
             } as any, { key: event.userId });
           } catch (err) {
             console.warn(`[${SERVICE_ID}] penalty debit failed:`, (err as any)?.message ?? err);
+            throw err;
           }
         }
 
