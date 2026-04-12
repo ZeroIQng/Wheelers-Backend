@@ -11,8 +11,12 @@ import {
 import { validateGatewayEnv, validateSharedEnv } from '@wheleers/config';
 import { TOPICS } from '@wheleers/kafka-schemas';
 import { handlePrivyAuthRoute } from './http/auth.route';
-import { handleKorapayWebhookRoute } from './http/korapay.route';
-import { handleYellowCardWebhookRoute } from './http/yellowcard.route';
+import { PaystackClient } from './http/paystack.client';
+import {
+  handlePaystackInitializeRoute,
+  handlePaystackVerifyRoute,
+  handlePaystackWebhookRoute,
+} from './http/paystack.route';
 import { applyCorsHeaders, sendJson } from './http/utils';
 import { startGatewayKafkaConsumer } from './kafka/consumer';
 import { RedisClient } from './redis/client';
@@ -74,6 +78,10 @@ async function bootstrap(): Promise<void> {
   await redisSubscriberClient.connect();
 
   const publisher = new GatewayPublisher(producer);
+  const paystackClient = new PaystackClient(
+    gatewayEnv.PAYSTACK_BASE_URL,
+    gatewayEnv.PAYSTACK_SECRET_KEY,
+  );
   const registry = new SocketRegistry({
     instanceId: `${sharedEnv.KAFKA_CLIENT_ID}-${process.pid}-${Math.random().toString(16).slice(2, 8)}`,
     commandRedis: redisCommandClient,
@@ -83,6 +91,8 @@ async function bootstrap(): Promise<void> {
   const allowedOrigins = parseAllowedOrigins(gatewayEnv.CORS_ORIGINS);
 
   const server = createServer(async (req, res) => {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+
     applyCorsHeaders(req, res, allowedOrigins);
 
     if (req.method === 'OPTIONS') {
@@ -91,7 +101,7 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (req.method === 'GET' && req.url === '/health') {
+    if (req.method === 'GET' && url.pathname === '/health') {
       sendJson(res, 200, {
         status: 'ok',
         service: 'api-gateway',
@@ -100,7 +110,7 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (req.url === '/auth/privy') {
+    if (url.pathname === '/auth/privy') {
       if (req.method !== 'POST') {
         sendMethodNotAllowed(res);
         return;
@@ -113,21 +123,47 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (req.url === '/webhooks/korapay') {
+    if (url.pathname === '/payments/paystack/initialize') {
       if (req.method !== 'POST') {
         sendMethodNotAllowed(res);
         return;
       }
-      await handleKorapayWebhookRoute(req, res, { publisher });
+      await handlePaystackInitializeRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        paystackClient,
+        paystackPublicKey: gatewayEnv.PAYSTACK_PUBLIC_KEY,
+        defaultCallbackUrl: gatewayEnv.PAYSTACK_CALLBACK_URL,
+        defaultChannels: gatewayEnv.PAYSTACK_ALLOWED_CHANNELS
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean),
+      });
       return;
     }
 
-    if (req.url === '/webhooks/yellowcard') {
+    if (url.pathname === '/payments/paystack/verify') {
+      if (req.method !== 'GET') {
+        sendMethodNotAllowed(res);
+        return;
+      }
+      await handlePaystackVerifyRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        paystackClient,
+      });
+      return;
+    }
+
+    if (url.pathname === '/webhooks/paystack') {
       if (req.method !== 'POST') {
         sendMethodNotAllowed(res);
         return;
       }
-      await handleYellowCardWebhookRoute(req, res, { publisher });
+      await handlePaystackWebhookRoute(req, res, {
+        publisher,
+        webhookSecret: gatewayEnv.PAYSTACK_WEBHOOK_SECRET ?? gatewayEnv.PAYSTACK_SECRET_KEY,
+      });
       return;
     }
 

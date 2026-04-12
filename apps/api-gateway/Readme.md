@@ -23,8 +23,9 @@ It does 3 main jobs:
 It also exposes these HTTP endpoints:
 
 - `POST /auth/privy`
-- `POST /webhooks/korapay`
-- `POST /webhooks/yellowcard`
+- `POST /payments/paystack/initialize`
+- `GET /payments/paystack/verify`
+- `POST /webhooks/paystack`
 - `GET /health`
 
 ---
@@ -136,7 +137,7 @@ Result: user gets live balance updates.
 
 ## Flow E: Payment webhooks
 
-1. Korapay/YellowCard calls webhook endpoint.
+1. Paystack calls the webhook endpoint after a successful payment.
 2. Gateway normalizes and validates payload.
 3. Gateway emits payment event to Kafka (`payment.events`).
 4. `payment-service` / `wallet-service` continue processing.

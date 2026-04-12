@@ -6,36 +6,47 @@ const BasePaymentEvent = z.object({
   timestamp: z.string().datetime(),
 });
 
-// Fired by payment-service when Korapay webhook arrives.
-// Consumed by: payment-service itself (trigger YellowCard conversion —
-// produces to its own topic to decouple webhook response from swap time).
+const PaymentProvider = z.enum(['paystack']);
+
+// Fired by api-gateway when a verified Paystack success notification arrives.
+// Consumed by: payment-service itself to run the fiat-to-wallet funding workflow
+// asynchronously after the webhook has already been acknowledged.
 export const DepositReceivedEvent = BasePaymentEvent.extend({
-  eventType:             z.literal('DEPOSIT_RECEIVED'),
-  amountNgn:             z.number(),
-  korapayReference:      z.string(),
-  virtualAccountNumber:  z.string(),
-  userWallet:            z.string(),
+  eventType:            z.literal('DEPOSIT_RECEIVED'),
+  paymentProvider:      PaymentProvider,
+  amountNgn:            z.number(),
+  providerReference:    z.string(),
+  paymentChannel:       z.string().optional(),
+  customerEmail:        z.string().email().optional(),
+  virtualAccountNumber: z.string().optional(),
+  userWallet:           z.string(),
 });
 
-// Fired by payment-service immediately after calling YellowCard API.
+// Fired by payment-service immediately after validating a successful
+// Paystack funding event and before crediting the internal wallet.
 // Consumed by: notification-worker (push "converting..." status to rider).
 export const NgnConvertingEvent = BasePaymentEvent.extend({
-  eventType:       z.literal('NGN_CONVERTING'),
-  amountNgn:       z.number(),
-  estimatedUsdt:   z.number(),
-  yellowcardJobId: z.string(),
+  eventType:          z.literal('NGN_CONVERTING'),
+  paymentProvider:    PaymentProvider,
+  amountNgn:          z.number(),
+  estimatedUsdt:      z.number(),
+  providerReference:  z.string(),
+  conversionJobId:    z.string(),
 });
 
-// Fired by payment-service when YellowCard confirms the swap completed.
+// Fired by payment-service once the internal conversion amount has been
+// calculated and is ready to be credited by wallet-service.
 // Consumed by: wallet-service (credit USDT balance),
 // notification-worker (push "wallet funded" to rider).
 export const NgnConvertedEvent = BasePaymentEvent.extend({
   eventType:            z.literal('NGN_CONVERTED'),
+  paymentProvider:      PaymentProvider,
   amountNgn:            z.number(),
   amountUsdt:           z.number(),
   exchangeRate:         z.number(),
+  providerReference:    z.string(),
   userWallet:           z.string(),
-  yellowcardReference:  z.string(),
+  conversionReference:  z.string(),
 });
 
 // Fired by payment-service after fare is calculated post ride-completion.

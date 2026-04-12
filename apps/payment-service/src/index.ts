@@ -1,9 +1,12 @@
 import { FEES, validatePaymentEnv, validateSharedEnv } from '@wheleers/config';
+import { paymentClient } from '@wheleers/db';
 import { createConsumer, createProducer } from '@wheleers/kafka-client';
 import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
 import { randomUUID } from 'node:crypto';
+import { convertNgnToUsdt } from './conversion';
 
 const SERVICE_ID = 'payment-service';
+const inflightDeposits = new Set<string>();
 
 bootstrap().catch((err) => {
   console.error(`[${SERVICE_ID}] fatal`, err);
@@ -18,15 +21,12 @@ async function bootstrap(): Promise<void> {
   process.env['REDIS_URL'] ??= 'redis://localhost:6379';
 
   // Dev placeholders for required payment env
-  process.env['KORAPAY_SECRET_KEY'] ??= 'dev';
-  process.env['KORAPAY_PUBLIC_KEY'] ??= 'dev';
-  process.env['KORAPAY_WEBHOOK_SECRET'] ??= 'dev';
-  process.env['YELLOWCARD_API_KEY'] ??= 'dev';
-  process.env['YELLOWCARD_WEBHOOK_SECRET'] ??= 'dev';
+  process.env['PAYMENT_PROVIDER'] ??= 'paystack';
+  process.env['PAYMENT_NGN_USDT_RATE'] ??= '1500';
   process.env['PLATFORM_WALLET_ADDRESS'] ??= '0x0000000000000000000000000000000000000000';
 
   validateSharedEnv();
-  validatePaymentEnv();
+  const paymentEnv = validatePaymentEnv();
 
   const producer = await createProducer({ serviceId: SERVICE_ID });
   const consumer = await createConsumer({ groupId: SERVICE_ID });
@@ -39,30 +39,55 @@ async function bootstrap(): Promise<void> {
         if (!event) return;
 
         if (event.eventType === 'DEPOSIT_RECEIVED') {
-          // Stub conversion workflow: emit NGN_CONVERTING then NGN_CONVERTED.
-          await producer.send(TOPICS.PAYMENT_EVENTS, {
-            eventType: 'NGN_CONVERTING',
-            paymentId: event.paymentId,
-            userId: event.userId,
-            amountNgn: event.amountNgn,
-            estimatedUsdt: Math.max(0, event.amountNgn / 1500),
-            yellowcardJobId: `dev-${event.paymentId}`,
-            timestamp: new Date().toISOString(),
-          } as any, { key: event.userId });
+          if (inflightDeposits.has(event.providerReference)) {
+            return;
+          }
 
-          await sleep(250);
+          inflightDeposits.add(event.providerReference);
 
-          await producer.send(TOPICS.PAYMENT_EVENTS, {
-            eventType: 'NGN_CONVERTED',
-            paymentId: event.paymentId,
-            userId: event.userId,
-            amountNgn: event.amountNgn,
-            amountUsdt: Math.max(0, event.amountNgn / 1500),
-            exchangeRate: 1500,
-            userWallet: event.userWallet,
-            yellowcardReference: `dev-${event.paymentId}`,
-            timestamp: new Date().toISOString(),
-          } as any, { key: event.userId });
+          try {
+            const alreadyProcessed = await paymentClient.depositAlreadyProcessed(event.providerReference);
+            if (alreadyProcessed) {
+              return;
+            }
+
+            const conversion = convertNgnToUsdt(
+              event.amountNgn,
+              paymentEnv.PAYMENT_NGN_USDT_RATE,
+            );
+            const conversionJobId = `paystack-${event.providerReference}`;
+            const conversionReference = `settlement-${event.providerReference}`;
+
+            await producer.send(TOPICS.PAYMENT_EVENTS, {
+              eventType: 'NGN_CONVERTING',
+              paymentId: event.paymentId,
+              userId: event.userId,
+              paymentProvider: event.paymentProvider,
+              amountNgn: event.amountNgn,
+              estimatedUsdt: conversion.amountUsdt,
+              providerReference: event.providerReference,
+              conversionJobId,
+              timestamp: new Date().toISOString(),
+            } as any, { key: event.userId });
+
+            await sleep(250);
+
+            await producer.send(TOPICS.PAYMENT_EVENTS, {
+              eventType: 'NGN_CONVERTED',
+              paymentId: event.paymentId,
+              userId: event.userId,
+              paymentProvider: event.paymentProvider,
+              amountNgn: event.amountNgn,
+              amountUsdt: conversion.amountUsdt,
+              exchangeRate: conversion.exchangeRate,
+              providerReference: event.providerReference,
+              userWallet: event.userWallet,
+              conversionReference,
+              timestamp: new Date().toISOString(),
+            } as any, { key: event.userId });
+          } finally {
+            inflightDeposits.delete(event.providerReference);
+          }
         }
 
         return;

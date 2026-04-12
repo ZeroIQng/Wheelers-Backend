@@ -40,7 +40,7 @@ The first decentralised ride-hailing app. Riders pay in USDT, drivers settle on-
 
 Wheleers operates as a marketplace with two sides — riders and drivers.
 
-**Riders** fund a USDT wallet either by bank transfer (NGN → USDT via Korapay + YellowCard) or by sending crypto directly. They book rides and pay from their in-app balance. If their balance sits idle, it automatically earns yield via DeFi protocols (Aave, Compound) using ERC-4337 smart accounts with session keys — no manual signing required.
+**Riders** fund a USDT wallet through a Paystack checkout or bank-transfer funding flow (NGN → USDT inside the payment pipeline) or by sending crypto directly. They book rides and pay from their in-app balance. If their balance sits idle, it automatically earns yield via DeFi protocols (Aave, Compound) using ERC-4337 smart accounts with session keys — no manual signing required.
 
 **Drivers** onboard through a KYC flow (licence, vehicle details, face verification). Once approved they go online, accept ride requests, and receive USDT payouts per completed trip. Wheleers takes 0.3% of the driver's profit per ride — never when the driver makes no profit.
 
@@ -55,7 +55,7 @@ wheleers/
 ├── apps/
 │   ├── api-gateway/          # WebSocket server + 3 HTTP endpoints
 │   ├── ride-service/         # Matching, GPS processing, trip lifecycle
-│   ├── payment-service/      # Korapay, YellowCard, fee calculation
+│   ├── payment-service/      # Paystack funding workflow, conversion, fee calculation
 │   ├── wallet-service/       # USDT balances, DeFi staking, smart accounts
 │   ├── notification-worker/  # Expo push, Twilio SMS, in-app notifications
 │   ├── compliance-worker/    # On-chain logs, recordings, disputes, KYC review
@@ -92,11 +92,12 @@ Services never call each other's APIs. When a significant domain event happens �
 
 This is what makes the system scale: when a ride completes, `ride-service` emits one `RIDE_COMPLETED` event. `payment-service`, `wallet-service`, `compliance-worker`, and `notification-worker` all pick it up simultaneously. No service waits on another.
 
-**External webhooks: HTTP (3 endpoints only)**
-External providers (Korapay, YellowCard) push data to Wheleers via webhooks. These three HTTP endpoints are the only REST surface:
+**External webhooks: HTTP**
+External providers push data to Wheleers via webhooks. These HTTP endpoints are the current REST surface:
 - `POST /auth/privy` — Privy auth callback
-- `POST /webhooks/korapay` — bank deposit notification
-- `POST /webhooks/yellowcard` — NGN→USDT conversion confirmation
+- `POST /payments/paystack/initialize` — authenticated funding initialization
+- `GET /payments/paystack/verify` — authenticated funding status lookup
+- `POST /webhooks/paystack` — Paystack payment notification
 
 Everything else is WebSocket or Kafka.
 
@@ -396,22 +397,22 @@ apps/ride-service/src/
 **What it owns:** `VirtualAccount`, reads `Transaction` for idempotency checks.
 
 **What it does:**
-- Receives Korapay webhook → verifies signature → checks for duplicate → emits `DEPOSIT_RECEIVED`
-- Calls YellowCard API to convert NGN → USDT → emits `NGN_CONVERTING` then `NGN_CONVERTED`
+- Consumes verified Paystack funding events from `payment.events`
+- Applies payment idempotency checks and converts NGN deposit values into wallet credit amounts
+- Emits `NGN_CONVERTING` then `NGN_CONVERTED`
 - On `RIDE_COMPLETED`: calculates gross fare, driver costs, platform fee (0.3% of profit only), net payout → emits `DRIVER_PAYOUT`
 - On `RIDE_CANCELLED`: calculates penalty by stage → emits `PENALTY_APPLIED`
 - Detects on-chain USDT deposits → emits `CRYPTO_DEPOSIT_RECEIVED`
 
-**Korapay → YellowCard flow:**
+**Paystack funding flow:**
 
 ```
-Korapay webhook → POST /webhooks/korapay
+Paystack webhook → POST /webhooks/paystack
   → return 200 immediately (never block webhooks)
   → produce DEPOSIT_RECEIVED to Kafka
   → payment-service consumer picks it up
-  → call YellowCard API
+  → run idempotency guard
   → produce NGN_CONVERTING
-  → YellowCard webhook confirms
   → produce NGN_CONVERTED
   → wallet-service credits the balance
 ```
@@ -557,17 +558,16 @@ DRIVER_PAYOUT consumed by:
 ### 6.3 NGN deposit (Web2 onramp)
 
 ```
-User initiates bank transfer to their GTBank virtual account
+User initializes a Paystack transaction from the frontend
 
-Korapay detects transfer → fires webhook to POST /webhooks/korapay
+Paystack confirms payment success → fires webhook to POST /webhooks/paystack
   → api-gateway returns 200 immediately
   → produces DEPOSIT_RECEIVED to payment.events
 
 DEPOSIT_RECEIVED consumed by payment-service:
   → checks depositAlreadyProcessed() — idempotency guard
-  → calls YellowCard API to convert NGN → USDT
+  → calculates NGN → USDT credit amount
   → produces NGN_CONVERTING (notification-worker shows "converting" status)
-  → YellowCard webhook fires to POST /webhooks/yellowcard
   → produces NGN_CONVERTED to payment.events
 
 NGN_CONVERTED consumed by:

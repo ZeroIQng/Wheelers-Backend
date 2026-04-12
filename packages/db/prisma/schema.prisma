@@ -229,8 +229,8 @@ model Wallet {
   @@index([address])
 }
 
-// Korapay virtual account for NGN deposits.
-// One per wallet — created when USER_CREATED is consumed by payment-service.
+// Provider-backed virtual account for NGN deposits.
+// One per wallet if the selected funding provider supports dedicated accounts.
 model VirtualAccount {
   id            String   @id @default(uuid())
   walletId      String   @unique
@@ -238,7 +238,7 @@ model VirtualAccount {
   bankName      String
   accountNumber String
   accountName   String
-  korapayRef    String   @unique  // Korapay's internal reference
+  korapayRef    String   @unique  // provider reference retained for backwards compatibility
   createdAt     DateTime @default(now())
 }
 

@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 
 const MAX_BODY_SIZE_BYTES = 1_000_000;
 
-export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+export async function readRawBody(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
 
@@ -17,11 +17,15 @@ export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
     chunks.push(buffer);
   }
 
-  if (chunks.length === 0) {
+  return chunks.length === 0 ? Buffer.alloc(0) : Buffer.concat(chunks);
+}
+
+export function parseJsonBuffer(buffer: Buffer): unknown {
+  if (buffer.length === 0) {
     return {};
   }
 
-  const body = Buffer.concat(chunks).toString('utf8');
+  const body = buffer.toString('utf8');
   if (!body.trim()) {
     return {};
   }
@@ -31,6 +35,10 @@ export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   } catch {
     throw new Error('Invalid JSON body');
   }
+}
+
+export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  return parseJsonBuffer(await readRawBody(req));
 }
 
 export function sendJson(res: ServerResponse, statusCode: number, payload: Record<string, unknown>): void {

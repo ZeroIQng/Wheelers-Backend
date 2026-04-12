@@ -7,7 +7,8 @@ const BaseUserEvent = z.object({
 
 // Fired by api-gateway after Privy auth succeeds for a new user.
 // Consumed by: wallet-service (create wallet), payment-service
-// (create Korapay virtual account), compliance-worker (log consent on-chain).
+// (prepare payment-side customer funding profile when needed),
+// compliance-worker (log consent on-chain).
 export const UserCreatedEvent = BaseUserEvent.extend({
   eventType:     z.literal('USER_CREATED'),
   privyDid:      z.string(),

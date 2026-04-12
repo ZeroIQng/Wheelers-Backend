@@ -139,7 +139,13 @@ async function bootstrap(): Promise<void> {
               walletId: wallet.id,
               amountUsdt: event.amountUsdt,
               type: 'NGN_DEPOSIT' as any,
-              referenceId: event.paymentId,
+              referenceId: event.providerReference,
+              metadata: {
+                paymentId: event.paymentId,
+                paymentProvider: event.paymentProvider,
+                conversionReference: event.conversionReference,
+                exchangeRate: event.exchangeRate,
+              },
             });
 
             await producer.send(TOPICS.WALLET_EVENTS, {
@@ -150,7 +156,7 @@ async function bootstrap(): Promise<void> {
               amountUsdt: event.amountUsdt,
               newBalanceUsdt: Number(credited.balanceUsdt),
               creditType: 'ngn_deposit',
-              referenceId: event.paymentId,
+              referenceId: event.providerReference,
               timestamp: new Date().toISOString(),
             } as any, { key: event.userId });
           } catch (err) {

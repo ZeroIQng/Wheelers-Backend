@@ -16,8 +16,8 @@ export const paymentClient = {
   findVirtualAccountByWalletId: (walletId: string) =>
     prisma.virtualAccount.findUnique({ where: { walletId } }),
 
-  // payment-service uses this to look up who sent money when Korapay fires
-  // a webhook — korapayRef in the webhook maps to this record.
+  // Reserved for provider-backed transfer flows where a provider reference
+  // must be mapped back to the owning wallet.
   findVirtualAccountByKorapayRef: (korapayRef: string) =>
     prisma.virtualAccount.findUnique({
       where:   { korapayRef },
@@ -26,16 +26,16 @@ export const paymentClient = {
 
   // ── Transaction lookups ────────────────────────────────────────────────────
 
-  // Check if a payment with this reference has already been processed.
-  // Guards against duplicate Korapay webhooks — webhooks can fire more than once.
+  // Check if a payment with this provider reference has already been processed.
+  // Guards against duplicate funding notifications and retries.
   findTransactionByReference: (referenceId: string) =>
     prisma.transaction.findFirst({ where: { referenceId } }),
 
-  // Used by payment-service to confirm a deposit was already credited
-  // before calling YellowCard — prevents double conversion.
-  depositAlreadyProcessed: async (korapayReference: string): Promise<boolean> => {
+  // Used by payment-service to confirm a deposit was already credited before
+  // emitting a second funding flow.
+  depositAlreadyProcessed: async (providerReference: string): Promise<boolean> => {
     const existing = await prisma.transaction.findFirst({
-      where: { referenceId: korapayReference },
+      where: { referenceId: providerReference },
     });
     return existing !== null;
   },
