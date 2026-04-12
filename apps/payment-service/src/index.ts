@@ -3,8 +3,8 @@ import { paymentClient } from '@wheleers/db';
 import { createConsumer, createProducer } from '@wheleers/kafka-client';
 import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
 import { randomUUID } from 'node:crypto';
-import { CoinbaseRatesClient } from './coinbase.client';
-import { convertNgnToUsdt } from './conversion';
+import { CoinbaseRatesClient } from './fx/coinbase-rates.client';
+import { convertNgnToUsdt } from './fx/conversion';
 
 const SERVICE_ID = 'payment-service';
 

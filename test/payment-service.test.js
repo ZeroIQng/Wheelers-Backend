@@ -8,7 +8,7 @@ const {
   readPaystackMetadata,
   verifyPaystackSignature,
 } = require('../apps/api-gateway/dist/http/paystack.helpers.js');
-const { convertNgnToUsdt } = require('../apps/payment-service/dist/conversion.js');
+const { convertNgnToUsdt } = require('../apps/payment-service/dist/fx/conversion.js');
 
 test('verifyPaystackSignature accepts a valid signature', () => {
   const rawBody = Buffer.from(JSON.stringify({ event: 'charge.success', data: { reference: 'abc' } }));
