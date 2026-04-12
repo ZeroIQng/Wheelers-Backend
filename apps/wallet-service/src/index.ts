@@ -97,20 +97,24 @@ async function bootstrap(): Promise<void> {
               timestamp: new Date().toISOString(),
             } as any, { key: event.rideId });
 
-            const { wallet: debited } = await walletClient.debit({
+            const debitResult = await walletClient.debit({
               walletId: wallet.id,
               amountUsdt: event.fareUsdt,
               type: 'RIDE_PAYMENT' as any,
               referenceId: event.rideId,
             });
 
+            if (!debitResult.applied) {
+              return;
+            }
+
             await producer.send(TOPICS.WALLET_EVENTS, {
               eventType: 'WALLET_DEBITED',
-              walletId: debited.id,
-              userId: debited.userId,
-              walletAddress: debited.address,
+              walletId: debitResult.wallet.id,
+              userId: debitResult.wallet.userId,
+              walletAddress: debitResult.wallet.address,
               amountUsdt: event.fareUsdt,
-              newBalanceUsdt: Number(debited.balanceUsdt),
+              newBalanceUsdt: Number(debitResult.wallet.balanceUsdt),
               debitType: 'ride_payment',
               referenceId: event.rideId,
               timestamp: new Date().toISOString(),
@@ -155,7 +159,7 @@ async function bootstrap(): Promise<void> {
         if (event.eventType === 'NGN_CONVERTED') {
           try {
             const wallet = await walletClient.findByAddress(event.userWallet);
-            const { wallet: credited } = await walletClient.credit({
+            const creditResult = await walletClient.credit({
               walletId: wallet.id,
               amountUsdt: event.amountUsdt,
               type: 'NGN_DEPOSIT' as any,
@@ -168,13 +172,17 @@ async function bootstrap(): Promise<void> {
               },
             });
 
+            if (!creditResult.applied) {
+              return;
+            }
+
             await producer.send(TOPICS.WALLET_EVENTS, {
               eventType: 'WALLET_CREDITED',
-              walletId: credited.id,
-              userId: credited.userId,
-              walletAddress: credited.address,
+              walletId: creditResult.wallet.id,
+              userId: creditResult.wallet.userId,
+              walletAddress: creditResult.wallet.address,
               amountUsdt: event.amountUsdt,
-              newBalanceUsdt: Number(credited.balanceUsdt),
+              newBalanceUsdt: Number(creditResult.wallet.balanceUsdt),
               creditType: 'ngn_deposit',
               referenceId: event.providerReference,
               timestamp: new Date().toISOString(),
@@ -187,7 +195,7 @@ async function bootstrap(): Promise<void> {
         if (event.eventType === 'CRYPTO_DEPOSIT_RECEIVED') {
           try {
             const wallet = await walletClient.findByAddress(event.userWallet);
-            const { wallet: credited } = await walletClient.credit({
+            const creditResult = await walletClient.credit({
               walletId: wallet.id,
               amountUsdt: event.amountUsdt,
               type: 'CRYPTO_DEPOSIT' as any,
@@ -195,13 +203,17 @@ async function bootstrap(): Promise<void> {
               metadata: { txHash: event.txHash, chainId: event.chainId },
             });
 
+            if (!creditResult.applied) {
+              return;
+            }
+
             await producer.send(TOPICS.WALLET_EVENTS, {
               eventType: 'WALLET_CREDITED',
-              walletId: credited.id,
-              userId: credited.userId,
-              walletAddress: credited.address,
+              walletId: creditResult.wallet.id,
+              userId: creditResult.wallet.userId,
+              walletAddress: creditResult.wallet.address,
               amountUsdt: event.amountUsdt,
-              newBalanceUsdt: Number(credited.balanceUsdt),
+              newBalanceUsdt: Number(creditResult.wallet.balanceUsdt),
               creditType: 'crypto_deposit',
               referenceId: event.paymentId,
               timestamp: new Date().toISOString(),
@@ -214,7 +226,7 @@ async function bootstrap(): Promise<void> {
         if (event.eventType === 'DRIVER_PAYOUT') {
           try {
             const wallet = await walletClient.findByAddress(event.driverWallet);
-            const { wallet: credited } = await walletClient.credit({
+            const creditResult = await walletClient.credit({
               walletId: wallet.id,
               amountUsdt: event.netPayoutUsdt,
               type: 'DRIVER_PAYOUT' as any,
@@ -222,13 +234,17 @@ async function bootstrap(): Promise<void> {
               metadata: { platformFeeUsdt: event.platformFeeUsdt },
             });
 
+            if (!creditResult.applied) {
+              return;
+            }
+
             await producer.send(TOPICS.WALLET_EVENTS, {
               eventType: 'WALLET_CREDITED',
-              walletId: credited.id,
-              userId: credited.userId,
-              walletAddress: credited.address,
+              walletId: creditResult.wallet.id,
+              userId: creditResult.wallet.userId,
+              walletAddress: creditResult.wallet.address,
               amountUsdt: event.netPayoutUsdt,
-              newBalanceUsdt: Number(credited.balanceUsdt),
+              newBalanceUsdt: Number(creditResult.wallet.balanceUsdt),
               creditType: 'driver_payout',
               referenceId: event.rideId,
               timestamp: new Date().toISOString(),
@@ -241,20 +257,24 @@ async function bootstrap(): Promise<void> {
         if (event.eventType === 'PENALTY_APPLIED') {
           try {
             const wallet = await walletClient.findByAddress(event.riderWallet);
-            const { wallet: debited } = await walletClient.debit({
+            const debitResult = await walletClient.debit({
               walletId: wallet.id,
               amountUsdt: event.penaltyUsdt,
               type: 'PENALTY' as any,
               referenceId: event.rideId,
             });
 
+            if (!debitResult.applied) {
+              return;
+            }
+
             await producer.send(TOPICS.WALLET_EVENTS, {
               eventType: 'WALLET_DEBITED',
-              walletId: debited.id,
-              userId: debited.userId,
-              walletAddress: debited.address,
+              walletId: debitResult.wallet.id,
+              userId: debitResult.wallet.userId,
+              walletAddress: debitResult.wallet.address,
               amountUsdt: event.penaltyUsdt,
-              newBalanceUsdt: Number(debited.balanceUsdt),
+              newBalanceUsdt: Number(debitResult.wallet.balanceUsdt),
               debitType: 'penalty',
               referenceId: event.rideId,
               timestamp: new Date().toISOString(),
