@@ -29,6 +29,10 @@ From repo root:
 
 `cmd /c npm run test:ride-service`
 
+For the wallet/payment persistence integration test:
+
+`cmd /c npm run test:wallet-payment-integration`
+
 Optional:
 
 - Set brokers: `set KAFKA_BROKERS=localhost:29092` (Windows `cmd`)
@@ -37,3 +41,5 @@ Optional:
 
 In this repo’s `infra/docker-compose.yml`, Kafka is configured with a host listener on `localhost:29092`.
 Use `KAFKA_BROKERS=localhost:29092` when running tests/services on your host machine.
+
+The wallet/payment integration test only needs Postgres with migrations applied.
