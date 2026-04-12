@@ -2,6 +2,7 @@ import { validateSharedEnv, validateWalletEnv } from '@wheleers/config';
 import { walletClient } from '@wheleers/db';
 import { createConsumer, createProducer } from '@wheleers/kafka-client';
 import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
+import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 
 const SERVICE_ID = 'wallet-service';
@@ -31,8 +32,27 @@ async function bootstrap(): Promise<void> {
   const rideLocks = new Map<string, { riderId: string; lockedFareUsdt: number }>();
 
   await consumer.subscribe(
-    [TOPICS.RIDE_EVENTS, TOPICS.PAYMENT_EVENTS, TOPICS.DEFI_EVENTS],
+    [TOPICS.USER_EVENTS, TOPICS.RIDE_EVENTS, TOPICS.PAYMENT_EVENTS, TOPICS.DEFI_EVENTS],
     async (value, ctx) => {
+      if (ctx.topic === TOPICS.USER_EVENTS) {
+        const event = safeParseKafkaEvent(TOPICS.USER_EVENTS, value);
+        if (!event) return;
+
+        if (event.eventType === 'USER_CREATED') {
+          try {
+            await walletClient.create(event.userId, event.walletAddress);
+          } catch (err) {
+            if (isUniqueConstraintError(err)) {
+              return;
+            }
+
+            throw err;
+          }
+        }
+
+        return;
+      }
+
       if (ctx.topic === TOPICS.RIDE_EVENTS) {
         const event = safeParseKafkaEvent(TOPICS.RIDE_EVENTS, value);
         if (!event) return;
@@ -282,4 +302,11 @@ async function bootstrap(): Promise<void> {
   );
 
   console.log(`[${SERVICE_ID}] consuming`);
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === 'P2002'
+  );
 }
