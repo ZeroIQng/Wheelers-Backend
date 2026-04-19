@@ -12,6 +12,11 @@ export function createPaymentEventsConsumer(deps: PaymentEventsConsumerDeps) {
       const event = safeParseKafkaEvent(TOPICS.PAYMENT_EVENTS, value);
       if (!event) return;
 
+      if (event.eventType === 'PAYMENT_SESSION_CREATED') {
+        await deps.paymentEventsHandler.handlePaymentSessionCreated(event);
+        return;
+      }
+
       if (event.eventType === 'PAYMENT_SESSION_SYNCED') {
         await deps.paymentEventsHandler.handlePaymentSessionSynced(event);
       }

@@ -51,6 +51,8 @@ export async function processPaymentSessionSync(
       },
     });
 
+    await paymentClient.markIntentSettled(settlement.providerReference, new Date(settlement.timestamp));
+
     return true;
   } catch (error) {
     await paymentClient.releaseSettlementClaim(settlement.providerReference).catch(() => {});

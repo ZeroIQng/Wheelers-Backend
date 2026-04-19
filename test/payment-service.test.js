@@ -8,6 +8,10 @@ const {
   readPouchMetadata,
 } = require('../apps/api-gateway/dist/http/pouch.helpers.js');
 const {
+  buildIntentUpsertPayload,
+  deriveLifecycleStatus,
+} = require('../apps/payment-service/dist/domain/payment-intent.js');
+const {
   inferOnrampSettlement,
 } = require('../apps/payment-service/dist/domain/pouch-session.js');
 
@@ -148,4 +152,46 @@ test('inferOnrampSettlement ignores unsupported wallet credit assets', () => {
   const event = inferOnrampSettlement(synced);
 
   assert.equal(event, null);
+});
+
+test('deriveLifecycleStatus maps provider session states into internal lifecycle states', () => {
+  assert.equal(deriveLifecycleStatus('pending'), 'PENDING');
+  assert.equal(deriveLifecycleStatus('otp_required'), 'REQUIRES_USER_ACTION');
+  assert.equal(deriveLifecycleStatus('processing'), 'PROCESSING');
+  assert.equal(deriveLifecycleStatus('completed'), 'SETTLED');
+  assert.equal(deriveLifecycleStatus('kyc_failed'), 'FAILED');
+  assert.equal(deriveLifecycleStatus('expired'), 'EXPIRED');
+});
+
+test('buildIntentUpsertPayload creates payment-owned session tracking data from a sync event', () => {
+  const synced = normalizePouchSessionSynced({
+    id: 'sess_intent',
+    type: 'OFFRAMP',
+    status: 'processing',
+    amount: 12,
+    currency: 'NGN',
+    cryptoCurrency: 'USDC',
+    cryptoNetwork: 'XLM',
+    metadata: {
+      userId: '42d2cb9d-1afe-4a49-b08a-b7cc611fd0de',
+      walletAddress: '0xABCDEF1234567890ABCDEF1234567890ABCDEF12',
+    },
+    paymentInstruction: {
+      amountLocal: 18000,
+      cryptoAmount: 12,
+      cryptoCurrency: 'USDC',
+      cryptoNetwork: 'XLM',
+      reference: 'pouch_ref_intent',
+    },
+  });
+
+  const payload = buildIntentUpsertPayload(synced);
+
+  assert.equal(payload.sessionType, 'OFFRAMP');
+  assert.equal(payload.lifecycleStatus, 'PROCESSING');
+  assert.equal(payload.providerReference, 'sess_intent');
+  assert.equal(payload.amountUsd, 12);
+  assert.equal(payload.amountLocal, 18000);
+  assert.equal(payload.cryptoAmount, 12);
+  assert.equal(payload.settlementReference, 'pouch_ref_intent');
 });
