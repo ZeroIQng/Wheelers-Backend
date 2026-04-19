@@ -56,6 +56,12 @@ function sendMethodNotAllowed(res: ServerResponse): void {
 }
 
 async function bootstrap(): Promise<void> {
+  process.env['NODE_ENV'] ??= 'development';
+  process.env['KAFKA_CLIENT_ID'] ??= 'api-gateway';
+  process.env['KAFKA_BROKERS'] ??= 'localhost:9092';
+  process.env['DATABASE_URL'] ??= 'postgresql://postgres:postgres@localhost:5432/wheelers';
+  process.env['REDIS_URL'] ??= 'redis://localhost:6379';
+
   const sharedEnv = validateSharedEnv();
   const gatewayEnv = validateGatewayEnv();
 

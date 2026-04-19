@@ -11,7 +11,10 @@ export async function handleWalletMessage(
   }
 
   const reference = getString(payload, 'reference') ?? randomUUID();
-  const amount = getNumber(payload, 'amount') ?? getNumber(payload, 'amountNgn');
+  const amount =
+    getNumber(payload, 'amount') ??
+    getNumber(payload, 'amountLocal') ??
+    getNumber(payload, 'amountUsd');
 
   return {
     type: 'wallet:deposit_intent:accepted',

@@ -6,6 +6,7 @@ import { paymentClient, userClient, walletClient } from '@wheleers/db';
 process.env['DATABASE_URL'] ??= 'postgresql://postgres:postgres@localhost:5432/wheelers';
 
 const prisma = new PrismaClient();
+const FIAT_ONRAMP_TYPE = TransactionType.CRYPTO_DEPOSIT;
 
 async function main(): Promise<void> {
   const suffix = randomUUID();
@@ -27,7 +28,7 @@ async function main(): Promise<void> {
     await walletClient.credit({
       walletId: wallet.id,
       amountUsdt: 25,
-      type: TransactionType.NGN_DEPOSIT,
+      type: FIAT_ONRAMP_TYPE,
       referenceId: `seed-${suffix}`,
     });
 
@@ -77,7 +78,7 @@ async function main(): Promise<void> {
     const firstCredit = await walletClient.credit({
       walletId: wallet.id,
       amountUsdt: 5,
-      type: TransactionType.NGN_DEPOSIT,
+      type: FIAT_ONRAMP_TYPE,
       referenceId: providerReference,
     });
     assert.equal(firstCredit.applied, true);
@@ -85,39 +86,41 @@ async function main(): Promise<void> {
     const duplicateCredit = await walletClient.credit({
       walletId: wallet.id,
       amountUsdt: 5,
-      type: TransactionType.NGN_DEPOSIT,
+      type: FIAT_ONRAMP_TYPE,
       referenceId: providerReference,
     });
     assert.equal(duplicateCredit.applied, false);
 
-    await paymentClient.recordDepositReceived({
+    await paymentClient.recordSettlementReceived({
       paymentId: randomUUID(),
       userId: user.id,
-      provider: 'paystack',
+      provider: 'pouch',
       providerReference,
       userWallet: walletAddress,
-      amountNgn: 10000,
+      amountLocal: 10000,
+      localCurrency: 'NGN',
       metadata: { source: 'integration-test' },
     });
 
-    const firstClaim = await paymentClient.claimConversion(providerReference);
-    const secondClaim = await paymentClient.claimConversion(providerReference);
+    const firstClaim = await paymentClient.claimSettlement(providerReference);
+    const secondClaim = await paymentClient.claimSettlement(providerReference);
     assert.equal(firstClaim, true);
     assert.equal(secondClaim, false);
 
-    await paymentClient.recordDepositReceived({
+    await paymentClient.recordSettlementReceived({
       paymentId: randomUUID(),
       userId: user.id,
-      provider: 'paystack',
+      provider: 'pouch',
       providerReference: secondProviderReference,
       userWallet: walletAddress,
-      amountNgn: 5000,
+      amountLocal: 5000,
+      localCurrency: 'NGN',
     });
 
-    const claimThenRelease = await paymentClient.claimConversion(secondProviderReference);
+    const claimThenRelease = await paymentClient.claimSettlement(secondProviderReference);
     assert.equal(claimThenRelease, true);
-    await paymentClient.releaseConversionClaim(secondProviderReference);
-    const reclaimed = await paymentClient.claimConversion(secondProviderReference);
+    await paymentClient.releaseSettlementClaim(secondProviderReference);
+    const reclaimed = await paymentClient.claimSettlement(secondProviderReference);
     assert.equal(reclaimed, true);
 
     const paymentRecord = await prisma.paymentRecord.findUniqueOrThrow({
