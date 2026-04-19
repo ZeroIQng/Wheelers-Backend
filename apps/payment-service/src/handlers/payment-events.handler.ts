@@ -1,10 +1,15 @@
-import type { OnrampSettledEvent } from '@wheleers/kafka-schemas';
-import { recordOnrampSettlement } from '../services/settlement.service';
+import type { PaymentSessionSyncedEvent } from '@wheleers/kafka-schemas';
+import type { PaymentEventsProducer } from '../producers/payment-events.producer';
+import { processPaymentSessionSync } from '../services/settlement.service';
 
-export function createPaymentEventsHandler() {
+interface PaymentEventsHandlerDeps {
+  paymentEventsProducer: PaymentEventsProducer;
+}
+
+export function createPaymentEventsHandler(deps: PaymentEventsHandlerDeps) {
   return {
-    async handleOnrampSettled(event: OnrampSettledEvent): Promise<void> {
-      await recordOnrampSettlement(event);
+    async handlePaymentSessionSynced(event: PaymentSessionSyncedEvent): Promise<void> {
+      await processPaymentSessionSync(event, deps.paymentEventsProducer);
     },
   };
 }

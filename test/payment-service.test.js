@@ -3,10 +3,13 @@ const assert = require('node:assert/strict');
 
 const {
   buildPouchMetadata,
-  normalizePouchOnrampSettled,
   normalizePouchSessionCreated,
+  normalizePouchSessionSynced,
   readPouchMetadata,
 } = require('../apps/api-gateway/dist/http/pouch.helpers.js');
+const {
+  inferOnrampSettlement,
+} = require('../apps/payment-service/dist/domain/pouch-session.js');
 
 test('readPouchMetadata normalizes serialized metadata', () => {
   const metadata = buildPouchMetadata({
@@ -57,8 +60,8 @@ test('normalizePouchSessionCreated maps a Pouch session into PAYMENT_SESSION_CRE
   assert.equal(event.userWallet, '0xabcdef1234567890abcdef1234567890abcdef12');
 });
 
-test('normalizePouchOnrampSettled maps a completed stablecoin session into ONRAMP_SETTLED', () => {
-  const event = normalizePouchOnrampSettled({
+test('normalizePouchSessionSynced maps a fetched Pouch session into PAYMENT_SESSION_SYNCED', () => {
+  const event = normalizePouchSessionSynced({
     id: 'sess_456',
     type: 'ONRAMP',
     status: 'completed',
@@ -81,19 +84,49 @@ test('normalizePouchOnrampSettled maps a completed stablecoin session into ONRAM
   });
 
   assert.ok(event);
-  assert.equal(event.eventType, 'ONRAMP_SETTLED');
+  assert.equal(event.eventType, 'PAYMENT_SESSION_SYNCED');
   assert.equal(event.paymentProvider, 'pouch');
   assert.equal(event.providerReference, 'sess_456');
   assert.equal(event.amountUsd, 4);
   assert.equal(event.amountLocal, 6200);
-  assert.equal(event.amountUsdt, 4);
+  assert.equal(event.cryptoAmount, 4);
   assert.equal(event.cryptoCurrency, 'USDC');
   assert.equal(event.cryptoNetwork, 'XLM');
   assert.equal(event.settlementReference, 'pouch_ref_789');
 });
 
-test('normalizePouchOnrampSettled ignores unsupported wallet credit assets', () => {
-  const event = normalizePouchOnrampSettled({
+test('inferOnrampSettlement turns a synced stablecoin onramp into ONRAMP_SETTLED', () => {
+  const synced = normalizePouchSessionSynced({
+    id: 'sess_789',
+    type: 'ONRAMP',
+    status: 'completed',
+    amount: 7,
+    currency: 'NGN',
+    cryptoCurrency: 'USDT',
+    cryptoNetwork: 'ERC20',
+    metadata: {
+      userId: '42d2cb9d-1afe-4a49-b08a-b7cc611fd0de',
+      walletAddress: '0xABCDEF1234567890ABCDEF1234567890ABCDEF12',
+    },
+    paymentInstruction: {
+      amountLocal: 10850,
+      cryptoAmount: 7,
+      cryptoCurrency: 'USDT',
+      cryptoNetwork: 'ERC20',
+      reference: 'pouch_ref_101',
+    },
+  });
+
+  const event = inferOnrampSettlement(synced);
+
+  assert.ok(event);
+  assert.equal(event.eventType, 'ONRAMP_SETTLED');
+  assert.equal(event.amountUsdt, 7);
+  assert.equal(event.settlementReference, 'pouch_ref_101');
+});
+
+test('inferOnrampSettlement ignores unsupported wallet credit assets', () => {
+  const synced = normalizePouchSessionSynced({
     id: 'sess_btc',
     type: 'ONRAMP',
     status: 'completed',
@@ -111,6 +144,8 @@ test('normalizePouchOnrampSettled ignores unsupported wallet credit assets', () 
       cryptoNetwork: 'BTC',
     },
   });
+
+  const event = inferOnrampSettlement(synced);
 
   assert.equal(event, null);
 });

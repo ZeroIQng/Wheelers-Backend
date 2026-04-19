@@ -12,8 +12,8 @@ export function createPaymentEventsConsumer(deps: PaymentEventsConsumerDeps) {
       const event = safeParseKafkaEvent(TOPICS.PAYMENT_EVENTS, value);
       if (!event) return;
 
-      if (event.eventType === 'ONRAMP_SETTLED') {
-        await deps.paymentEventsHandler.handleOnrampSettled(event);
+      if (event.eventType === 'PAYMENT_SESSION_SYNCED') {
+        await deps.paymentEventsHandler.handlePaymentSessionSynced(event);
       }
     },
   };

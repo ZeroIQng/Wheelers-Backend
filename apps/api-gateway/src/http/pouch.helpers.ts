@@ -1,19 +1,9 @@
 import { createHash } from 'node:crypto';
 import {
-  OnrampSettledEvent,
   PaymentSessionCreatedEvent,
+  PaymentSessionSyncedEvent,
 } from '@wheleers/kafka-schemas';
 import { asIsoTimestamp, isRecord, pickNumber, pickString } from '../utils/object';
-
-const SETTLED_STATUSES = new Set([
-  'COMPLETED',
-  'COMPLETE',
-  'SUCCESS',
-  'SUCCEEDED',
-  'PAID',
-  'SETTLED',
-  'FUNDED',
-]);
 
 export interface PouchFundingMetadata {
   userId: string;
@@ -125,7 +115,7 @@ export function normalizePouchSessionCreated(input: unknown): PaymentSessionCrea
   });
 }
 
-export function normalizePouchOnrampSettled(input: unknown): OnrampSettledEvent | null {
+export function normalizePouchSessionSynced(input: unknown): PaymentSessionSyncedEvent | null {
   const payload = isRecord(input) ? input : null;
   if (!payload) return null;
 
@@ -150,29 +140,28 @@ export function normalizePouchOnrampSettled(input: unknown): OnrampSettledEvent 
   const userWallet =
     metadata?.walletAddress ??
     pickString(payload, ['walletAddress', 'resolvedRecipient', 'destination.walletAddress'])?.toLowerCase();
-  const amountUsdt = extractWalletCreditAmount(payload, cryptoCurrency);
 
   if (
     !providerReference ||
-    sessionType !== 'ONRAMP' ||
-    !SETTLED_STATUSES.has(status) ||
+    (sessionType !== 'ONRAMP' && sessionType !== 'OFFRAMP') ||
     !amountUsd ||
     !localCurrency ||
     !cryptoCurrency ||
     !cryptoNetwork ||
     !userWallet ||
-    !amountUsdt ||
     !metadata
   ) {
     return null;
   }
 
-  return OnrampSettledEvent.parse({
-    eventType: 'ONRAMP_SETTLED',
+  return PaymentSessionSyncedEvent.parse({
+    eventType: 'PAYMENT_SESSION_SYNCED',
     paymentId: deterministicPaymentId(providerReference),
     userId: metadata.userId,
     paymentProvider: 'pouch',
     providerReference,
+    sessionType,
+    status,
     amountUsd,
     amountLocal: pickNumber(payload, [
       'paymentInstruction.amountLocal',
@@ -181,11 +170,17 @@ export function normalizePouchOnrampSettled(input: unknown): OnrampSettledEvent 
       'quote.amountLocal',
     ]),
     localCurrency,
-    amountUsdt,
     cryptoCurrency,
     cryptoNetwork,
+    cryptoAmount: pickNumber(payload, [
+      'paymentInstruction.cryptoAmount',
+      'cryptoAmount',
+      'quote.cryptoAmount',
+    ]),
     chain: pickString(payload, ['chain'])?.toUpperCase(),
+    customerEmail: pickString(payload, ['email', 'customerEmail']) ?? undefined,
     userWallet,
+    walletTag: pickString(payload, ['walletTag', 'memo', 'tag']) ?? undefined,
     settlementReference: pickString(payload, [
       'paymentInstruction.reference',
       'reference',
@@ -196,28 +191,6 @@ export function normalizePouchOnrampSettled(input: unknown): OnrampSettledEvent 
       pickString(payload, ['completedAt', 'updatedAt', 'createdAt']) ?? new Date().toISOString(),
     ),
   });
-}
-
-function extractWalletCreditAmount(
-  payload: Record<string, unknown>,
-  cryptoCurrency: string | undefined,
-): number | undefined {
-  const directUsdt = pickNumber(payload, ['amountUsdt', 'quote.amountUsdt']);
-  if (directUsdt && directUsdt > 0) {
-    return directUsdt;
-  }
-
-  if (cryptoCurrency !== 'USDT' && cryptoCurrency !== 'USDC') {
-    return undefined;
-  }
-
-  const cryptoAmount = pickNumber(payload, [
-    'paymentInstruction.cryptoAmount',
-    'cryptoAmount',
-    'quote.cryptoAmount',
-  ]);
-
-  return cryptoAmount && cryptoAmount > 0 ? cryptoAmount : undefined;
 }
 
 function parseMetadata(value: unknown): Record<string, unknown> | null {

@@ -5,8 +5,8 @@ import { getString, isRecord, pickNumber, pickString } from '../utils/object';
 import type { GatewayPublisher } from '../websocket/publisher';
 import {
   buildPouchMetadata,
-  normalizePouchOnrampSettled,
   normalizePouchSessionCreated,
+  normalizePouchSessionSynced,
   pouchSessionBelongsToUser,
 } from './pouch.helpers';
 import {
@@ -101,16 +101,15 @@ export async function handlePouchGetSessionRoute(
       return;
     }
 
-    const settledEvent = normalizePouchOnrampSettled(session);
-    if (settledEvent) {
-      await deps.publisher.publishPaymentEvent(settledEvent);
+    const syncedEvent = normalizePouchSessionSynced(session);
+    if (syncedEvent) {
+      await deps.publisher.publishPaymentEvent(syncedEvent);
     }
 
     sendJson(res, 200, {
       provider: 'pouch',
       session,
-      settlementDetected: Boolean(settledEvent),
-      walletCreditable: Boolean(settledEvent),
+      sessionSynced: Boolean(syncedEvent),
     });
   } catch (error) {
     sendPouchError(res, error, 'Failed to load Pouch session');

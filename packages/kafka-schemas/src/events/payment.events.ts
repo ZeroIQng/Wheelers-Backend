@@ -28,9 +28,29 @@ export const PaymentSessionCreatedEvent = BasePaymentEvent.extend({
   walletTag:            z.string().optional(),
 });
 
-// Fired by api-gateway when a Pouch onramp session is observed in a settled state.
-// Consumed by: wallet-service (credit internal stablecoin balance),
-// payment-service (record settlement idempotently), notification-worker.
+// Fired by api-gateway when it fetches the latest Pouch session state.
+// Consumed by: payment-service, which owns settlement decisioning.
+export const PaymentSessionSyncedEvent = BasePaymentEvent.extend({
+  eventType:            z.literal('PAYMENT_SESSION_SYNCED'),
+  paymentProvider:      PaymentProvider,
+  providerReference:    z.string(),
+  sessionType:          PaymentSessionType,
+  status:               z.string(),
+  amountUsd:            z.number(),
+  localCurrency:        z.string(),
+  amountLocal:          z.number().optional(),
+  cryptoCurrency:       z.string(),
+  cryptoNetwork:        z.string(),
+  cryptoAmount:         z.number().optional(),
+  chain:                z.string().optional(),
+  customerEmail:        z.string().email().optional(),
+  userWallet:           z.string(),
+  walletTag:            z.string().optional(),
+  settlementReference:  z.string().optional(),
+});
+
+// Fired by payment-service when a synced Pouch onramp is determined to be settled.
+// Consumed by: wallet-service (credit internal stablecoin balance), notification-worker.
 export const OnrampSettledEvent = BasePaymentEvent.extend({
   eventType:            z.literal('ONRAMP_SETTLED'),
   paymentProvider:      PaymentProvider,
@@ -94,6 +114,7 @@ export const CryptoDepositReceivedEvent = BasePaymentEvent.extend({
 
 export const PaymentEvent = z.discriminatedUnion('eventType', [
   PaymentSessionCreatedEvent,
+  PaymentSessionSyncedEvent,
   OnrampSettledEvent,
   DriverPayoutEvent,
   PenaltyAppliedEvent,
@@ -101,6 +122,7 @@ export const PaymentEvent = z.discriminatedUnion('eventType', [
 ]);
 
 export type PaymentSessionCreatedEvent = z.infer<typeof PaymentSessionCreatedEvent>;
+export type PaymentSessionSyncedEvent  = z.infer<typeof PaymentSessionSyncedEvent>;
 export type OnrampSettledEvent         = z.infer<typeof OnrampSettledEvent>;
 export type DriverPayoutEvent          = z.infer<typeof DriverPayoutEvent>;
 export type PenaltyAppliedEvent        = z.infer<typeof PenaltyAppliedEvent>;

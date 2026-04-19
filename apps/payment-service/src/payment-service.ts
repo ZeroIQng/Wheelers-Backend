@@ -34,7 +34,9 @@ export async function startPaymentService(): Promise<void> {
   });
 
   const paymentEventsProducer = createPaymentEventsProducer(producer);
-  const paymentEventsHandler = createPaymentEventsHandler();
+  const paymentEventsHandler = createPaymentEventsHandler({
+    paymentEventsProducer,
+  });
   const rideEventsHandler = createRideEventsHandler({
     paymentEventsProducer,
   });

@@ -1,11 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import type { WheelersProducer } from '@wheleers/kafka-client';
-import { TOPICS, type RideCancelledEvent, type RideCompletedEvent } from '@wheleers/kafka-schemas';
+import {
+  TOPICS,
+  type OnrampSettledEvent,
+  type RideCancelledEvent,
+  type RideCompletedEvent,
+} from '@wheleers/kafka-schemas';
 import { getCancelPenaltyDecision } from '../domain/cancel-penalty';
 import { calculateDriverPayout } from '../domain/driver-payout';
 
 export function createPaymentEventsProducer(producer: WheelersProducer) {
   return {
+    async publishOnrampSettled(event: OnrampSettledEvent): Promise<void> {
+      await producer.send(TOPICS.PAYMENT_EVENTS, event, { key: event.userId });
+    },
+
     async publishDriverPayout(event: RideCompletedEvent): Promise<void> {
       const payout = calculateDriverPayout(event);
 
