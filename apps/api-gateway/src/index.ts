@@ -11,12 +11,18 @@ import {
 import { validateGatewayEnv, validateSharedEnv } from '@wheleers/config';
 import { TOPICS } from '@wheleers/kafka-schemas';
 import { handlePrivyAuthRoute } from './http/auth.route';
-import { PaystackClient } from './http/paystack.client';
 import {
-  handlePaystackInitializeRoute,
-  handlePaystackVerifyRoute,
-  handlePaystackWebhookRoute,
-} from './http/paystack.route';
+  handlePouchChannelsRoute,
+  handlePouchCreateSessionRoute,
+  handlePouchGetSessionRoute,
+  handlePouchHealthRoute,
+  handlePouchIdentifyRoute,
+  handlePouchKycRequirementsRoute,
+  handlePouchQuoteRoute,
+  handlePouchSubmitKycRoute,
+  handlePouchVerifyOtpRoute,
+} from './http/pouch.route';
+import { PouchClient } from './http/pouch.client';
 import { applyCorsHeaders, sendJson } from './http/utils';
 import { startGatewayKafkaConsumer } from './kafka/consumer';
 import { RedisClient } from './redis/client';
@@ -78,9 +84,9 @@ async function bootstrap(): Promise<void> {
   await redisSubscriberClient.connect();
 
   const publisher = new GatewayPublisher(producer);
-  const paystackClient = new PaystackClient(
-    gatewayEnv.PAYSTACK_BASE_URL,
-    gatewayEnv.PAYSTACK_SECRET_KEY,
+  const pouchClient = new PouchClient(
+    gatewayEnv.POUCH_BASE_URL,
+    gatewayEnv.POUCH_API_KEY,
   );
   const registry = new SocketRegistry({
     instanceId: `${sharedEnv.KAFKA_CLIENT_ID}-${process.pid}-${Math.random().toString(16).slice(2, 8)}`,
@@ -123,49 +129,144 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname === '/payments/paystack/initialize') {
-      if (req.method !== 'POST') {
-        sendMethodNotAllowed(res);
-        return;
-      }
-      await handlePaystackInitializeRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-        paystackClient,
-        paystackPublicKey: gatewayEnv.PAYSTACK_PUBLIC_KEY,
-        defaultCallbackUrl: gatewayEnv.PAYSTACK_CALLBACK_URL,
-        defaultChannels: gatewayEnv.PAYSTACK_ALLOWED_CHANNELS
-          .split(',')
-          .map((value) => value.trim())
-          .filter(Boolean),
-      });
-      return;
-    }
-
-    if (url.pathname === '/payments/paystack/verify') {
+    if (url.pathname === '/payments/pouch/health') {
       if (req.method !== 'GET') {
         sendMethodNotAllowed(res);
         return;
       }
-      await handlePaystackVerifyRoute(req, res, {
+      await handlePouchHealthRoute(req, res, {
+        pouchClient,
+      });
+      return;
+    }
+
+    if (url.pathname === '/payments/pouch/channels') {
+      if (req.method !== 'GET') {
+        sendMethodNotAllowed(res);
+        return;
+      }
+      await handlePouchChannelsRoute(req, res, {
+        pouchClient,
+      });
+      return;
+    }
+
+    if (url.pathname === '/payments/pouch/sessions') {
+      if (req.method !== 'POST') {
+        sendMethodNotAllowed(res);
+        return;
+      }
+      await handlePouchCreateSessionRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-        paystackClient,
+        pouchClient,
         publisher,
       });
       return;
     }
 
-    if (url.pathname === '/webhooks/paystack') {
-      if (req.method !== 'POST') {
-        sendMethodNotAllowed(res);
+    if (url.pathname.startsWith('/payments/pouch/sessions/')) {
+      const sessionMatch = url.pathname.match(
+        /^\/payments\/pouch\/sessions\/([^/]+)(?:\/(quote|identify|verify-otp|kyc-requirements|kyc))?$/,
+      );
+
+      if (!sessionMatch) {
+        sendJson(res, 404, { error: 'Not found' });
         return;
       }
-      await handlePaystackWebhookRoute(req, res, {
-        publisher,
-        webhookSecret: gatewayEnv.PAYSTACK_WEBHOOK_SECRET ?? gatewayEnv.PAYSTACK_SECRET_KEY,
-      });
-      return;
+
+      const sessionId = decodeURIComponent(sessionMatch[1]);
+      const action = sessionMatch[2];
+
+      if (!action) {
+        if (req.method !== 'GET') {
+          sendMethodNotAllowed(res);
+          return;
+        }
+
+        await handlePouchGetSessionRoute(req, res, {
+          privyAppId: gatewayEnv.PRIVY_APP_ID,
+          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+          pouchClient,
+          publisher,
+        }, sessionId);
+        return;
+      }
+
+      if (action === 'quote') {
+        if (req.method !== 'GET') {
+          sendMethodNotAllowed(res);
+          return;
+        }
+
+        await handlePouchQuoteRoute(req, res, {
+          privyAppId: gatewayEnv.PRIVY_APP_ID,
+          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+          pouchClient,
+          publisher,
+        }, sessionId);
+        return;
+      }
+
+      if (action === 'identify') {
+        if (req.method !== 'POST') {
+          sendMethodNotAllowed(res);
+          return;
+        }
+
+        await handlePouchIdentifyRoute(req, res, {
+          privyAppId: gatewayEnv.PRIVY_APP_ID,
+          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+          pouchClient,
+          publisher,
+        }, sessionId);
+        return;
+      }
+
+      if (action === 'verify-otp') {
+        if (req.method !== 'POST') {
+          sendMethodNotAllowed(res);
+          return;
+        }
+
+        await handlePouchVerifyOtpRoute(req, res, {
+          privyAppId: gatewayEnv.PRIVY_APP_ID,
+          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+          pouchClient,
+          publisher,
+        }, sessionId);
+        return;
+      }
+
+      if (action === 'kyc-requirements') {
+        if (req.method !== 'GET') {
+          sendMethodNotAllowed(res);
+          return;
+        }
+
+        await handlePouchKycRequirementsRoute(req, res, {
+          privyAppId: gatewayEnv.PRIVY_APP_ID,
+          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+          pouchClient,
+          publisher,
+        }, sessionId);
+        return;
+      }
+
+      if (action === 'kyc') {
+        if (req.method !== 'POST') {
+          sendMethodNotAllowed(res);
+          return;
+        }
+
+        await handlePouchSubmitKycRoute(req, res, {
+          privyAppId: gatewayEnv.PRIVY_APP_ID,
+          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+          pouchClient,
+          publisher,
+        }, sessionId);
+        return;
+      }
     }
 
     sendJson(res, 404, { error: 'Not found' });

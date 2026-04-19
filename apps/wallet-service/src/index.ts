@@ -143,19 +143,23 @@ async function bootstrap(): Promise<void> {
         const event = safeParseKafkaEvent(TOPICS.PAYMENT_EVENTS, value);
         if (!event) return;
 
-        if (event.eventType === 'NGN_CONVERTED') {
+        if (event.eventType === 'ONRAMP_SETTLED') {
           try {
             const wallet = await walletClient.findByAddress(event.userWallet);
             const creditResult = await walletClient.credit({
               walletId: wallet.id,
               amountUsdt: event.amountUsdt,
-              type: 'NGN_DEPOSIT' as any,
+              type: 'FIAT_ONRAMP' as any,
               referenceId: event.providerReference,
               metadata: {
                 paymentId: event.paymentId,
                 paymentProvider: event.paymentProvider,
-                conversionReference: event.conversionReference,
-                exchangeRate: event.exchangeRate,
+                amountUsd: event.amountUsd,
+                localCurrency: event.localCurrency,
+                amountLocal: event.amountLocal,
+                cryptoCurrency: event.cryptoCurrency,
+                cryptoNetwork: event.cryptoNetwork,
+                settlementReference: event.settlementReference,
               },
             });
 
@@ -170,7 +174,7 @@ async function bootstrap(): Promise<void> {
               walletAddress: creditResult.wallet.address,
               amountUsdt: event.amountUsdt,
               newBalanceUsdt: Number(creditResult.wallet.balanceUsdt),
-              creditType: 'ngn_deposit',
+              creditType: 'fiat_onramp',
               referenceId: event.providerReference,
               timestamp: new Date().toISOString(),
             } as any, { key: event.userId });

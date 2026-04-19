@@ -3,8 +3,6 @@ import { paymentClient } from '@wheleers/db';
 import { createConsumer, createProducer } from '@wheleers/kafka-client';
 import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
 import { randomUUID } from 'node:crypto';
-import { CoinbaseRatesClient } from './fx/coinbase-rates.client';
-import { convertNgnToUsdt } from './fx/conversion';
 
 const SERVICE_ID = 'payment-service';
 
@@ -21,11 +19,7 @@ async function bootstrap(): Promise<void> {
   process.env['REDIS_URL'] ??= 'redis://localhost:6379';
 
   validateSharedEnv();
-  const paymentEnv = validatePaymentEnv();
-  const coinbaseRatesClient = new CoinbaseRatesClient(
-    paymentEnv.COINBASE_EXCHANGE_RATES_URL,
-    paymentEnv.FX_QUOTE_TTL_MS,
-  );
+  validatePaymentEnv();
 
   const producer = await createProducer({ serviceId: SERVICE_ID });
   const consumer = await createConsumer({ groupId: SERVICE_ID });
@@ -37,76 +31,43 @@ async function bootstrap(): Promise<void> {
         const event = safeParseKafkaEvent(TOPICS.PAYMENT_EVENTS, value);
         if (!event) return;
 
-        if (event.eventType === 'DEPOSIT_RECEIVED') {
+        if (event.eventType === 'ONRAMP_SETTLED') {
           try {
-            await paymentClient.recordDepositReceived({
+            await paymentClient.recordSettlementReceived({
               paymentId: event.paymentId,
               userId: event.userId,
               provider: event.paymentProvider,
               providerReference: event.providerReference,
               userWallet: event.userWallet,
-              amountNgn: event.amountNgn,
+              amountLocal: event.amountLocal ?? event.amountUsd,
+              localCurrency: event.localCurrency,
               metadata: {
-                paymentChannel: event.paymentChannel,
-                customerEmail: event.customerEmail,
-                virtualAccountNumber: event.virtualAccountNumber,
+                amountUsd: event.amountUsd,
+                cryptoCurrency: event.cryptoCurrency,
+                cryptoNetwork: event.cryptoNetwork,
+                chain: event.chain,
+                settlementReference: event.settlementReference,
               },
             });
 
-            const claimed = await paymentClient.claimConversion(event.providerReference);
+            const claimed = await paymentClient.claimSettlement(event.providerReference);
             if (!claimed) {
               return;
             }
 
-            const exchangeRate = await coinbaseRatesClient.getNgnPerUsdRate();
-            const conversion = convertNgnToUsdt(
-              event.amountNgn,
-              exchangeRate,
-            );
-            const conversionJobId = `paystack-${event.providerReference}`;
-            const conversionReference = `settlement-${event.providerReference}`;
-
-            await producer.send(TOPICS.PAYMENT_EVENTS, {
-              eventType: 'NGN_CONVERTING',
-              paymentId: event.paymentId,
-              userId: event.userId,
-              paymentProvider: event.paymentProvider,
-              amountNgn: event.amountNgn,
-              estimatedUsdt: conversion.amountUsdt,
+            await paymentClient.markSettled({
               providerReference: event.providerReference,
-              conversionJobId,
-              timestamp: new Date().toISOString(),
-            } as any, { key: event.userId });
-
-            await producer.send(TOPICS.PAYMENT_EVENTS, {
-              eventType: 'NGN_CONVERTED',
-              paymentId: event.paymentId,
-              userId: event.userId,
-              paymentProvider: event.paymentProvider,
-              amountNgn: event.amountNgn,
-              amountUsdt: conversion.amountUsdt,
-              exchangeRate: conversion.exchangeRate,
-              providerReference: event.providerReference,
-              userWallet: event.userWallet,
-              conversionReference,
-              timestamp: new Date().toISOString(),
-            } as any, { key: event.userId });
-            
-            await paymentClient.markConverted({
-              providerReference: event.providerReference,
-              amountUsdt: conversion.amountUsdt,
-              exchangeRate: conversion.exchangeRate,
+              amountUsdt: event.amountUsdt,
               metadata: {
-                paymentChannel: event.paymentChannel,
-                customerEmail: event.customerEmail,
-                virtualAccountNumber: event.virtualAccountNumber,
-                fxProvider: paymentEnv.FX_PROVIDER,
-                ngnPerUsdRate: conversion.exchangeRate,
-                conversionReference,
+                amountUsd: event.amountUsd,
+                cryptoCurrency: event.cryptoCurrency,
+                cryptoNetwork: event.cryptoNetwork,
+                chain: event.chain,
+                settlementReference: event.settlementReference,
               },
             });
           } catch (error) {
-            await paymentClient.releaseConversionClaim(event.providerReference).catch(() => {});
+            await paymentClient.releaseSettlementClaim(event.providerReference).catch(() => {});
             throw error;
           }
         }

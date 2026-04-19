@@ -15,7 +15,7 @@ export const WalletCreditedEvent = BaseWalletEvent.extend({
   amountUsdt:     z.number(),
   newBalanceUsdt: z.number(),
   creditType:     z.enum([
-    'ngn_deposit',
+    'fiat_onramp',
     'crypto_deposit',
     'driver_payout',
     'yield_harvest',
