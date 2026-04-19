@@ -6,47 +6,44 @@ const BasePaymentEvent = z.object({
   timestamp: z.string().datetime(),
 });
 
-const PaymentProvider = z.enum(['paystack']);
+const PaymentProvider = z.enum(['pouch']);
+const PaymentSessionType = z.enum(['ONRAMP', 'OFFRAMP']);
 
-// Fired by api-gateway when a verified Paystack success notification arrives.
-// Consumed by: payment-service itself to run the fiat-to-wallet funding workflow
-// asynchronously after the webhook has already been acknowledged.
-export const DepositReceivedEvent = BasePaymentEvent.extend({
-  eventType:            z.literal('DEPOSIT_RECEIVED'),
+// Fired by api-gateway after an authenticated user opens a Pouch payment session.
+// Consumed by: payment-service (audit trail / reconciliation), notification-worker.
+export const PaymentSessionCreatedEvent = BasePaymentEvent.extend({
+  eventType:            z.literal('PAYMENT_SESSION_CREATED'),
   paymentProvider:      PaymentProvider,
-  amountNgn:            z.number(),
   providerReference:    z.string(),
-  paymentChannel:       z.string().optional(),
+  sessionType:          PaymentSessionType,
+  status:               z.string(),
+  amountUsd:            z.number(),
+  localCurrency:        z.string(),
+  amountLocal:          z.number().optional(),
+  cryptoCurrency:       z.string(),
+  cryptoNetwork:        z.string(),
+  chain:                z.string().optional(),
   customerEmail:        z.string().email().optional(),
-  virtualAccountNumber: z.string().optional(),
   userWallet:           z.string(),
+  walletTag:            z.string().optional(),
 });
 
-// Fired by payment-service immediately after validating a successful
-// Paystack funding event and before crediting the internal wallet.
-// Consumed by: notification-worker (push "converting..." status to rider).
-export const NgnConvertingEvent = BasePaymentEvent.extend({
-  eventType:          z.literal('NGN_CONVERTING'),
-  paymentProvider:    PaymentProvider,
-  amountNgn:          z.number(),
-  estimatedUsdt:      z.number(),
-  providerReference:  z.string(),
-  conversionJobId:    z.string(),
-});
-
-// Fired by payment-service once the internal conversion amount has been
-// calculated and is ready to be credited by wallet-service.
-// Consumed by: wallet-service (credit USDT balance),
-// notification-worker (push "wallet funded" to rider).
-export const NgnConvertedEvent = BasePaymentEvent.extend({
-  eventType:            z.literal('NGN_CONVERTED'),
+// Fired by api-gateway when a Pouch onramp session is observed in a settled state.
+// Consumed by: wallet-service (credit internal stablecoin balance),
+// payment-service (record settlement idempotently), notification-worker.
+export const OnrampSettledEvent = BasePaymentEvent.extend({
+  eventType:            z.literal('ONRAMP_SETTLED'),
   paymentProvider:      PaymentProvider,
-  amountNgn:            z.number(),
-  amountUsdt:           z.number(),
-  exchangeRate:         z.number(),
   providerReference:    z.string(),
+  amountUsd:            z.number(),
+  localCurrency:        z.string(),
+  amountLocal:          z.number().optional(),
+  amountUsdt:           z.number(),
+  cryptoCurrency:       z.string(),
+  cryptoNetwork:        z.string(),
+  chain:                z.string().optional(),
   userWallet:           z.string(),
-  conversionReference:  z.string(),
+  settlementReference:  z.string().optional(),
 });
 
 // Fired by payment-service after fare is calculated post ride-completion.
@@ -96,17 +93,15 @@ export const CryptoDepositReceivedEvent = BasePaymentEvent.extend({
 });
 
 export const PaymentEvent = z.discriminatedUnion('eventType', [
-  DepositReceivedEvent,
-  NgnConvertingEvent,
-  NgnConvertedEvent,
+  PaymentSessionCreatedEvent,
+  OnrampSettledEvent,
   DriverPayoutEvent,
   PenaltyAppliedEvent,
   CryptoDepositReceivedEvent,
 ]);
 
-export type DepositReceivedEvent       = z.infer<typeof DepositReceivedEvent>;
-export type NgnConvertingEvent         = z.infer<typeof NgnConvertingEvent>;
-export type NgnConvertedEvent          = z.infer<typeof NgnConvertedEvent>;
+export type PaymentSessionCreatedEvent = z.infer<typeof PaymentSessionCreatedEvent>;
+export type OnrampSettledEvent         = z.infer<typeof OnrampSettledEvent>;
 export type DriverPayoutEvent          = z.infer<typeof DriverPayoutEvent>;
 export type PenaltyAppliedEvent        = z.infer<typeof PenaltyAppliedEvent>;
 export type CryptoDepositReceivedEvent = z.infer<typeof CryptoDepositReceivedEvent>;

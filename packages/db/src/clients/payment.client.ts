@@ -2,13 +2,14 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 
 export const paymentClient = {
-  recordDepositReceived: (data: {
+  recordSettlementReceived: (data: {
     paymentId: string;
     userId: string;
     provider: string;
     providerReference: string;
     userWallet: string;
-    amountNgn: number;
+    amountLocal: number;
+    localCurrency: string;
     metadata?: Record<string, unknown>;
   }) =>
     prisma.paymentRecord.upsert({
@@ -19,7 +20,8 @@ export const paymentClient = {
         provider: data.provider,
         providerReference: data.providerReference,
         userWallet: data.userWallet,
-        amountNgn: data.amountNgn,
+        amountLocal: data.amountLocal,
+        localCurrency: data.localCurrency,
         metadata: (data.metadata ?? undefined) as Prisma.InputJsonValue | undefined,
       },
       update: {
@@ -27,12 +29,13 @@ export const paymentClient = {
         userId: data.userId,
         provider: data.provider,
         userWallet: data.userWallet,
-        amountNgn: data.amountNgn,
+        amountLocal: data.amountLocal,
+        localCurrency: data.localCurrency,
         metadata: (data.metadata ?? undefined) as Prisma.InputJsonValue | undefined,
       },
     }),
 
-  claimConversion: async (providerReference: string, leaseMs = 5 * 60 * 1000): Promise<boolean> => {
+  claimSettlement: async (providerReference: string, leaseMs = 5 * 60 * 1000): Promise<boolean> => {
     const now = new Date();
     const leaseUntil = new Date(now.getTime() + leaseMs);
 
@@ -56,10 +59,10 @@ export const paymentClient = {
     return result.count === 1;
   },
 
-  markConverted: (params: {
+  markSettled: (params: {
     providerReference: string;
     amountUsdt: number;
-    exchangeRate: number;
+    exchangeRate?: number;
     metadata?: Record<string, unknown>;
   }) =>
     prisma.paymentRecord.update({
@@ -73,7 +76,7 @@ export const paymentClient = {
       },
     }),
 
-  releaseConversionClaim: (providerReference: string) =>
+  releaseSettlementClaim: (providerReference: string) =>
     prisma.paymentRecord.update({
       where: { providerReference },
       data: {

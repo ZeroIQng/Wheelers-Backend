@@ -6,12 +6,8 @@ const GatewayEnvSchema = z.object({
   PRIVY_APP_ID:       z.string().min(1),
   PRIVY_APP_SECRET:   z.string().min(1),
   PRIVY_VERIFICATION_KEY: z.string().min(1),
-  PAYSTACK_SECRET_KEY: z.string().min(1),
-  PAYSTACK_PUBLIC_KEY: z.string().min(1),
-  PAYSTACK_WEBHOOK_SECRET: z.string().min(1).optional(),
-  PAYSTACK_BASE_URL: z.string().url().default('https://api.paystack.co'),
-  PAYSTACK_CALLBACK_URL: z.string().url().optional(),
-  PAYSTACK_ALLOWED_CHANNELS: z.string().default('card,bank_transfer,ussd,bank'),
+  POUCH_API_KEY:      z.string().min(1),
+  POUCH_BASE_URL:     z.string().url().default('https://api.pouch.finance'),
   // Comma-separated list of allowed WebSocket/HTTP origins
   CORS_ORIGINS:       z.string().default('http://localhost:19006'),
   // How long a WebSocket connection can stay idle before being dropped (ms)
