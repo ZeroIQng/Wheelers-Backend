@@ -148,7 +148,8 @@ enum RideHoldStatus {
 model User {
   id            String    @id @default(uuid())
   privyDid      String    @unique            // Privy's internal DID — never changes
-  walletAddress String    @unique            // EVM wallet address (lowercase)
+  walletAddress String?   @unique            // EVM wallet address (lowercase), if linked
+  email         String?
   role          UserRole  @default(RIDER)
   name          String?
   phone         String?
@@ -163,6 +164,7 @@ model User {
 
   @@index([privyDid])
   @@index([walletAddress])
+  @@index([email])
 }
 
 // Records each consent the user has given, on-chain consent tx logged here.

@@ -295,7 +295,7 @@ function buildCreateSessionPayload(
   const cryptoCurrency = pickString(body, ['cryptoCurrency'])?.toUpperCase();
   const cryptoNetwork = pickString(body, ['cryptoNetwork'])?.toUpperCase();
   const walletAddress =
-    pickString(body, ['walletAddress'])?.toLowerCase() ?? auth.user.walletAddress.toLowerCase();
+    pickString(body, ['walletAddress'])?.toLowerCase() ?? auth.user.walletAddress?.toLowerCase();
 
   if ((type !== 'ONRAMP' && type !== 'OFFRAMP') || !amount || amount <= 0) {
     throw new Error('type must be ONRAMP or OFFRAMP and amount must be a positive number');
@@ -305,6 +305,10 @@ function buildCreateSessionPayload(
     throw new Error(
       'countryCode, currency, cryptoCurrency, and cryptoNetwork are required for a Pouch session',
     );
+  }
+
+  if (!walletAddress) {
+    throw new Error('walletAddress is required to create a Pouch session');
   }
 
   const metadata = isRecord(body['metadata']) ? body['metadata'] : {};

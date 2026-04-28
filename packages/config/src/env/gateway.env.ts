@@ -4,7 +4,6 @@ const GatewayEnvSchema = z.object({
   PORT:               z.string().default('3000'),
   JWT_SECRET:         z.string().min(32).optional(),
   PRIVY_APP_ID:       z.string().min(1),
-  PRIVY_APP_SECRET:   z.string().min(1),
   PRIVY_VERIFICATION_KEY: z.string().min(1),
   POUCH_API_KEY:      z.string().min(1),
   POUCH_BASE_URL:     z.string().url().default('https://api.pouch.finance'),

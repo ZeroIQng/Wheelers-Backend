@@ -3,7 +3,7 @@ export type GatewayRole = 'RIDER' | 'DRIVER' | 'BOTH';
 export interface GatewayAuthContext {
   userId: string;
   privyDid: string;
-  walletAddress: string;
+  walletAddress?: string;
   role: GatewayRole;
   driverId?: string;
   email?: string;

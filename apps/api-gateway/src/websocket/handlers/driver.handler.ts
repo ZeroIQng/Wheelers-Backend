@@ -20,6 +20,18 @@ function requireNumber(payload: Record<string, unknown>, key: string): number {
   return value;
 }
 
+function requireWalletAddress(
+  payload: Record<string, unknown>,
+  auth: GatewayAuthContext,
+): string {
+  const walletAddress = getString(payload, 'walletAddress') ?? auth.walletAddress;
+  if (!walletAddress) {
+    throw new Error('walletAddress is required for driver events');
+  }
+
+  return walletAddress.toLowerCase();
+}
+
 function resolveDriverId(payload: Record<string, unknown>, auth: GatewayAuthContext): string {
   const fromPayload = getString(payload, 'driverId');
   if (fromPayload) return fromPayload;
@@ -45,7 +57,7 @@ export async function handleDriverMessage(
     const event = DriverOnlineEvent.parse({
       eventType: 'DRIVER_ONLINE',
       driverId: resolveDriverId(payload, auth),
-      walletAddress: (getString(payload, 'walletAddress') ?? auth.walletAddress).toLowerCase(),
+      walletAddress: requireWalletAddress(payload, auth),
       lat: requireNumber(payload, 'lat'),
       lng: requireNumber(payload, 'lng'),
       vehiclePlate: getString(payload, 'vehiclePlate') ?? 'UNKNOWN',

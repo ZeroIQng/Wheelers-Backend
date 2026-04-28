@@ -1,5 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { UserCreatedEvent, UserRoleChangedEvent } from '@wheleers/kafka-schemas';
+import {
+  UserCreatedEvent,
+  UserRoleChangedEvent,
+  UserWalletLinkedEvent,
+} from '@wheleers/kafka-schemas';
 import { UserRole, userClient } from '@wheleers/db';
 import { verifyPrivyAccessToken } from '../auth/privy';
 import type { GatewayRole } from '../types';
@@ -31,10 +35,16 @@ function normalizeAuthMethod(value: unknown): 'email' | 'google' | 'apple' | 'wa
   return 'wallet';
 }
 
+function normalizeWalletAddress(value: string | undefined): string | undefined {
+  const trimmed = value?.trim().toLowerCase();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
 function serializeUser(user: {
   id: string;
   privyDid: string;
-  walletAddress: string;
+  walletAddress: string | null;
+  email: string | null;
   role: UserRole;
   name: string | null;
   phone: string | null;
@@ -43,6 +53,7 @@ function serializeUser(user: {
     id: user.id,
     privyDid: user.privyDid,
     walletAddress: user.walletAddress,
+    email: user.email,
     role: user.role,
     name: user.name,
     phone: user.phone,
@@ -83,11 +94,26 @@ export async function handlePrivyAuthRoute(
 
     const privyDid = verifiedToken.privyDid;
 
-    const walletAddress =
+    const walletAddress = normalizeWalletAddress(
       getString(rawBody, 'walletAddress') ??
       (typeof verifiedToken.claims['walletAddress'] === 'string'
         ? verifiedToken.claims['walletAddress']
+        : undefined),
+    );
+
+    const email =
+      getString(rawBody, 'email') ??
+      (typeof verifiedToken.claims['email'] === 'string'
+        ? verifiedToken.claims['email']
         : undefined);
+
+    const name =
+      getString(rawBody, 'name') ??
+      (typeof verifiedToken.claims['name'] === 'string'
+        ? verifiedToken.claims['name']
+        : undefined);
+
+    const phone = getString(rawBody, 'phone');
 
     const role = normalizeRole(
       getString(rawBody, 'role') ??
@@ -100,6 +126,35 @@ export async function handlePrivyAuthRoute(
     const existing = await userClient.findByPrivyDid(privyDid);
 
     if (existing) {
+      let user = existing;
+      const shouldLinkWallet = !existing.walletAddress && Boolean(walletAddress);
+      const shouldUpdateIdentity =
+        shouldLinkWallet ||
+        (email !== undefined && email !== existing.email) ||
+        (name !== undefined && name !== existing.name) ||
+        (phone !== undefined && phone !== existing.phone);
+
+      if (shouldUpdateIdentity) {
+        user = await userClient.updateAuthIdentity(existing.id, {
+          walletAddress: shouldLinkWallet ? walletAddress : undefined,
+          email,
+          name,
+          phone,
+        });
+      }
+
+      if (shouldLinkWallet && walletAddress) {
+        const walletLinkedEvent = UserWalletLinkedEvent.parse({
+          eventType: 'USER_WALLET_LINKED',
+          userId: user.id,
+          privyDid: user.privyDid,
+          walletAddress,
+          timestamp: new Date().toISOString(),
+        });
+
+        await deps.publisher.publishUserEvent(walletLinkedEvent);
+      }
+
       if (existing.role !== ROLE_MAP[role]) {
         await userClient.updateRole(existing.id, ROLE_MAP[role]);
 
@@ -116,26 +171,21 @@ export async function handlePrivyAuthRoute(
 
       sendJson(res, 200, {
         created: false,
-        user: serializeUser(existing),
+        user: serializeUser({
+          ...user,
+          role: existing.role !== ROLE_MAP[role] ? ROLE_MAP[role] : user.role,
+        }),
       });
-      return;
-    }
-
-    if (!walletAddress) {
-      sendJson(res, 400, { error: 'walletAddress is required for first-time registration' });
       return;
     }
 
     const created = await userClient.create({
       privyDid,
       walletAddress,
+      email,
       role: ROLE_MAP[role],
-      name:
-        getString(rawBody, 'name') ??
-        (typeof verifiedToken.claims['name'] === 'string'
-          ? verifiedToken.claims['name']
-          : undefined),
-      phone: getString(rawBody, 'phone'),
+      name,
+      phone,
     });
 
     const event = UserCreatedEvent.parse({
@@ -144,11 +194,7 @@ export async function handlePrivyAuthRoute(
       privyDid: created.privyDid,
       walletAddress: created.walletAddress,
       role: ROLE_MAP[role],
-      email:
-        getString(rawBody, 'email') ??
-        (typeof verifiedToken.claims['email'] === 'string'
-          ? verifiedToken.claims['email']
-          : undefined),
+      email: created.email ?? undefined,
       name: created.name ?? undefined,
       authMethod: normalizeAuthMethod(
         getString(rawBody, 'authMethod') ??

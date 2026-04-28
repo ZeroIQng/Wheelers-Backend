@@ -32,6 +32,19 @@ function requireNumber(payload: Record<string, unknown>, key: string): number {
   return value;
 }
 
+function requireAuthWalletAddress(
+  payload: Record<string, unknown>,
+  auth: GatewayAuthContext,
+  key: 'riderWallet' | 'driverWallet',
+): string {
+  const walletAddress = getString(payload, key) ?? auth.walletAddress;
+  if (!walletAddress) {
+    throw new Error(`${key} is required`);
+  }
+
+  return walletAddress.toLowerCase();
+}
+
 function parseLatLng(payload: Record<string, unknown>, key: string): LatLngAddress {
   const value = getRecord(payload, key);
   if (!value) {
@@ -96,7 +109,7 @@ export async function handleRideMessage(
       eventType: 'RIDE_REQUESTED',
       rideId,
       riderId: auth.userId,
-      riderWallet: (getString(payload, 'riderWallet') ?? auth.walletAddress).toLowerCase(),
+      riderWallet: requireAuthWalletAddress(payload, auth, 'riderWallet'),
       pickup,
       destination,
       fareEstimateUsdt,
@@ -121,7 +134,7 @@ export async function handleRideMessage(
       rideId: requireString(payload, 'rideId'),
       riderId: auth.userId,
       driverId: getString(payload, 'driverId'),
-      riderWallet: (getString(payload, 'riderWallet') ?? auth.walletAddress).toLowerCase(),
+      riderWallet: requireAuthWalletAddress(payload, auth, 'riderWallet'),
       driverWallet: getString(payload, 'driverWallet')?.toLowerCase(),
       cancelStage: normalizeCancelStage(payload['cancelStage']),
       penaltyUsdt: getNumber(payload, 'penaltyUsdt') ?? 0,

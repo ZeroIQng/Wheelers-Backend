@@ -10,7 +10,7 @@ function normalizeRole(role: UserRole): GatewayRole {
 interface UserSnapshot {
   id: string;
   privyDid: string;
-  walletAddress: string;
+  walletAddress: string | null;
   role: UserRole;
   name: string | null;
 }
@@ -25,7 +25,7 @@ export function buildGatewayAuthContext(input: BuildGatewayAuthContextInput): Ga
   return {
     userId: input.user.id,
     privyDid: input.user.privyDid,
-    walletAddress: input.user.walletAddress.toLowerCase(),
+    walletAddress: input.user.walletAddress?.toLowerCase(),
     role: normalizeRole(input.user.role),
     driverId: input.driverId,
     name: input.user.name ?? undefined,

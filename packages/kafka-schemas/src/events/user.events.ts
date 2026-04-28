@@ -12,11 +12,19 @@ const BaseUserEvent = z.object({
 export const UserCreatedEvent = BaseUserEvent.extend({
   eventType:     z.literal('USER_CREATED'),
   privyDid:      z.string(),
-  walletAddress: z.string(),
+  walletAddress: z.string().optional(),
   role:          z.enum(['RIDER', 'DRIVER', 'BOTH']),
   email:         z.string().email().optional(),
   name:          z.string().optional(),
   authMethod:    z.enum(['email', 'google', 'apple', 'wallet']),
+});
+
+// Fired by api-gateway when a previously wallet-less user later gets a linked wallet.
+// Consumed by: wallet-service (create wallet row if missing), payment-service.
+export const UserWalletLinkedEvent = BaseUserEvent.extend({
+  eventType:     z.literal('USER_WALLET_LINKED'),
+  privyDid:      z.string(),
+  walletAddress: z.string(),
 });
 
 // Fired by compliance-worker after driver KYC docs are verified.
@@ -49,12 +57,14 @@ export const UserConsentLoggedEvent = BaseUserEvent.extend({
 
 export const UserEvent = z.discriminatedUnion('eventType', [
   UserCreatedEvent,
+  UserWalletLinkedEvent,
   UserKycApprovedEvent,
   UserRoleChangedEvent,
   UserConsentLoggedEvent,
 ]);
 
 export type UserCreatedEvent      = z.infer<typeof UserCreatedEvent>;
+export type UserWalletLinkedEvent = z.infer<typeof UserWalletLinkedEvent>;
 export type UserKycApprovedEvent  = z.infer<typeof UserKycApprovedEvent>;
 export type UserRoleChangedEvent  = z.infer<typeof UserRoleChangedEvent>;
 export type UserConsentLoggedEvent = z.infer<typeof UserConsentLoggedEvent>;

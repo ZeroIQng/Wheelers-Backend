@@ -36,7 +36,14 @@ async function bootstrap(): Promise<void> {
         const event = safeParseKafkaEvent(TOPICS.USER_EVENTS, value);
         if (!event) return;
 
-        if (event.eventType === 'USER_CREATED') {
+        if (
+          event.eventType === 'USER_CREATED' ||
+          event.eventType === 'USER_WALLET_LINKED'
+        ) {
+          if (!event.walletAddress) {
+            return;
+          }
+
           try {
             await walletClient.create(event.userId, event.walletAddress);
           } catch (err) {
