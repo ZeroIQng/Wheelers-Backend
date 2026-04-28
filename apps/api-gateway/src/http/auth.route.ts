@@ -192,7 +192,7 @@ export async function handlePrivyAuthRoute(
       eventType: 'USER_CREATED',
       userId: created.id,
       privyDid: created.privyDid,
-      walletAddress: created.walletAddress,
+      walletAddress: created.walletAddress ?? undefined,
       role: ROLE_MAP[role],
       email: created.email ?? undefined,
       name: created.name ?? undefined,

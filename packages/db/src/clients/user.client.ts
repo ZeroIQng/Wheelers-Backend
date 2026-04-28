@@ -1,5 +1,5 @@
 import { prisma }   from '../prisma';
-import type { UserRole, ConsentType, Prisma } from '@prisma/client';
+import type { UserRole, ConsentType } from '@prisma/client';
 
 export const userClient = {
 
