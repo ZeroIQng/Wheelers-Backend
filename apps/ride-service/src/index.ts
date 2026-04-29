@@ -1,4 +1,4 @@
-import { validateRideEnv, validateSharedEnv } from '@wheleers/config';
+import { loadWorkspaceEnv, validateRideEnv, validateSharedEnv } from '@wheleers/config';
 import { createConsumer, createProducer } from '@wheleers/kafka-client';
 import { TOPICS } from '@wheleers/kafka-schemas';
 
@@ -63,6 +63,7 @@ bootstrap().catch((err) => {
 });
 
 async function bootstrap(): Promise<void> {
+  loadWorkspaceEnv();
   process.env['NODE_ENV'] ??= 'development';
   process.env['KAFKA_CLIENT_ID'] ??= SERVICE_ID;
   // If using `infra/docker-compose.yml`, Kafka host listener is `localhost:29092`.

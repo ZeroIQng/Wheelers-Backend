@@ -8,6 +8,8 @@
     "build": "npm -ws --if-present run build",
     "typecheck": "npm -ws --if-present run typecheck",
     "lint": "npm -ws --if-present run lint",
+    "infra:up": "sh ./scripts/start-infra.sh",
+    "start:core-services": "sh ./scripts/start-core-services.sh",
 
     "start:api-gateway": "npm -w @wheleers/api-gateway run start",
     "start:ride-service": "npm -w @wheleers/ride-service run start",

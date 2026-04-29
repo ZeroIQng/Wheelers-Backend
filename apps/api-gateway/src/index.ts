@@ -8,7 +8,7 @@ import {
   registerShutdownHandlers,
   TOPIC_PRESETS,
 } from '@wheleers/kafka-client';
-import { validateGatewayEnv, validateSharedEnv } from '@wheleers/config';
+import { loadWorkspaceEnv, validateGatewayEnv, validateSharedEnv } from '@wheleers/config';
 import { TOPICS } from '@wheleers/kafka-schemas';
 import { handlePrivyAuthRoute } from './http/auth.route';
 import {
@@ -56,9 +56,10 @@ function sendMethodNotAllowed(res: ServerResponse): void {
 }
 
 async function bootstrap(): Promise<void> {
+  loadWorkspaceEnv();
   process.env['NODE_ENV'] ??= 'development';
   process.env['KAFKA_CLIENT_ID'] ??= 'api-gateway';
-  process.env['KAFKA_BROKERS'] ??= 'localhost:9092';
+  process.env['KAFKA_BROKERS'] ??= 'localhost:29092';
   process.env['DATABASE_URL'] ??= 'postgresql://postgres:postgres@localhost:5432/wheelers';
   process.env['REDIS_URL'] ??= 'redis://localhost:6379';
 

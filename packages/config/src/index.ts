@@ -1,4 +1,5 @@
 // Env validators — each service imports and calls its own
+export { loadWorkspaceEnv }         from './load-workspace-env';
 export { validateSharedEnv }       from './env/shared.env';
 export { validateGatewayEnv }      from './env/gateway.env';
 export { validateRideEnv }         from './env/ride.env';
