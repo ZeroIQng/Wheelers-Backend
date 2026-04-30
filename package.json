@@ -4,10 +4,10 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm -ws --if-present run dev",
-    "build": "npm -ws --if-present run build",
-    "typecheck": "npm -ws --if-present run typecheck",
-    "lint": "npm -ws --if-present run lint",
+    "dev": "npm --workspaces --if-present run dev",
+    "build": "npm --workspaces --if-present run build",
+    "typecheck": "npm --workspaces --if-present run typecheck",
+    "lint": "npm --workspaces --if-present run lint",
     "infra:up": "sh ./scripts/start-infra.sh",
     "start:core-services": "sh ./scripts/start-core-services.sh",
     "start:local": "npm run infra:up && npm run db:migrate:deploy && npm run start:core-services",

@@ -24,6 +24,8 @@ cleanup() {
 
 trap cleanup INT TERM EXIT
 
+export KAFKAJS_NO_PARTITIONER_WARNING=1
+
 npm run build
 
 npm run start:payment-service &
