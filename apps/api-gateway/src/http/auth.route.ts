@@ -23,9 +23,12 @@ const ROLE_MAP: Record<GatewayRole, UserRole> = {
   BOTH: UserRole.BOTH,
 };
 
-function normalizeRole(value: unknown): GatewayRole {
-  if (value === 'DRIVER' || value === 'BOTH') return value;
-  return 'RIDER';
+function parseRole(value: unknown): GatewayRole | undefined {
+  if (value === 'RIDER' || value === 'DRIVER' || value === 'BOTH') {
+    return value;
+  }
+
+  return undefined;
 }
 
 function normalizeAuthMethod(value: unknown): 'email' | 'google' | 'apple' | 'wallet' {
@@ -115,12 +118,11 @@ export async function handlePrivyAuthRoute(
 
     const phone = getString(rawBody, 'phone');
 
-    const role = normalizeRole(
+    const requestedRole = parseRole(
       getString(rawBody, 'role') ??
       (typeof verifiedToken.claims['role'] === 'string'
         ? verifiedToken.claims['role']
-        : undefined) ??
-      'RIDER',
+        : undefined),
     );
 
     const existing = await userClient.findByPrivyDid(privyDid);
@@ -155,14 +157,14 @@ export async function handlePrivyAuthRoute(
         await deps.publisher.publishUserEvent(walletLinkedEvent);
       }
 
-      if (existing.role !== ROLE_MAP[role]) {
-        await userClient.updateRole(existing.id, ROLE_MAP[role]);
+      if (requestedRole && existing.role !== ROLE_MAP[requestedRole]) {
+        await userClient.updateRole(existing.id, ROLE_MAP[requestedRole]);
 
         const roleChangedEvent = UserRoleChangedEvent.parse({
           eventType: 'USER_ROLE_CHANGED',
           userId: existing.id,
           previousRole: existing.role,
-          newRole: ROLE_MAP[role],
+          newRole: ROLE_MAP[requestedRole],
           timestamp: new Date().toISOString(),
         });
 
@@ -173,11 +175,16 @@ export async function handlePrivyAuthRoute(
         created: false,
         user: serializeUser({
           ...user,
-          role: existing.role !== ROLE_MAP[role] ? ROLE_MAP[role] : user.role,
+          role:
+            requestedRole && existing.role !== ROLE_MAP[requestedRole]
+              ? ROLE_MAP[requestedRole]
+              : user.role,
         }),
       });
       return;
     }
+
+    const role = requestedRole ?? 'RIDER';
 
     const created = await userClient.create({
       privyDid,
