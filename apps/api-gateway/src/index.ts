@@ -22,6 +22,10 @@ import {
   handlePouchSubmitKycRoute,
   handlePouchVerifyOtpRoute,
 } from './http/pouch.route';
+import {
+  handleSendPhoneOtpRoute,
+  handleVerifyPhoneOtpRoute,
+} from './http/phone.route';
 import { PouchClient } from './http/pouch.client';
 import { applyCorsHeaders, sendJson } from './http/utils';
 import { startGatewayKafkaConsumer } from './kafka/consumer';
@@ -132,6 +136,42 @@ async function bootstrap(): Promise<void> {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         publisher,
+      });
+      return;
+    }
+
+    if (url.pathname === '/auth/phone/send-otp') {
+      if (req.method !== 'POST') {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleSendPhoneOtpRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        redisClient: redisCommandClient,
+        twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
+        twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
+        twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
+        twilioOtpTtlSeconds: gatewayEnv.TWILIO_OTP_TTL_SECONDS,
+      });
+      return;
+    }
+
+    if (url.pathname === '/auth/phone/verify-otp') {
+      if (req.method !== 'POST') {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleVerifyPhoneOtpRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        redisClient: redisCommandClient,
+        twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
+        twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
+        twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
+        twilioOtpTtlSeconds: gatewayEnv.TWILIO_OTP_TTL_SECONDS,
       });
       return;
     }

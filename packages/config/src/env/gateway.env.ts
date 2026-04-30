@@ -5,6 +5,10 @@ const GatewayEnvSchema = z.object({
   JWT_SECRET:         z.string().min(32).optional(),
   PRIVY_APP_ID:       z.string().min(1),
   PRIVY_VERIFICATION_KEY: z.string().min(1),
+  TWILIO_ACCOUNT_SID: z.string().min(1).optional(),
+  TWILIO_AUTH_TOKEN:  z.string().min(1).optional(),
+  TWILIO_FROM_NUMBER: z.string().min(1).optional(),
+  TWILIO_OTP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   POUCH_API_KEY:      z.string().min(1),
   POUCH_BASE_URL:     z.string().url().default('https://api.pouch.finance'),
   // Comma-separated list of allowed WebSocket/HTTP origins
