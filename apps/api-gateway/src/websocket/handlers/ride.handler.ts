@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { OpenRouteServiceClient, RoutePlanningError } from '@wheleers/config';
+import { OpenRouteServiceClient } from '@wheleers/config';
 import {
   DisputeOpenedEvent,
   FeedbackLoggedEvent,

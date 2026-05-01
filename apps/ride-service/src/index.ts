@@ -1,4 +1,4 @@
-import { loadWorkspaceEnv, validateRideEnv, validateSharedEnv } from '@wheleers/config';
+import { loadWorkspaceEnv, OpenRouteServiceClient, validateRideEnv, validateSharedEnv } from '@wheleers/config';
 import { createConsumer, createProducer } from '@wheleers/kafka-client';
 import { TOPICS } from '@wheleers/kafka-schemas';
 
@@ -88,6 +88,11 @@ async function bootstrap(): Promise<void> {
 
   const producer = await createProducer({ serviceId: SERVICE_ID });
   const consumer = await createConsumer({ groupId: SERVICE_ID, concurrency: 1 });
+  const routePlanner = new OpenRouteServiceClient(
+    rideEnv.OPENROUTESERVICE_BASE_URL,
+    rideEnv.OPENROUTESERVICE_API_KEY,
+    rideEnv.OPENROUTESERVICE_PROFILE,
+  );
 
   const state: RideServiceState = {
     onlineDrivers: new Map(),
@@ -104,6 +109,7 @@ async function bootstrap(): Promise<void> {
   const tripLifecycle = createTripLifecycleHandler({
     state,
     rideEventsProducer,
+    routePlanner,
   });
 
   const driverEventsConsumer = createDriverEventsConsumer({

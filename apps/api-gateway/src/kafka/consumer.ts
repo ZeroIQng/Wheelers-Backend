@@ -113,6 +113,8 @@ async function handleRideEvent(
       rideId: event.rideId,
       destination: event.destination,
       stops: event.stops,
+      plannedDistanceKm: event.plannedDistanceKm,
+      plannedDurationSeconds: event.plannedDurationSeconds,
       fareEstimateUsdt: event.fareEstimateUsdt,
       updatedBy: event.updatedBy,
     };
