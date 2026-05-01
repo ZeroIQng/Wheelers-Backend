@@ -25,3 +25,9 @@ export { GPS }                         from './constants/gps';
 export { RIDE }                        from './constants/ride';
 export { DEFI }                        from './constants/defi';
 export { CHAINS, DEFAULT_CHAIN, USDT_ADDRESSES, SUPPORTED_CHAIN_IDS } from './constants/chains';
+export {
+  OpenRouteServiceClient,
+  RoutePlanningError,
+  estimateRideFareUsdt,
+} from './routing';
+export type { PlannedRouteMetrics, RouteWaypoint } from './routing';
