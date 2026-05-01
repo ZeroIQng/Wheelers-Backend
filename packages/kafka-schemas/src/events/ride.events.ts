@@ -28,6 +28,8 @@ export const RideRequestedEvent = BaseRideEvent.extend({
   pickup:           LatLng,
   destination:      LatLng,
   stops:            z.array(LatLng).max(5).default([]),
+  plannedDistanceKm: z.number().optional(),
+  plannedDurationSeconds: z.number().int().optional(),
   fareEstimateUsdt: z.number(),
   paymentMethod:    z.enum(['wallet_balance', 'smart_account']),
 });
@@ -38,6 +40,8 @@ export const RideRouteUpdateRequestedEvent = BaseRideEvent.extend({
   driverId:         z.string().uuid().optional(),
   destination:      LatLng,
   stops:            z.array(LatLng).max(5).default([]),
+  plannedDistanceKm: z.number().optional(),
+  plannedDurationSeconds: z.number().int().optional(),
   fareEstimateUsdt: z.number().optional(),
   updatedBy:        z.enum(['rider', 'driver', 'system']),
 });
@@ -71,6 +75,8 @@ export const RideRouteUpdatedEvent = BaseRideEvent.extend({
   driverId:         z.string().uuid().optional(),
   destination:      LatLng,
   stops:            z.array(RideStopSnapshot),
+  plannedDistanceKm: z.number().optional(),
+  plannedDurationSeconds: z.number().int().optional(),
   fareEstimateUsdt: z.number().optional(),
   updatedBy:        z.enum(['rider', 'driver', 'system']),
 });

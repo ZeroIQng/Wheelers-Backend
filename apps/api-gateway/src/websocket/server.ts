@@ -2,6 +2,7 @@ import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { Duplex } from 'stream';
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import { driverClient, userClient } from '@wheleers/db';
+import type { OpenRouteServiceClient } from '@wheleers/config';
 import { buildGatewayAuthContext } from '../auth/context';
 import { verifyPrivyAccessToken } from '../auth/privy';
 import type { InboundWsMessage } from '../types';
@@ -20,6 +21,7 @@ interface WebSocketServerDeps {
   idleTimeoutMs: number;
   registry: SocketRegistry;
   publisher: GatewayPublisher;
+  routePlanner: OpenRouteServiceClient;
 }
 
 function getRequestOrigin(request: IncomingMessage): string | null {
@@ -152,7 +154,7 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
         }
 
         const response =
-          (await handleRideMessage(parsed.type, payload, auth, deps.publisher)) ??
+          (await handleRideMessage(parsed.type, payload, auth, deps.publisher, deps.routePlanner)) ??
           (await handleDriverMessage(parsed.type, payload, auth, deps.publisher)) ??
           (await handleWalletMessage(parsed.type, payload));
 
