@@ -3,7 +3,7 @@ import { CancelStage, DriverStatus, driverClient, rideClient } from '@wheleers/d
 import type { MessageContext } from '@wheleers/kafka-client';
 import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
 
-import type { RideServiceState } from '../index';
+import type { RideRouteStopState, RideServiceState } from '../index';
 import type { RideEventsProducer } from '../producers/ride-events.producer';
 
 export type TripLifecycleHandler = {
@@ -55,7 +55,9 @@ export function createTripLifecycleHandler(params?: {
           const routeStops = await rideClient.syncRouteStops(event.rideId, {
             destination: event.destination,
             stops: event.stops,
+            fareEstimateUsdt: event.fareEstimateUsdt,
           });
+          syncRouteState(event.rideId, routeStops);
           await publishRouteUpdatedSnapshot({
             rideId: event.rideId,
             riderId: event.riderId,
@@ -76,6 +78,7 @@ export function createTripLifecycleHandler(params?: {
             return;
           }
 
+          syncRouteState(event.rideId, result.routeStops);
           await publishRouteUpdatedSnapshot({
             rideId: event.rideId,
             riderId: event.riderId,
@@ -88,11 +91,61 @@ export function createTripLifecycleHandler(params?: {
         }
       }
 
+      if (event.eventType === 'RIDE_COMPLETION_REQUESTED') {
+        if (!rideEventsProducer) {
+          return;
+        }
+
+        try {
+          const ride = await rideClient.findById(event.rideId);
+          if (ride.status === 'COMPLETED' || ride.status === 'CANCELLED') {
+            return;
+          }
+
+          const completedAt = resolveCompletedAt(event.completedAt, event.timestamp);
+          const gpsState = state?.gpsByRideId.get(event.rideId);
+          const distanceKm = round3(
+            gpsState?.totalDistanceKm ?? (await estimateDistanceFromGpsLogs(event.rideId)),
+          );
+          const durationSeconds = resolveDurationSeconds(ride.startedAt, completedAt);
+          const fareUsdt = resolveFareUsdt({
+            requestedFareUsdt: event.fareUsdt,
+            estimatedFareUsdt:
+              ride.fareEstimateUsdt !== null && ride.fareEstimateUsdt !== undefined
+                ? Number(ride.fareEstimateUsdt)
+                : undefined,
+          });
+
+          const routeStops = await rideClient.completeFinalStop(event.rideId, completedAt);
+          syncRouteState(event.rideId, routeStops);
+
+          await rideEventsProducer.rideCompleted({
+            eventType: 'RIDE_COMPLETED',
+            rideId: event.rideId,
+            riderId: event.riderId,
+            driverId: event.driverId,
+            riderWallet: event.riderWallet,
+            driverWallet: event.driverWallet,
+            fareUsdt,
+            distanceKm,
+            durationSeconds,
+            recordingCid: event.recordingCid,
+            recordingHash: event.recordingHash,
+            endedBy: event.endedBy,
+            completedAt: completedAt.toISOString(),
+            timestamp: new Date().toISOString(),
+          });
+        } catch (err) {
+          console.warn(`[ride-service] ride completion request skipped:`, (err as any)?.message ?? err);
+        }
+      }
+
       if (event.eventType === 'RIDE_COMPLETED') {
         const platformFeeUsdt = round2(event.fareUsdt * FEES.PLATFORM_FEE_PERCENT);
         const driverEarningsUsdt = round2(event.fareUsdt - platformFeeUsdt);
         state?.rideParticipantsByRideId.delete(event.rideId);
         state?.gpsByRideId.delete(event.rideId);
+        state?.routeByRideId.delete(event.rideId);
 
         try {
           await rideClient.complete(event.rideId, {
@@ -113,6 +166,7 @@ export function createTripLifecycleHandler(params?: {
       if (event.eventType === 'RIDE_CANCELLED') {
         state?.rideParticipantsByRideId.delete(event.rideId);
         state?.gpsByRideId.delete(event.rideId);
+        state?.routeByRideId.delete(event.rideId);
 
         try {
           await rideClient.cancel(event.rideId, {
@@ -191,10 +245,42 @@ export function createTripLifecycleHandler(params?: {
       timestamp: new Date().toISOString(),
     });
   }
+
+  function syncRouteState(
+    rideId: string,
+    routeStops: Array<{
+      id: string;
+      stopOrder: number;
+      type: 'INTERMEDIATE' | 'FINAL';
+      status: 'PENDING' | 'COMPLETED' | 'SKIPPED';
+      lat: number;
+      lng: number;
+      address: string;
+      completedAt: Date | null;
+    }>,
+  ): void {
+    state?.routeByRideId.set(
+      rideId,
+      routeStops.map<RideRouteStopState>((stop) => ({
+        stopId: stop.id,
+        stopOrder: stop.stopOrder,
+        type: stop.type === 'FINAL' ? 'final' : 'intermediate',
+        status: stop.status.toLowerCase() as RideRouteStopState['status'],
+        lat: stop.lat,
+        lng: stop.lng,
+        address: stop.address,
+        ...(stop.completedAt ? { completedAt: stop.completedAt.toISOString() } : {}),
+      })),
+    );
+  }
 }
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function round3(value: number): number {
+  return Math.round(value * 1000) / 1000;
 }
 
 function stageToDb(stage: string): CancelStage {
@@ -210,4 +296,55 @@ function stageToDb(stage: string): CancelStage {
     default:
       return 'BEFORE_MATCH';
   }
+}
+
+function resolveCompletedAt(completedAt: string | undefined, fallbackTimestamp: string): Date {
+  const source = completedAt ?? fallbackTimestamp;
+  const parsed = new Date(source);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+function resolveDurationSeconds(startedAt: Date | null, completedAt: Date): number {
+  if (!startedAt) {
+    return 0;
+  }
+
+  const deltaMs = completedAt.getTime() - startedAt.getTime();
+  return Math.max(0, Math.round(deltaMs / 1000));
+}
+
+function resolveFareUsdt(params: {
+  requestedFareUsdt?: number;
+  estimatedFareUsdt?: number;
+}): number {
+  const sourceFare = params.estimatedFareUsdt ?? params.requestedFareUsdt ?? FEES.MIN_RIDE_FARE_USDT;
+  return round2(Math.max(sourceFare, FEES.MIN_RIDE_FARE_USDT));
+}
+
+async function estimateDistanceFromGpsLogs(rideId: string): Promise<number> {
+  const logs = await rideClient.findGpsLogs(rideId);
+  let distanceKm = 0;
+
+  for (let i = 1; i < logs.length; i += 1) {
+    const previous = logs[i - 1];
+    const current = logs[i];
+    if (!previous || !current) continue;
+    distanceKm += haversineKm(previous.lat, previous.lng, current.lat, current.lng);
+  }
+
+  return distanceKm;
+}
+
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = (n: number) => (n * Math.PI) / 180;
+  const r = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return r * c;
 }
