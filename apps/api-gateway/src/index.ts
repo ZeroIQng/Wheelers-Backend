@@ -1,6 +1,5 @@
 import { createServer, type ServerResponse } from 'http';
 import {
-  OpenRouteServiceClient,
   buildTopicList,
   createConsumer,
   createProducer,
@@ -9,7 +8,12 @@ import {
   registerShutdownHandlers,
   TOPIC_PRESETS,
 } from '@wheleers/kafka-client';
-import { loadWorkspaceEnv, validateGatewayEnv, validateSharedEnv } from '@wheleers/config';
+import {
+  loadWorkspaceEnv,
+  OpenRouteServiceClient,
+  validateGatewayEnv,
+  validateSharedEnv,
+} from '@wheleers/config';
 import { TOPICS } from '@wheleers/kafka-schemas';
 import { handlePrivyAuthRoute } from './http/auth.route';
 import {
