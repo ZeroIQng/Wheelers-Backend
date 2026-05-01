@@ -276,6 +276,13 @@ async function handleGpsProcessedEvent(
     distanceFromLastKm: event.distanceFromLastKm,
     totalDistanceKm: event.totalDistanceKm,
     isStale: event.isStale,
+    isConsistent: event.isConsistent,
+    inconsistencyReason: event.inconsistencyReason,
+    ignoredDistanceKm: event.ignoredDistanceKm,
+    distanceToNextStopKm: event.distanceToNextStopKm,
+    nextStopAddress: event.nextStopAddress,
+    nextStopOrder: event.nextStopOrder,
+    remainingStopCount: event.remainingStopCount,
   });
 }
 

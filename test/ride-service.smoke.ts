@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 type Seen = {
   rideOffersByDriverId: Map<string, any>;
   rideAssigned: any | null;
+  rideCompleted: any | null;
   gpsProcessed: any | null;
   staleWarning: any | null;
 };
@@ -48,6 +49,7 @@ async function main(): Promise<void> {
   const seen: Seen = {
     rideOffersByDriverId: new Map(),
     rideAssigned: null,
+    rideCompleted: null,
     gpsProcessed: null,
     staleWarning: null,
   };
@@ -99,6 +101,14 @@ async function main(): Promise<void> {
         (parsed as any).rideId === rideId
       ) {
         seen.rideAssigned = parsed;
+      }
+
+      if (
+        topic === TOPICS.RIDE_EVENTS &&
+        (parsed as any).eventType === 'RIDE_COMPLETED' &&
+        (parsed as any).rideId === rideId
+      ) {
+        seen.rideCompleted = parsed;
       }
 
       if (
@@ -362,22 +372,20 @@ async function main(): Promise<void> {
   );
   console.log('[test] DB GPS snapshot persisted');
 
-  // 6) Complete the ride and verify durable lifecycle state.
+  // 6) Request completion and verify ride-service emits canonical metrics.
   await producer.send({
     topic: TOPICS.RIDE_EVENTS,
     messages: [
       {
         key: rideId,
         value: JSON.stringify({
-          eventType: 'RIDE_COMPLETED',
+          eventType: 'RIDE_COMPLETION_REQUESTED',
           rideId,
           riderId,
           driverId: secondDriverId,
           riderWallet,
           driverWallet: secondDriverWallet,
           fareUsdt: 2.5,
-          distanceKm: 1.2,
-          durationSeconds: 600,
           endedBy: 'both_confirmed',
           completedAt: nowIso(),
           timestamp: nowIso(),
@@ -386,11 +394,20 @@ async function main(): Promise<void> {
     ],
   });
 
+  await waitFor(() => !!seen.rideCompleted, 15_000, 'canonical RIDE_COMPLETED');
+  console.log('[test] got canonical RIDE_COMPLETED');
+
   await waitForDb(
     async () => {
       const ride = await prisma.ride.findUnique({ where: { id: rideId } });
       const driver = await prisma.driver.findUnique({ where: { id: secondDriverId } });
-      return ride?.status === 'COMPLETED' && ride.fareFinalUsdt?.toNumber() === 2.5 && driver?.status === 'ONLINE';
+      return (
+        ride?.status === 'COMPLETED' &&
+        ride.fareFinalUsdt?.toNumber() === 2.5 &&
+        ride.distanceKm !== null &&
+        ride.durationSeconds !== null &&
+        driver?.status === 'ONLINE'
+      );
     },
     15_000,
     'DB ride completion',
