@@ -62,15 +62,25 @@ export const WalletUnlockedEvent = BaseWalletEvent.extend({
   ]),
 });
 
+export const WalletHoldAdjustedEvent = BaseWalletEvent.extend({
+  eventType:             z.literal('WALLET_HOLD_ADJUSTED'),
+  rideId:                z.string().uuid(),
+  previousLockedAmountUsdt: z.number(),
+  lockedAmountUsdt:      z.number(),
+  reason:                z.literal('ride_route_updated'),
+});
+
 export const WalletEvent = z.discriminatedUnion('eventType', [
   WalletCreditedEvent,
   WalletDebitedEvent,
   WalletLockedEvent,
   WalletUnlockedEvent,
+  WalletHoldAdjustedEvent,
 ]);
 
 export type WalletCreditedEvent  = z.infer<typeof WalletCreditedEvent>;
 export type WalletDebitedEvent   = z.infer<typeof WalletDebitedEvent>;
 export type WalletLockedEvent    = z.infer<typeof WalletLockedEvent>;
 export type WalletUnlockedEvent  = z.infer<typeof WalletUnlockedEvent>;
+export type WalletHoldAdjustedEvent = z.infer<typeof WalletHoldAdjustedEvent>;
 export type WalletEvent          = z.infer<typeof WalletEvent>;

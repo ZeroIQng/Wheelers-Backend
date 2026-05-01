@@ -314,6 +314,75 @@ export const walletClient = {
     }
   },
 
+  adjustRideHold: async (params: {
+    rideId: string;
+    targetAmountUsdt: number;
+  }): Promise<(RideHoldMutationResult & { previousHoldAmountUsdt: number }) | null> => {
+    const { rideId, targetAmountUsdt } = params;
+
+    return prisma.$transaction(async (tx: TxClient) => {
+      const hold = await tx.rideHold.findUnique({
+        where: { rideId },
+      });
+
+      if (!hold || hold.status !== 'ACTIVE') {
+        if (!hold) return null;
+        const wallet = await tx.wallet.findUniqueOrThrow({ where: { id: hold.walletId } });
+        return {
+          wallet,
+          holdAmountUsdt: Number(hold.amountUsdt),
+          previousHoldAmountUsdt: Number(hold.amountUsdt),
+          applied: false as const,
+        };
+      }
+
+      const currentAmountUsdt = Number(hold.amountUsdt);
+      const normalizedTargetAmountUsdt = Math.max(0, targetAmountUsdt);
+      const deltaUsdt = normalizedTargetAmountUsdt - currentAmountUsdt;
+
+      if (Math.abs(deltaUsdt) < 0.000001) {
+        const wallet = await tx.wallet.findUniqueOrThrow({ where: { id: hold.walletId } });
+        return {
+          wallet,
+          holdAmountUsdt: currentAmountUsdt,
+          previousHoldAmountUsdt: currentAmountUsdt,
+          applied: false as const,
+        };
+      }
+
+      if (deltaUsdt > 0) {
+        const wallet = await tx.wallet.findUniqueOrThrow({ where: { id: hold.walletId } });
+        if (Number(wallet.balanceUsdt) < deltaUsdt) {
+          throw new Error(
+            `Insufficient balance on wallet ${hold.walletId} to adjust ride hold by ${deltaUsdt} USDT`,
+          );
+        }
+      }
+
+      const wallet = await tx.wallet.update({
+        where: { id: hold.walletId },
+        data: {
+          balanceUsdt: { increment: -deltaUsdt },
+          lockedUsdt: { increment: deltaUsdt },
+        },
+      });
+
+      await tx.rideHold.update({
+        where: { rideId },
+        data: {
+          amountUsdt: normalizedTargetAmountUsdt,
+        },
+      });
+
+      return {
+        wallet,
+        holdAmountUsdt: normalizedTargetAmountUsdt,
+        previousHoldAmountUsdt: currentAmountUsdt,
+        applied: true as const,
+      };
+    });
+  },
+
   cancelRideHold: async (rideId: string): Promise<RideHoldMutationResult | null> => {
     return prisma.$transaction(async (tx: TxClient) => {
       const hold = await tx.rideHold.findUnique({

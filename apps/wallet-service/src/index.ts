@@ -91,6 +91,37 @@ async function bootstrap(): Promise<void> {
           }
         }
 
+        if (event.eventType === 'RIDE_ROUTE_UPDATED') {
+          if (event.fareEstimateUsdt === undefined) {
+            return;
+          }
+
+          try {
+            const holdResult = await walletClient.adjustRideHold({
+              rideId: event.rideId,
+              targetAmountUsdt: event.fareEstimateUsdt,
+            });
+
+            if (!holdResult || !holdResult.applied) {
+              return;
+            }
+
+            await producer.send(TOPICS.WALLET_EVENTS, {
+              eventType: 'WALLET_HOLD_ADJUSTED',
+              walletId: holdResult.wallet.id,
+              userId: holdResult.wallet.userId,
+              walletAddress: holdResult.wallet.address,
+              previousLockedAmountUsdt: holdResult.previousHoldAmountUsdt,
+              lockedAmountUsdt: holdResult.holdAmountUsdt,
+              rideId: event.rideId,
+              reason: 'ride_route_updated',
+              timestamp: new Date().toISOString(),
+            } as any, { key: event.rideId });
+          } catch (err) {
+            console.warn(`[${SERVICE_ID}] hold adjust failed:`, (err as any)?.message ?? err);
+          }
+        }
+
         if (event.eventType === 'RIDE_COMPLETED') {
           try {
             const holdResult = await walletClient.completeRideHold({

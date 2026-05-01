@@ -234,6 +234,18 @@ async function handleWalletEvent(event: WalletEvent, registry: SocketRegistry): 
     return;
   }
 
+  if (event.eventType === 'WALLET_HOLD_ADJUSTED') {
+    await registry.sendToUser(event.userId, 'wallet:updated', {
+      walletId: event.walletId,
+      rideId: event.rideId,
+      previousLockedAmountUsdt: event.previousLockedAmountUsdt,
+      lockedAmountUsdt: event.lockedAmountUsdt,
+      reason: event.reason,
+      direction: 'lock_adjustment',
+    });
+    return;
+  }
+
   await registry.sendToUser(event.userId, 'wallet:updated', {
     walletId: event.walletId,
     rideId: event.rideId,
