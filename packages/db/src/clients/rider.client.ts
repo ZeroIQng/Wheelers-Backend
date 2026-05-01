@@ -1,17 +1,87 @@
-import { prisma }  from '../prisma';
-import type { RideStatus, CancelStage, Prisma } from '@prisma/client';
+import { prisma } from '../prisma';
+import type { CancelStage, RideStatus, RideStopStatus, RideStopType } from '@prisma/client';
+
+type RouteStopInput = {
+  lat: number;
+  lng: number;
+  address: string;
+};
+
+type CompletedRouteStopInput = RouteStopInput & {
+  type: RideStopType;
+  status: RideStopStatus;
+  completedAt: Date | null;
+};
+
+type RouteDestinationInput = RouteStopInput;
+
+function buildRouteStops(params: {
+  rideId: string;
+  completedStops?: CompletedRouteStopInput[];
+  stops?: RouteStopInput[];
+  destination: RouteDestinationInput;
+}) {
+  const completedStops = params.completedStops ?? [];
+  const requestedStops = params.stops ?? [];
+  const routeStops = [
+    ...completedStops.map((stop, index) => ({
+      rideId: params.rideId,
+      stopOrder: index,
+      type: stop.type,
+      status: stop.status,
+      lat: stop.lat,
+      lng: stop.lng,
+      address: stop.address,
+      completedAt: stop.completedAt,
+    })),
+    ...requestedStops.map((stop, index) => ({
+      rideId: params.rideId,
+      stopOrder: completedStops.length + index,
+      type: 'INTERMEDIATE' as const,
+      status: 'PENDING' as const,
+      lat: stop.lat,
+      lng: stop.lng,
+      address: stop.address,
+      completedAt: null,
+    })),
+    {
+      rideId: params.rideId,
+      stopOrder: completedStops.length + requestedStops.length,
+      type: 'FINAL' as const,
+      status: 'PENDING' as const,
+      lat: params.destination.lat,
+      lng: params.destination.lng,
+      address: params.destination.address,
+      completedAt: null,
+    },
+  ];
+
+  return routeStops;
+}
 
 export const rideClient = {
 
   // ── Reads ──────────────────────────────────────────────────────────────────
 
   findById: (rideId: string) =>
-    prisma.ride.findUniqueOrThrow({ where: { id: rideId } }),
+    prisma.ride.findUniqueOrThrow({
+      where: { id: rideId },
+      include: {
+        routeStops: {
+          orderBy: { stopOrder: 'asc' },
+        },
+      },
+    }),
 
   findWithDriver: (rideId: string) =>
     prisma.ride.findUniqueOrThrow({
       where:   { id: rideId },
-      include: { driver: { include: { user: true } } },
+      include: {
+        driver: { include: { user: true } },
+        routeStops: {
+          orderBy: { stopOrder: 'asc' },
+        },
+      },
     }),
 
   findActiveByRider: (riderId: string) =>
@@ -72,10 +142,26 @@ export const rideClient = {
     destLat:          number;
     destLng:          number;
     destAddress:      string;
+    stops?:           RouteStopInput[];
     fareEstimateUsdt: number;
     status?:          RideStatus;
   }) =>
-    prisma.ride.create({ data }),
+    prisma.$transaction(async (tx) => {
+      const { stops, ...rideData } = data;
+      const ride = await tx.ride.create({ data: rideData });
+      await tx.rideStop.createMany({
+        data: buildRouteStops({
+          rideId: data.id,
+          stops,
+          destination: {
+            lat: data.destLat,
+            lng: data.destLng,
+            address: data.destAddress,
+          },
+        }),
+      });
+      return ride;
+    }),
 
   markMatching: (rideId: string) =>
     prisma.ride.update({
@@ -151,6 +237,125 @@ export const rideClient = {
     prisma.ride.update({
       where: { id: rideId },
       data:  { status: 'DISPUTED' },
+    }),
+
+  findRouteStops: (rideId: string) =>
+    prisma.rideStop.findMany({
+      where: { rideId },
+      orderBy: { stopOrder: 'asc' },
+    }),
+
+  syncRouteStops: (rideId: string, data: {
+    destination: RouteDestinationInput;
+    stops?: RouteStopInput[];
+    fareEstimateUsdt?: number;
+  }) =>
+    prisma.$transaction(async (tx) => {
+      const existingCompletedStops = await tx.rideStop.findMany({
+        where: {
+          rideId,
+          status: 'COMPLETED',
+        },
+        orderBy: { stopOrder: 'asc' },
+      });
+
+      await tx.ride.update({
+        where: { id: rideId },
+        data: {
+          destLat: data.destination.lat,
+          destLng: data.destination.lng,
+          destAddress: data.destination.address,
+          ...(data.fareEstimateUsdt !== undefined ? { fareEstimateUsdt: data.fareEstimateUsdt } : {}),
+        },
+      });
+
+      await tx.rideStop.deleteMany({ where: { rideId } });
+      await tx.rideStop.createMany({
+        data: buildRouteStops({
+          rideId,
+          completedStops: existingCompletedStops.map((stop) => ({
+            lat: stop.lat,
+            lng: stop.lng,
+            address: stop.address,
+            type: stop.type,
+            status: stop.status,
+            completedAt: stop.completedAt,
+          })),
+          stops: data.stops,
+          destination: data.destination,
+        }),
+      });
+
+      return tx.rideStop.findMany({
+        where: { rideId },
+        orderBy: { stopOrder: 'asc' },
+      });
+    }),
+
+  completeNextStop: (rideId: string) =>
+    prisma.$transaction(async (tx) => {
+      const nextPendingStop = await tx.rideStop.findFirst({
+        where: {
+          rideId,
+          type: 'INTERMEDIATE',
+          status: 'PENDING',
+        },
+        orderBy: { stopOrder: 'asc' },
+      });
+
+      if (!nextPendingStop) {
+        return null;
+      }
+
+      const completedStop = await tx.rideStop.update({
+        where: { id: nextPendingStop.id },
+        data: {
+          status: 'COMPLETED',
+          completedAt: new Date(),
+        },
+      });
+
+      const routeStops = await tx.rideStop.findMany({
+        where: { rideId },
+        orderBy: { stopOrder: 'asc' },
+      });
+
+      return {
+        completedStop,
+        routeStops,
+      };
+    }),
+
+  completeFinalStop: (rideId: string, completedAt = new Date()) =>
+    prisma.$transaction(async (tx) => {
+      const finalStop = await tx.rideStop.findFirst({
+        where: {
+          rideId,
+          type: 'FINAL',
+          status: 'PENDING',
+        },
+        orderBy: { stopOrder: 'asc' },
+      });
+
+      if (!finalStop) {
+        return tx.rideStop.findMany({
+          where: { rideId },
+          orderBy: { stopOrder: 'asc' },
+        });
+      }
+
+      await tx.rideStop.update({
+        where: { id: finalStop.id },
+        data: {
+          status: 'COMPLETED',
+          completedAt,
+        },
+      });
+
+      return tx.rideStop.findMany({
+        where: { rideId },
+        orderBy: { stopOrder: 'asc' },
+      });
     }),
 
   // ── GPS logs ───────────────────────────────────────────────────────────────

@@ -5,8 +5,10 @@ import {
   type InAppSendEvent,
   type PushSendEvent,
   type RideCancelledEvent,
+  type RideCompletedEvent,
   type RideDriverAssignedEvent,
   type RideDriverRejectedEvent,
+  type RideRouteUpdatedEvent,
   type RideRequestedEvent,
 } from '@wheleers/kafka-schemas';
 import { randomUUID } from 'node:crypto';
@@ -17,6 +19,8 @@ export type RideEventsProducer = {
   rideDriverAssigned(event: RideDriverAssignedEvent): Promise<void>;
   rideDriverRejected(event: RideDriverRejectedEvent): Promise<void>;
   rideCancelled(event: RideCancelledEvent): Promise<void>;
+  rideCompleted(event: RideCompletedEvent): Promise<void>;
+  rideRouteUpdated(event: RideRouteUpdatedEvent): Promise<void>;
   rideOfferNotification(params: {
     driver: OnlineDriver;
     rideRequested: RideRequestedEvent;
@@ -39,10 +43,22 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
       await producer.send(TOPICS.RIDE_EVENTS, event as any, { key: event.rideId });
     },
 
+    async rideCompleted(event) {
+      await producer.send(TOPICS.RIDE_EVENTS, event as any, { key: event.rideId });
+    },
+
+    async rideRouteUpdated(event) {
+      await producer.send(TOPICS.RIDE_EVENTS, event as any, { key: event.rideId });
+    },
+
     async rideOfferNotification({ driver, rideRequested, expiresAt }) {
       const timestamp = new Date().toISOString();
       const title = 'New ride request';
-      const body = `${rideRequested.pickup.address} to ${rideRequested.destination.address}`;
+      const stopCount = rideRequested.stops.length;
+      const body =
+        stopCount > 0
+          ? `${rideRequested.pickup.address} to ${rideRequested.destination.address} with ${stopCount} stop${stopCount === 1 ? '' : 's'}`
+          : `${rideRequested.pickup.address} to ${rideRequested.destination.address}`;
 
       const push: PushSendEvent = {
         eventType: 'PUSH_SEND',
@@ -60,6 +76,8 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
           destinationLat: String(rideRequested.destination.lat),
           destinationLng: String(rideRequested.destination.lng),
           destinationAddress: rideRequested.destination.address,
+          stops: JSON.stringify(rideRequested.stops),
+          stopCount: String(stopCount),
           fareEstimateUsdt: String(rideRequested.fareEstimateUsdt),
           expiresAt: expiresAt.toISOString(),
         },

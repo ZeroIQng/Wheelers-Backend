@@ -17,4 +17,10 @@ export const GPS = {
   // How often ride-service writes a GPS snapshot to the DB for dispute evidence.
   // GPS_UPDATE events come every 3s but we only persist every 30s.
   DB_SNAPSHOT_INTERVAL_SECONDS: 30,
+
+  // Ignore GPS pings that are too inaccurate to trust for distance accounting.
+  MAX_ACCEPTABLE_ACCURACY_METRES: 100,
+
+  // Ignore jumps that imply impossible travel between consecutive pings.
+  MAX_REASONABLE_SPEED_KMH: 160,
 } as const;

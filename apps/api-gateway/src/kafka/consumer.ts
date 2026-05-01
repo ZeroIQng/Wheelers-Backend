@@ -108,6 +108,28 @@ async function handleRideEvent(
     return;
   }
 
+  if (event.eventType === 'RIDE_ROUTE_UPDATED') {
+    const routePayload = {
+      rideId: event.rideId,
+      destination: event.destination,
+      stops: event.stops,
+      fareEstimateUsdt: event.fareEstimateUsdt,
+      updatedBy: event.updatedBy,
+    };
+
+    await registry.sendToUser(event.riderId, 'ride:route:updated', routePayload);
+
+    if (event.driverId) {
+      rideParticipants.set(event.rideId, {
+        riderId: event.riderId,
+        driverId: event.driverId,
+      });
+      await registry.sendToUser(event.driverId, 'ride:route:updated', routePayload);
+    }
+
+    return;
+  }
+
   if (event.eventType === 'RIDE_STARTED') {
     rideParticipants.set(event.rideId, {
       riderId: event.riderId,

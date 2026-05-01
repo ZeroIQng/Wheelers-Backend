@@ -182,6 +182,7 @@ async function main(): Promise<void> {
           riderWallet,
           pickup: { lat: 6.5244, lng: 3.3792, address: 'Pickup' },
           destination: { lat: 6.535, lng: 3.4, address: 'Destination' },
+          stops: [{ lat: 6.53, lng: 3.39, address: 'Coffee stop' }],
           fareEstimateUsdt: 2.5,
           paymentMethod: 'wallet_balance',
           timestamp: nowIso(),
@@ -192,6 +193,15 @@ async function main(): Promise<void> {
 
   await waitFor(() => seen.rideOffersByDriverId.has(driverId), 15_000, 'first ride offer');
   console.log('[test] got first ride offer');
+  await waitForDb(
+    async () => {
+      const stopCount = await prisma.rideStop.count({ where: { rideId } });
+      return stopCount === 2;
+    },
+    15_000,
+    'DB initial route stops',
+  );
+  console.log('[test] DB initial route stops persisted');
 
   // 3) Reject the nearest driver and expect ride-service to offer the next one.
   await producer.send({
@@ -250,6 +260,75 @@ async function main(): Promise<void> {
     'DB ride assignment',
   );
   console.log('[test] DB ride assignment persisted');
+
+  // 4b) Update the route mid-trip and verify the new stop list is stored.
+  await producer.send({
+    topic: TOPICS.RIDE_EVENTS,
+    messages: [
+      {
+        key: rideId,
+        value: JSON.stringify({
+          eventType: 'RIDE_ROUTE_UPDATE_REQUESTED',
+          rideId,
+          riderId,
+          driverId: secondDriverId,
+          destination: { lat: 6.54, lng: 3.405, address: 'Updated destination' },
+          stops: [
+            { lat: 6.53, lng: 3.39, address: 'Coffee stop' },
+            { lat: 6.536, lng: 3.397, address: 'Fuel stop' },
+          ],
+          fareEstimateUsdt: 3.1,
+          updatedBy: 'rider',
+          timestamp: nowIso(),
+        }),
+      },
+    ],
+  });
+
+  await waitForDb(
+    async () => {
+      const ride = await prisma.ride.findUnique({ where: { id: rideId } });
+      const routeStops = await prisma.rideStop.findMany({
+        where: { rideId },
+        orderBy: { stopOrder: 'asc' },
+      });
+      return ride?.destAddress === 'Updated destination' && routeStops.length === 3 && routeStops[2]?.address === 'Updated destination';
+    },
+    15_000,
+    'DB route update',
+  );
+  console.log('[test] DB route update persisted');
+
+  // 4c) Confirm the next stop and verify progress is persisted.
+  await producer.send({
+    topic: TOPICS.RIDE_EVENTS,
+    messages: [
+      {
+        key: rideId,
+        value: JSON.stringify({
+          eventType: 'RIDE_STOP_CONFIRMED',
+          rideId,
+          riderId,
+          driverId: secondDriverId,
+          confirmedBy: 'driver',
+          timestamp: nowIso(),
+        }),
+      },
+    ],
+  });
+
+  await waitForDb(
+    async () => {
+      const firstStop = await prisma.rideStop.findFirst({
+        where: { rideId },
+        orderBy: { stopOrder: 'asc' },
+      });
+      return firstStop?.status === 'COMPLETED';
+    },
+    15_000,
+    'DB stop confirmation',
+  );
+  console.log('[test] DB stop confirmation persisted');
 
   // 5) Send one GPS ping and expect gps.processed
   await producer.send({

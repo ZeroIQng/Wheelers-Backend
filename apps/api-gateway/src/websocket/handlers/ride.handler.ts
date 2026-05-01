@@ -4,9 +4,12 @@ import {
   FeedbackLoggedEvent,
   RideCancelledEvent,
   RideCompletedEvent,
+  RideCompletionRequestedEvent,
   RideDriverAssignedEvent,
   RideDriverRejectedEvent,
+  RideRouteUpdateRequestedEvent,
   RideRequestedEvent,
+  RideStopConfirmedEvent,
   RideStartedEvent,
 } from '@wheleers/kafka-schemas';
 import type { GatewayAuthContext } from '../../types';
@@ -62,6 +65,25 @@ function parseLatLng(payload: Record<string, unknown>, key: string): LatLngAddre
   return { lat, lng, address };
 }
 
+function parseStopList(payload: Record<string, unknown>, key: string): LatLngAddress[] {
+  const value = payload[key];
+  if (value === undefined) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid ${key} payload`);
+  }
+
+  return value.map((item, index) => {
+    if (!getRecord({ item }, 'item')) {
+      throw new Error(`Invalid ${key}[${index}] payload`);
+    }
+
+    return parseLatLng({ [key]: item }, key);
+  });
+}
+
 function normalizePaymentMethod(value: unknown): 'wallet_balance' | 'smart_account' {
   return value === 'smart_account' ? 'smart_account' : 'wallet_balance';
 }
@@ -100,6 +122,7 @@ export async function handleRideMessage(
     const rideId = getString(payload, 'rideId') ?? randomUUID();
     const pickup = parseLatLng(payload, 'pickup');
     const destination = parseLatLng(payload, 'destination');
+    const stops = parseStopList(payload, 'stops');
     const fareEstimateUsdt =
       getNumber(payload, 'fareEstimateUsdt') ??
       getNumber(payload, 'fareEstimate') ??
@@ -112,6 +135,7 @@ export async function handleRideMessage(
       riderWallet: requireAuthWalletAddress(payload, auth, 'riderWallet'),
       pickup,
       destination,
+      stops,
       fareEstimateUsdt,
       paymentMethod: normalizePaymentMethod(payload['paymentMethod']),
       timestamp,
@@ -125,6 +149,47 @@ export async function handleRideMessage(
         rideId: event.rideId,
         status: 'queued',
       },
+    };
+  }
+
+  if (type === 'ride:route:update') {
+    const riderId = getString(payload, 'riderId') ?? auth.userId;
+    const event = RideRouteUpdateRequestedEvent.parse({
+      eventType: 'RIDE_ROUTE_UPDATE_REQUESTED',
+      rideId: requireString(payload, 'rideId'),
+      riderId,
+      driverId: getString(payload, 'driverId'),
+      destination: parseLatLng(payload, 'destination'),
+      stops: parseStopList(payload, 'stops'),
+      fareEstimateUsdt: getNumber(payload, 'fareEstimateUsdt') ?? getNumber(payload, 'fareEstimate'),
+      updatedBy: auth.driverId ? 'driver' : 'rider',
+      timestamp,
+    });
+
+    await publisher.publishRideEvent(event);
+
+    return {
+      type: 'ride:route:update:accepted',
+      payload: { rideId: event.rideId },
+    };
+  }
+
+  if (type === 'ride:stop:confirm') {
+    const driverId = getString(payload, 'driverId') ?? auth.driverId ?? auth.userId;
+    const event = RideStopConfirmedEvent.parse({
+      eventType: 'RIDE_STOP_CONFIRMED',
+      rideId: requireString(payload, 'rideId'),
+      riderId: requireString(payload, 'riderId'),
+      driverId,
+      confirmedBy: auth.driverId ? 'driver' : 'rider',
+      timestamp,
+    });
+
+    await publisher.publishRideEvent(event);
+
+    return {
+      type: 'ride:stop:confirm:accepted',
+      payload: { rideId: event.rideId },
     };
   }
 
@@ -174,20 +239,18 @@ export async function handleRideMessage(
   }
 
   if (type === 'ride:end') {
-    const event = RideCompletedEvent.parse({
-      eventType: 'RIDE_COMPLETED',
+    const event = RideCompletionRequestedEvent.parse({
+      eventType: 'RIDE_COMPLETION_REQUESTED',
       rideId: requireString(payload, 'rideId'),
       riderId: requireString(payload, 'riderId'),
       driverId: requireString(payload, 'driverId'),
       riderWallet: requireString(payload, 'riderWallet').toLowerCase(),
       driverWallet: requireString(payload, 'driverWallet').toLowerCase(),
-      fareUsdt: requireNumber(payload, 'fareUsdt'),
-      distanceKm: requireNumber(payload, 'distanceKm'),
-      durationSeconds: requireNumber(payload, 'durationSeconds'),
+      fareUsdt: getNumber(payload, 'fareUsdt'),
       recordingCid: getString(payload, 'recordingCid'),
       recordingHash: getString(payload, 'recordingHash'),
       endedBy: normalizeEndedBy(payload['endedBy']),
-      completedAt: getString(payload, 'completedAt') ?? timestamp,
+      completedAt: getString(payload, 'completedAt'),
       timestamp,
     });
 

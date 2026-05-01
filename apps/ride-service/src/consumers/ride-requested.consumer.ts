@@ -5,6 +5,7 @@ import {
   safeParseKafkaEvent,
   TOPICS,
   type RideDriverRejectedEvent,
+  type RideRouteUpdateRequestedEvent,
   type RideRequestedEvent,
 } from '@wheleers/kafka-schemas';
 
@@ -35,6 +36,11 @@ export function createRideRequestedConsumer(params: {
         return;
       }
 
+      if (event.eventType === 'RIDE_ROUTE_UPDATE_REQUESTED') {
+        handleRouteUpdateRequested(event);
+        return;
+      }
+
       if (event.eventType === 'RIDE_DRIVER_ASSIGNED') {
         clearPendingMatch(event.rideId);
         state.rideParticipantsByRideId.set(event.rideId, {
@@ -52,11 +58,13 @@ export function createRideRequestedConsumer(params: {
 
       if (event.eventType === 'RIDE_CANCELLED') {
         clearPendingMatch(event.rideId);
+        state.routeByRideId.delete(event.rideId);
         returnAssignedDriverToPool(event.rideId);
         return;
       }
 
       if (event.eventType === 'RIDE_COMPLETED') {
+        state.routeByRideId.delete(event.rideId);
         returnAssignedDriverToPool(event.rideId);
         return;
       }
@@ -64,6 +72,25 @@ export function createRideRequestedConsumer(params: {
   };
 
   async function handleRideRequested(event: RideRequestedEvent): Promise<void> {
+    state.routeByRideId.set(event.rideId, [
+      ...event.stops.map((stop, index) => ({
+        stopOrder: index,
+        type: 'intermediate' as const,
+        status: 'pending' as const,
+        lat: stop.lat,
+        lng: stop.lng,
+        address: stop.address,
+      })),
+      {
+        stopOrder: event.stops.length,
+        type: 'final' as const,
+        status: 'pending' as const,
+        lat: event.destination.lat,
+        lng: event.destination.lng,
+        address: event.destination.address,
+      },
+    ]);
+
     // Persist (best-effort). A duplicate event should still be allowed to resume matching.
     try {
       await rideClient.create({
@@ -75,6 +102,7 @@ export function createRideRequestedConsumer(params: {
         destLat: event.destination.lat,
         destLng: event.destination.lng,
         destAddress: event.destination.address,
+        stops: event.stops,
         fareEstimateUsdt: event.fareEstimateUsdt,
         status: 'MATCHING',
       });
@@ -126,6 +154,19 @@ export function createRideRequestedConsumer(params: {
     pending.offeredDriverId = null;
 
     await offerNextDriver(event.rideId);
+  }
+
+  function handleRouteUpdateRequested(event: RideRouteUpdateRequestedEvent): void {
+    const pending = state.pendingMatchesByRideId.get(event.rideId);
+    if (!pending) return;
+
+    pending.rideRequested = {
+      ...pending.rideRequested,
+      destination: event.destination,
+      stops: event.stops,
+      fareEstimateUsdt: event.fareEstimateUsdt ?? pending.rideRequested.fareEstimateUsdt,
+      timestamp: event.timestamp,
+    };
   }
 
   async function offerNextDriver(rideId: string): Promise<void> {

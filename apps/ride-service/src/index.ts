@@ -34,6 +34,17 @@ export type RideGpsState = {
   lastStaleWarningAt: Date | null;
 };
 
+export type RideRouteStopState = {
+  stopId?: string;
+  stopOrder: number;
+  type: 'intermediate' | 'final';
+  status: 'pending' | 'completed' | 'skipped';
+  lat: number;
+  lng: number;
+  address: string;
+  completedAt?: string;
+};
+
 export type PendingRideMatch = {
   rideRequested: RideRequestedEvent;
   candidates: OnlineDriver[];
@@ -52,6 +63,7 @@ export type RideServiceState = {
   assignedDriversByRideId: Map<string, OnlineDriver>;
   rideParticipantsByRideId: Map<string, RideParticipantState>;
   gpsByRideId: Map<string, RideGpsState>;
+  routeByRideId: Map<string, RideRouteStopState[]>;
   pendingMatchesByRideId: Map<string, PendingRideMatch>;
 };
 
@@ -82,13 +94,17 @@ async function bootstrap(): Promise<void> {
     assignedDriversByRideId: new Map(),
     rideParticipantsByRideId: new Map(),
     gpsByRideId: new Map(),
+    routeByRideId: new Map(),
     pendingMatchesByRideId: new Map(),
   };
 
   const rideEventsProducer = createRideEventsProducer(producer);
   const gpsProcessedProducer = createGpsProcessedProducer(producer);
 
-  const tripLifecycle = createTripLifecycleHandler(state);
+  const tripLifecycle = createTripLifecycleHandler({
+    state,
+    rideEventsProducer,
+  });
 
   const driverEventsConsumer = createDriverEventsConsumer({
     state,

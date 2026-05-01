@@ -15,6 +15,7 @@ export type {
   User,
   Driver,
   Ride,
+  RideStop,
   Wallet,
   VirtualAccount,
   PaymentIntent,
@@ -49,4 +50,6 @@ export {
   PaymentIntentStatus,
   PaymentSessionType,
   RideHoldStatus,
+  RideStopStatus,
+  RideStopType,
 } from '@prisma/client';

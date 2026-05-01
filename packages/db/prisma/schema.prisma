@@ -143,6 +143,17 @@ enum RideHoldStatus {
   CHARGED
 }
 
+enum RideStopType {
+  INTERMEDIATE
+  FINAL
+}
+
+enum RideStopStatus {
+  PENDING
+  COMPLETED
+  SKIPPED
+}
+
 // ─── User & Auth ──────────────────────────────────────────────────────────────
 
 model User {
@@ -409,11 +420,30 @@ model Ride {
   updatedAt       DateTime    @updatedAt
 
   gpsLogs         GpsLog[]
+  routeStops      RideStop[]
   disputes        Dispute[]
 
   @@index([riderId, createdAt])
   @@index([driverId, status])
   @@index([status])
+}
+
+model RideStop {
+  id          String         @id @default(uuid())
+  rideId       String
+  ride         Ride           @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  stopOrder    Int
+  type         RideStopType   @default(INTERMEDIATE)
+  status       RideStopStatus @default(PENDING)
+  lat          Float
+  lng          Float
+  address      String
+  completedAt  DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@unique([rideId, stopOrder])
+  @@index([rideId, status, stopOrder])
 }
 
 // GPS snapshots written periodically during a ride for dispute evidence.

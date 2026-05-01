@@ -30,6 +30,13 @@ export const GpsProcessedEvent = z.object({
   distanceFromLastKm: z.number(),  // distance since previous GPS_UPDATE
   totalDistanceKm:  z.number(),    // cumulative for this ride
   isStale:          z.boolean(),   // true if <50m moved in last 5 minutes
+  isConsistent:     z.boolean(),   // false when this ping is too inaccurate or implies teleporting
+  inconsistencyReason: z.enum(['poor_accuracy', 'impossible_speed']).optional(),
+  ignoredDistanceKm: z.number().optional(),
+  distanceToNextStopKm: z.number().optional(),
+  nextStopAddress:  z.string().optional(),
+  nextStopOrder:    z.number().int().nonnegative().optional(),
+  remainingStopCount: z.number().int().nonnegative().optional(),
   timestamp:        z.string().datetime(),
 });
 

@@ -4,12 +4,19 @@ import type { MessageContext } from '@wheleers/kafka-client';
 import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
 
 import type { RideServiceState } from '../index';
+import type { RideEventsProducer } from '../producers/ride-events.producer';
 
 export type TripLifecycleHandler = {
   handleRideEvent(value: unknown, ctx: MessageContext): Promise<void>;
 };
 
-export function createTripLifecycleHandler(state?: RideServiceState): TripLifecycleHandler {
+export function createTripLifecycleHandler(params?: {
+  state?: RideServiceState;
+  rideEventsProducer?: RideEventsProducer;
+}): TripLifecycleHandler {
+  const state = params?.state;
+  const rideEventsProducer = params?.rideEventsProducer;
+
   return {
     async handleRideEvent(value, ctx) {
       if (ctx.topic !== TOPICS.RIDE_EVENTS) return;
@@ -40,6 +47,44 @@ export function createTripLifecycleHandler(state?: RideServiceState): TripLifecy
           await rideClient.start(event.rideId, event.recordingId);
         } catch (err) {
           console.warn(`[ride-service] ride start skipped:`, (err as any)?.message ?? err);
+        }
+      }
+
+      if (event.eventType === 'RIDE_ROUTE_UPDATE_REQUESTED') {
+        try {
+          const routeStops = await rideClient.syncRouteStops(event.rideId, {
+            destination: event.destination,
+            stops: event.stops,
+          });
+          await publishRouteUpdatedSnapshot({
+            rideId: event.rideId,
+            riderId: event.riderId,
+            driverId: event.driverId,
+            fareEstimateUsdt: event.fareEstimateUsdt,
+            updatedBy: event.updatedBy,
+            routeStops,
+          });
+        } catch (err) {
+          console.warn(`[ride-service] route update skipped:`, (err as any)?.message ?? err);
+        }
+      }
+
+      if (event.eventType === 'RIDE_STOP_CONFIRMED') {
+        try {
+          const result = await rideClient.completeNextStop(event.rideId);
+          if (!result) {
+            return;
+          }
+
+          await publishRouteUpdatedSnapshot({
+            rideId: event.rideId,
+            riderId: event.riderId,
+            driverId: event.driverId,
+            updatedBy: event.confirmedBy,
+            routeStops: result.routeStops,
+          });
+        } catch (err) {
+          console.warn(`[ride-service] stop confirmation skipped:`, (err as any)?.message ?? err);
         }
       }
 
@@ -84,6 +129,68 @@ export function createTripLifecycleHandler(state?: RideServiceState): TripLifecy
       }
     },
   };
+
+  async function publishRouteUpdatedSnapshot(params: {
+    rideId: string;
+    riderId: string;
+    driverId?: string;
+    fareEstimateUsdt?: number;
+    updatedBy: 'rider' | 'driver' | 'system';
+    routeStops: Array<{
+      id: string;
+      stopOrder: number;
+      type: 'INTERMEDIATE' | 'FINAL';
+      status: 'PENDING' | 'COMPLETED' | 'SKIPPED';
+      lat: number;
+      lng: number;
+      address: string;
+      completedAt: Date | null;
+    }>;
+  }): Promise<void> {
+    if (!rideEventsProducer) {
+      return;
+    }
+
+    let driverId = params.driverId;
+    if (!driverId) {
+      try {
+        const ride = await rideClient.findById(params.rideId);
+        driverId = ride.driverId ?? undefined;
+      } catch {
+        driverId = undefined;
+      }
+    }
+
+    const finalStop = params.routeStops.find((stop) => stop.type === 'FINAL');
+    if (!finalStop) {
+      return;
+    }
+
+    await rideEventsProducer.rideRouteUpdated({
+      eventType: 'RIDE_ROUTE_UPDATED',
+      rideId: params.rideId,
+      riderId: params.riderId,
+      driverId,
+      destination: {
+        lat: finalStop.lat,
+        lng: finalStop.lng,
+        address: finalStop.address,
+      },
+      stops: params.routeStops.map((stop) => ({
+        stopId: stop.id,
+        stopOrder: stop.stopOrder,
+        type: stop.type === 'FINAL' ? 'final' : 'intermediate',
+        status: stop.status.toLowerCase() as 'pending' | 'completed' | 'skipped',
+        lat: stop.lat,
+        lng: stop.lng,
+        address: stop.address,
+        ...(stop.completedAt ? { completedAt: stop.completedAt.toISOString() } : {}),
+      })),
+      fareEstimateUsdt: params.fareEstimateUsdt,
+      updatedBy: params.updatedBy,
+      timestamp: new Date().toISOString(),
+    });
+  }
 }
 
 function round2(value: number): number {
