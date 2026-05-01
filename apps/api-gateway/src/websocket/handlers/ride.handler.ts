@@ -1,9 +1,9 @@
 import { randomUUID } from 'crypto';
+import { OpenRouteServiceClient, RoutePlanningError } from '@wheleers/config';
 import {
   DisputeOpenedEvent,
   FeedbackLoggedEvent,
   RideCancelledEvent,
-  RideCompletedEvent,
   RideCompletionRequestedEvent,
   RideDriverAssignedEvent,
   RideDriverRejectedEvent,
@@ -115,6 +115,7 @@ export async function handleRideMessage(
   payload: Record<string, unknown>,
   auth: GatewayAuthContext,
   publisher: GatewayPublisher,
+  routePlanner: OpenRouteServiceClient,
 ): Promise<HandlerResponse | null> {
   const timestamp = new Date().toISOString();
 
@@ -123,10 +124,11 @@ export async function handleRideMessage(
     const pickup = parseLatLng(payload, 'pickup');
     const destination = parseLatLng(payload, 'destination');
     const stops = parseStopList(payload, 'stops');
-    const fareEstimateUsdt =
-      getNumber(payload, 'fareEstimateUsdt') ??
-      getNumber(payload, 'fareEstimate') ??
-      requireNumber(payload, 'fareEstimateUsdt');
+    const plannedRoute = await routePlanner.planRoute({
+      origin: pickup,
+      stops,
+      destination,
+    });
 
     const event = RideRequestedEvent.parse({
       eventType: 'RIDE_REQUESTED',
@@ -136,7 +138,9 @@ export async function handleRideMessage(
       pickup,
       destination,
       stops,
-      fareEstimateUsdt,
+      plannedDistanceKm: plannedRoute.distanceKm,
+      plannedDurationSeconds: plannedRoute.durationSeconds,
+      fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
       paymentMethod: normalizePaymentMethod(payload['paymentMethod']),
       timestamp,
     });
@@ -148,20 +152,35 @@ export async function handleRideMessage(
       payload: {
         rideId: event.rideId,
         status: 'queued',
+        plannedDistanceKm: event.plannedDistanceKm,
+        plannedDurationSeconds: event.plannedDurationSeconds,
+        fareEstimateUsdt: event.fareEstimateUsdt,
       },
     };
   }
 
   if (type === 'ride:route:update') {
     const riderId = getString(payload, 'riderId') ?? auth.userId;
+    const origin = getRecord(payload, 'origin') ? parseLatLng(payload, 'origin') : undefined;
+    const destination = parseLatLng(payload, 'destination');
+    const stops = parseStopList(payload, 'stops');
+    const plannedRoute = origin
+      ? await routePlanner.planRoute({
+          origin,
+          stops,
+          destination,
+        })
+      : null;
     const event = RideRouteUpdateRequestedEvent.parse({
       eventType: 'RIDE_ROUTE_UPDATE_REQUESTED',
       rideId: requireString(payload, 'rideId'),
       riderId,
       driverId: getString(payload, 'driverId'),
-      destination: parseLatLng(payload, 'destination'),
-      stops: parseStopList(payload, 'stops'),
-      fareEstimateUsdt: getNumber(payload, 'fareEstimateUsdt') ?? getNumber(payload, 'fareEstimate'),
+      destination,
+      stops,
+      plannedDistanceKm: plannedRoute?.distanceKm,
+      plannedDurationSeconds: plannedRoute?.durationSeconds,
+      fareEstimateUsdt: plannedRoute?.fareEstimateUsdt,
       updatedBy: auth.driverId ? 'driver' : 'rider',
       timestamp,
     });
@@ -170,7 +189,12 @@ export async function handleRideMessage(
 
     return {
       type: 'ride:route:update:accepted',
-      payload: { rideId: event.rideId },
+      payload: {
+        rideId: event.rideId,
+        plannedDistanceKm: event.plannedDistanceKm,
+        plannedDurationSeconds: event.plannedDurationSeconds,
+        fareEstimateUsdt: event.fareEstimateUsdt,
+      },
     };
   }
 

@@ -1,5 +1,6 @@
 import { createServer, type ServerResponse } from 'http';
 import {
+  OpenRouteServiceClient,
   buildTopicList,
   createConsumer,
   createProducer,
@@ -98,6 +99,11 @@ async function bootstrap(): Promise<void> {
   const pouchClient = new PouchClient(
     gatewayEnv.POUCH_BASE_URL,
     gatewayEnv.POUCH_API_KEY,
+  );
+  const routePlanner = new OpenRouteServiceClient(
+    gatewayEnv.OPENROUTESERVICE_BASE_URL,
+    gatewayEnv.OPENROUTESERVICE_API_KEY,
+    gatewayEnv.OPENROUTESERVICE_PROFILE,
   );
   const registry = new SocketRegistry({
     instanceId: `${sharedEnv.KAFKA_CLIENT_ID}-${process.pid}-${Math.random().toString(16).slice(2, 8)}`,
@@ -327,6 +333,7 @@ async function bootstrap(): Promise<void> {
     idleTimeoutMs: Number(gatewayEnv.WS_IDLE_TIMEOUT_MS),
     registry,
     publisher,
+    routePlanner,
   });
 
   await startGatewayKafkaConsumer({
