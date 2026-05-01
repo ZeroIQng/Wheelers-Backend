@@ -33,6 +33,10 @@ For the wallet/payment persistence integration test:
 
 `cmd /c npm run test:wallet-payment-integration`
 
+For the wallet-service event-flow tests:
+
+`cmd /c npm run test:wallet-service`
+
 Optional:
 
 - Set brokers: `set KAFKA_BROKERS=localhost:29092` (Windows `cmd`)
