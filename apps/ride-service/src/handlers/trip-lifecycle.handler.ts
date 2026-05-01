@@ -1,4 +1,4 @@
-import { FEES } from '@wheleers/config';
+import { FEES, OpenRouteServiceClient } from '@wheleers/config';
 import { CancelStage, DriverStatus, driverClient, rideClient } from '@wheleers/db';
 import type { MessageContext } from '@wheleers/kafka-client';
 import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
@@ -13,9 +13,11 @@ export type TripLifecycleHandler = {
 export function createTripLifecycleHandler(params?: {
   state?: RideServiceState;
   rideEventsProducer?: RideEventsProducer;
+  routePlanner?: OpenRouteServiceClient;
 }): TripLifecycleHandler {
   const state = params?.state;
   const rideEventsProducer = params?.rideEventsProducer;
+  const routePlanner = params?.routePlanner;
 
   return {
     async handleRideEvent(value, ctx) {
@@ -52,17 +54,30 @@ export function createTripLifecycleHandler(params?: {
 
       if (event.eventType === 'RIDE_ROUTE_UPDATE_REQUESTED') {
         try {
+          const plannedRoute =
+            event.plannedDistanceKm !== undefined &&
+            event.plannedDurationSeconds !== undefined &&
+            event.fareEstimateUsdt !== undefined
+              ? {
+                  distanceKm: event.plannedDistanceKm,
+                  durationSeconds: event.plannedDurationSeconds,
+                  fareEstimateUsdt: event.fareEstimateUsdt,
+                }
+              : await planUpdatedRoute(event.rideId, event.destination, event.stops);
+
           const routeStops = await rideClient.syncRouteStops(event.rideId, {
             destination: event.destination,
             stops: event.stops,
-            fareEstimateUsdt: event.fareEstimateUsdt,
+            fareEstimateUsdt: plannedRoute?.fareEstimateUsdt ?? event.fareEstimateUsdt,
           });
           syncRouteState(event.rideId, routeStops);
           await publishRouteUpdatedSnapshot({
             rideId: event.rideId,
             riderId: event.riderId,
             driverId: event.driverId,
-            fareEstimateUsdt: event.fareEstimateUsdt,
+            plannedDistanceKm: plannedRoute?.distanceKm ?? event.plannedDistanceKm,
+            plannedDurationSeconds: plannedRoute?.durationSeconds ?? event.plannedDurationSeconds,
+            fareEstimateUsdt: plannedRoute?.fareEstimateUsdt ?? event.fareEstimateUsdt,
             updatedBy: event.updatedBy,
             routeStops,
           });
@@ -188,6 +203,8 @@ export function createTripLifecycleHandler(params?: {
     rideId: string;
     riderId: string;
     driverId?: string;
+    plannedDistanceKm?: number;
+    plannedDurationSeconds?: number;
     fareEstimateUsdt?: number;
     updatedBy: 'rider' | 'driver' | 'system';
     routeStops: Array<{
@@ -240,9 +257,33 @@ export function createTripLifecycleHandler(params?: {
         address: stop.address,
         ...(stop.completedAt ? { completedAt: stop.completedAt.toISOString() } : {}),
       })),
+      plannedDistanceKm: params.plannedDistanceKm,
+      plannedDurationSeconds: params.plannedDurationSeconds,
       fareEstimateUsdt: params.fareEstimateUsdt,
       updatedBy: params.updatedBy,
       timestamp: new Date().toISOString(),
+    });
+  }
+
+  async function planUpdatedRoute(
+    rideId: string,
+    destination: { lat: number; lng: number },
+    stops: Array<{ lat: number; lng: number }>,
+  ): Promise<{ distanceKm: number; durationSeconds: number; fareEstimateUsdt: number } | null> {
+    if (!routePlanner) {
+      return null;
+    }
+
+    const ride = await rideClient.findById(rideId);
+    const gpsState = state?.gpsByRideId.get(rideId);
+    const origin = gpsState
+      ? { lat: gpsState.lastLat, lng: gpsState.lastLng }
+      : { lat: ride.pickupLat, lng: ride.pickupLng };
+
+    return routePlanner.planRoute({
+      origin,
+      stops,
+      destination,
     });
   }
 

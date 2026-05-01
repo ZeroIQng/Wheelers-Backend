@@ -164,6 +164,9 @@ export function createRideRequestedConsumer(params: {
       ...pending.rideRequested,
       destination: event.destination,
       stops: event.stops,
+      plannedDistanceKm: event.plannedDistanceKm ?? pending.rideRequested.plannedDistanceKm,
+      plannedDurationSeconds:
+        event.plannedDurationSeconds ?? pending.rideRequested.plannedDurationSeconds,
       fareEstimateUsdt: event.fareEstimateUsdt ?? pending.rideRequested.fareEstimateUsdt,
       timestamp: event.timestamp,
     };

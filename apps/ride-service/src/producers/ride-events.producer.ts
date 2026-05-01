@@ -78,6 +78,12 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
           destinationAddress: rideRequested.destination.address,
           stops: JSON.stringify(rideRequested.stops),
           stopCount: String(stopCount),
+          plannedDistanceKm:
+            rideRequested.plannedDistanceKm === undefined ? '' : String(rideRequested.plannedDistanceKm),
+          plannedDurationSeconds:
+            rideRequested.plannedDurationSeconds === undefined
+              ? ''
+              : String(rideRequested.plannedDurationSeconds),
           fareEstimateUsdt: String(rideRequested.fareEstimateUsdt),
           expiresAt: expiresAt.toISOString(),
         },
