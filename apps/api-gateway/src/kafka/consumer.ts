@@ -97,6 +97,7 @@ async function handleRideEvent(
     await registry.sendToUser(event.riderId, 'ride:matched', {
       rideId: event.rideId,
       driverId: event.driverId,
+      driverWallet: event.driverWallet,
       driverName: event.driverName,
       driverRating: event.driverRating,
       vehiclePlate: event.vehiclePlate,
