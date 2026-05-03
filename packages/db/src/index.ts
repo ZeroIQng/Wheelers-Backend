@@ -5,6 +5,7 @@ export { prisma } from './prisma';
 export { userClient }       from './clients/user.client';
 export { driverClient }     from './clients/driver.client';
 export { rideClient }       from './clients/rider.client';
+export { scheduledRideClient } from './clients/scheduled-ride.client';
 export { paymentClient }    from './clients/payment.client';
 export { walletClient }     from './clients/wallet.client';
 export { complianceClient } from './clients/compliance.client';
@@ -16,6 +17,7 @@ export type {
   Driver,
   Ride,
   RideStop,
+  ScheduledRide,
   Wallet,
   VirtualAccount,
   PaymentIntent,
@@ -52,4 +54,6 @@ export {
   RideHoldStatus,
   RideStopStatus,
   RideStopType,
+  ScheduledRideStatus,
+  ScheduledRidePaymentMethod,
 } from '@prisma/client';

@@ -154,6 +154,19 @@ enum RideStopStatus {
   SKIPPED
 }
 
+enum ScheduledRideStatus {
+  SCHEDULED
+  DISPATCHING
+  DISPATCHED
+  CANCELLED
+  EXPIRED
+}
+
+enum ScheduledRidePaymentMethod {
+  WALLET_BALANCE
+  SMART_ACCOUNT
+}
+
 // ─── User & Auth ──────────────────────────────────────────────────────────────
 
 model User {
@@ -444,6 +457,37 @@ model RideStop {
 
   @@unique([rideId, stopOrder])
   @@index([rideId, status, stopOrder])
+}
+
+model ScheduledRide {
+  id                     String                    @id @default(uuid())
+  riderId                String
+  riderWallet            String
+  status                 ScheduledRideStatus      @default(SCHEDULED)
+  paymentMethod          ScheduledRidePaymentMethod @default(WALLET_BALANCE)
+  scheduledFor           DateTime
+  requestedRideId        String?                   @unique
+
+  pickupLat              Float
+  pickupLng              Float
+  pickupAddress          String
+  destLat                Float
+  destLng                Float
+  destAddress            String
+  stops                  Json?
+
+  plannedDistanceKm      Float?
+  plannedDurationSeconds Int?
+  fareEstimateUsdt       Decimal?                  @db.Decimal(18, 6)
+
+  cancellationReason     String?
+  cancelledAt            DateTime?
+  dispatchedAt           DateTime?
+  createdAt              DateTime                  @default(now())
+  updatedAt              DateTime                  @updatedAt
+
+  @@index([riderId, scheduledFor])
+  @@index([status, scheduledFor])
 }
 
 // GPS snapshots written periodically during a ride for dispute evidence.

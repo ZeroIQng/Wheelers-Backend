@@ -7,6 +7,8 @@ const RideEnvSchema = z.object({
   DRIVER_ACCEPT_TIMEOUT_S:   z.string().default('15'),
   // How many drivers to attempt matching before giving up and emitting RIDE_CANCELLED
   MAX_MATCH_ATTEMPTS:        z.string().default('5'),
+  SCHEDULED_RIDE_DISPATCH_INTERVAL_S: z.string().default('20'),
+  SCHEDULED_RIDE_DISPATCH_LEAD_TIME_S: z.string().default('300'),
   // GPS stale detection — run every N seconds
   GPS_STALE_CHECK_INTERVAL_S: z.string().default('30'),
   OPENROUTESERVICE_API_KEY:  z.string().min(1),

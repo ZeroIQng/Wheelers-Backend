@@ -17,6 +17,9 @@ import {
 import { TOPICS } from '@wheleers/kafka-schemas';
 import { handlePrivyAuthRoute } from './http/auth.route';
 import {
+  handleCancelScheduledRideRoute,
+  handleCreateScheduledRideRoute,
+  handleListScheduledRidesRoute,
   handleRideEstimateRoute,
   handleRiderRideHistoryRoute,
 } from './http/ride.route';
@@ -214,6 +217,49 @@ async function bootstrap(): Promise<void> {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
       }, url);
+      return;
+    }
+
+    if (url.pathname === '/scheduled-rides') {
+      if (req.method === 'GET') {
+        await handleListScheduledRidesRoute(req, res, {
+          privyAppId: gatewayEnv.PRIVY_APP_ID,
+          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+          routePlanner,
+        }, url);
+        return;
+      }
+
+      if (req.method === 'POST') {
+        await handleCreateScheduledRideRoute(req, res, {
+          privyAppId: gatewayEnv.PRIVY_APP_ID,
+          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+          routePlanner,
+        });
+        return;
+      }
+
+      sendMethodNotAllowed(res);
+      return;
+    }
+
+    if (url.pathname.startsWith('/scheduled-rides/')) {
+      const scheduledRideMatch = url.pathname.match(/^\/scheduled-rides\/([^/]+)\/cancel$/);
+      if (!scheduledRideMatch) {
+        sendJson(res, 404, { error: 'Not found' });
+        return;
+      }
+
+      if (req.method !== 'POST') {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleCancelScheduledRideRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        routePlanner,
+      }, decodeURIComponent(scheduledRideMatch[1]));
       return;
     }
 

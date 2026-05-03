@@ -1,5 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { rideClient } from '@wheleers/db';
+import {
+  ScheduledRidePaymentMethod,
+  scheduledRideClient,
+  rideClient,
+} from '@wheleers/db';
 import { OpenRouteServiceClient } from '@wheleers/config';
 import { authenticateHttpUser } from './authenticate';
 import { readJsonBody, sendJson } from './utils';
@@ -14,6 +18,12 @@ interface RideRouteDeps {
 interface RideHistoryRouteDeps {
   privyAppId: string;
   privyVerificationKey: string;
+}
+
+interface ScheduledRideRouteDeps {
+  privyAppId: string;
+  privyVerificationKey: string;
+  routePlanner: OpenRouteServiceClient;
 }
 
 type LatLngAddress = {
@@ -97,6 +107,53 @@ function decimalToNumber(value: unknown): number | null {
   return null;
 }
 
+function parseScheduledFor(value: unknown): Date {
+  if (typeof value !== 'string') {
+    throw new Error('scheduledFor must be an ISO datetime string');
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error('scheduledFor must be a valid ISO datetime string');
+  }
+
+  return parsed;
+}
+
+function normalizeScheduledPaymentMethod(
+  value: unknown,
+): ScheduledRidePaymentMethod {
+  return value === 'smart_account'
+    ? ScheduledRidePaymentMethod.SMART_ACCOUNT
+    : ScheduledRidePaymentMethod.WALLET_BALANCE;
+}
+
+function mapScheduledPaymentMethod(
+  value: ScheduledRidePaymentMethod,
+): 'wallet_balance' | 'smart_account' {
+  return value === ScheduledRidePaymentMethod.SMART_ACCOUNT
+    ? 'smart_account'
+    : 'wallet_balance';
+}
+
+function mapScheduledRideItem(
+  ride: Awaited<ReturnType<typeof scheduledRideClient.findByRider>>[number],
+) {
+  return {
+    id: ride.id,
+    status: ride.status,
+    scheduledFor: ride.scheduledFor.toISOString(),
+    paymentMethod: mapScheduledPaymentMethod(ride.paymentMethod),
+    pickupAddress: ride.pickupAddress,
+    destAddress: ride.destAddress,
+    plannedDistanceKm: ride.plannedDistanceKm ?? null,
+    plannedDurationSeconds: ride.plannedDurationSeconds ?? null,
+    fareEstimateUsdt: decimalToNumber(ride.fareEstimateUsdt),
+    requestedRideId: ride.requestedRideId ?? null,
+    createdAt: ride.createdAt.toISOString(),
+  };
+}
+
 export async function handleRideEstimateRoute(
   req: IncomingMessage,
   res: ServerResponse,
@@ -167,6 +224,113 @@ export async function handleRiderRideHistoryRoute(
   } catch (error) {
     sendJson(res, 401, {
       error: error instanceof Error ? error.message : 'Could not load ride history',
+    });
+  }
+}
+
+export async function handleCreateScheduledRideRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: ScheduledRideRouteDeps,
+): Promise<void> {
+  try {
+    const user = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
+    if (!user.walletAddress) {
+      sendJson(res, 400, { error: 'Link a wallet before scheduling a ride.' });
+      return;
+    }
+
+    const rawBody = await readJsonBody(req);
+    if (!isRecord(rawBody)) {
+      sendJson(res, 400, { error: 'Body must be a JSON object' });
+      return;
+    }
+
+    const scheduledFor = parseScheduledFor(rawBody['scheduledFor']);
+    const pickup = parseWaypoint(rawBody, 'pickup');
+    const destination = parseWaypoint(rawBody, 'destination');
+    const stops = parseStops(rawBody, 'stops');
+    const plannedRoute = await deps.routePlanner.planRoute({
+      origin: pickup,
+      stops,
+      destination,
+    });
+
+    const scheduledRide = await scheduledRideClient.create({
+      riderId: user.id,
+      riderWallet: user.walletAddress.toLowerCase(),
+      scheduledFor,
+      paymentMethod: normalizeScheduledPaymentMethod(rawBody['paymentMethod']),
+      pickupLat: pickup.lat,
+      pickupLng: pickup.lng,
+      pickupAddress: pickup.address,
+      destLat: destination.lat,
+      destLng: destination.lng,
+      destAddress: destination.address,
+      stops,
+      plannedDistanceKm: plannedRoute.distanceKm,
+      plannedDurationSeconds: plannedRoute.durationSeconds,
+      fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
+    });
+
+    sendJson(res, 201, {
+      item: mapScheduledRideItem(scheduledRide),
+    });
+  } catch (error) {
+    sendJson(res, 400, {
+      error: error instanceof Error ? error.message : 'Could not schedule ride',
+    });
+  }
+}
+
+export async function handleListScheduledRidesRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: ScheduledRideRouteDeps,
+  url: URL,
+): Promise<void> {
+  try {
+    const user = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
+    const limit = parseLimit(url.searchParams.get('limit'));
+    const cursor = url.searchParams.get('cursor') ?? undefined;
+    const rides = await scheduledRideClient.findByRider(user.id, limit, cursor);
+
+    sendJson(res, 200, {
+      items: rides.map(mapScheduledRideItem),
+      nextCursor: rides.length === limit ? rides[rides.length - 1]?.id ?? null : null,
+    });
+  } catch (error) {
+    sendJson(res, 401, {
+      error: error instanceof Error ? error.message : 'Could not load scheduled rides',
+    });
+  }
+}
+
+export async function handleCancelScheduledRideRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: ScheduledRideRouteDeps,
+  scheduledRideId: string,
+): Promise<void> {
+  try {
+    const user = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
+    const rawBody = await readJsonBody(req).catch(() => ({}));
+    const reason =
+      isRecord(rawBody) && typeof rawBody['reason'] === 'string' ? rawBody['reason'] : undefined;
+    const result = await scheduledRideClient.cancel(scheduledRideId, user.id, reason);
+
+    if (result.count === 0) {
+      sendJson(res, 404, { error: 'Scheduled ride not found or already closed.' });
+      return;
+    }
+
+    sendJson(res, 200, {
+      cancelled: true,
+      scheduledRideId,
+    });
+  } catch (error) {
+    sendJson(res, 400, {
+      error: error instanceof Error ? error.message : 'Could not cancel scheduled ride',
     });
   }
 }

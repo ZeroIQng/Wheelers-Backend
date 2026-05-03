@@ -10,6 +10,7 @@ import { createRideRequestedConsumer } from './consumers/ride-requested.consumer
 import { createGpsUpdateConsumer } from './consumers/gps-update.consumer';
 
 import { startGpsMonitor } from './handlers/gps-monitor.handler';
+import { startScheduledRideDispatcher } from './handlers/scheduled-rides.handler';
 import { createTripLifecycleHandler } from './handlers/trip-lifecycle.handler';
 import type { RideRequestedEvent } from '@wheleers/kafka-schemas';
 
@@ -157,6 +158,11 @@ async function bootstrap(): Promise<void> {
 
   startGpsMonitor({
     state,
+    rideEnv,
+    rideEventsProducer,
+  });
+
+  startScheduledRideDispatcher({
     rideEnv,
     rideEventsProducer,
   });

@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import type { OnlineDriver } from '../index';
 
 export type RideEventsProducer = {
+  rideRequested(event: RideRequestedEvent): Promise<void>;
   rideDriverAssigned(event: RideDriverAssignedEvent): Promise<void>;
   rideDriverRejected(event: RideDriverRejectedEvent): Promise<void>;
   rideCancelled(event: RideCancelledEvent): Promise<void>;
@@ -31,6 +32,10 @@ export type RideEventsProducer = {
 
 export function createRideEventsProducer(producer: WheelersProducer): RideEventsProducer {
   return {
+    async rideRequested(event) {
+      await producer.send(TOPICS.RIDE_EVENTS, event as any, { key: event.rideId });
+    },
+
     async rideDriverAssigned(event) {
       await producer.send(TOPICS.RIDE_EVENTS, event as any, { key: event.rideId });
     },
