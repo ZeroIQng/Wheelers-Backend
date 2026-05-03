@@ -17,12 +17,19 @@ function parseStops(value: Prisma.JsonValue | null | undefined): ScheduledStopIn
   }
 
   return value
-    .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
-    .map((item) => ({
-      lat: typeof item.lat === 'number' ? item.lat : 0,
-      lng: typeof item.lng === 'number' ? item.lng : 0,
-      address: typeof item.address === 'string' ? item.address : '',
-    }))
+    .map((item) => {
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      return {
+        lat: typeof record.lat === 'number' ? record.lat : 0,
+        lng: typeof record.lng === 'number' ? record.lng : 0,
+        address: typeof record.address === 'string' ? record.address : '',
+      };
+    })
+    .filter((item): item is ScheduledStopInput => item !== null)
     .filter((item) => Number.isFinite(item.lat) && Number.isFinite(item.lng) && item.address.length > 0);
 }
 
