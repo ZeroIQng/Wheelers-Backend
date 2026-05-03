@@ -17,6 +17,10 @@ import {
 import { TOPICS } from '@wheleers/kafka-schemas';
 import { handlePrivyAuthRoute } from './http/auth.route';
 import {
+  handleRideEstimateRoute,
+  handleRiderRideHistoryRoute,
+} from './http/ride.route';
+import {
   handlePouchChannelsRoute,
   handlePouchCreateSessionRoute,
   handlePouchGetSessionRoute,
@@ -183,6 +187,33 @@ async function bootstrap(): Promise<void> {
         twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
         twilioOtpTtlSeconds: gatewayEnv.TWILIO_OTP_TTL_SECONDS,
       });
+      return;
+    }
+
+    if (url.pathname === '/rides/estimate') {
+      if (req.method !== 'POST') {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleRideEstimateRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        routePlanner,
+      });
+      return;
+    }
+
+    if (url.pathname === '/rides/history') {
+      if (req.method !== 'GET') {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleRiderRideHistoryRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+      }, url);
       return;
     }
 
