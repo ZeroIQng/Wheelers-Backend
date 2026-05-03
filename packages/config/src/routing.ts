@@ -20,11 +20,15 @@ export class RoutePlanningError extends Error {
 }
 
 export class OpenRouteServiceClient {
+  private readonly normalizedBaseUrl: URL;
+
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
     private readonly profile = 'driving-car',
-  ) {}
+  ) {
+    this.normalizedBaseUrl = normalizeOpenRouteServiceBaseUrl(baseUrl);
+  }
 
   async planRoute(params: {
     origin: RouteWaypoint;
@@ -42,7 +46,10 @@ export class OpenRouteServiceClient {
     }
 
     const response = await fetch(
-      new URL(`/v2/directions/${encodeURIComponent(this.profile)}/json`, this.baseUrl),
+      new URL(
+        `v2/directions/${encodeURIComponent(this.profile)}/json`,
+        this.normalizedBaseUrl,
+      ),
       {
         method: 'POST',
         headers: {
@@ -85,6 +92,25 @@ export class OpenRouteServiceClient {
       fareEstimateUsdt,
     };
   }
+}
+
+function normalizeOpenRouteServiceBaseUrl(baseUrl: string): URL {
+  const url = new URL(baseUrl);
+
+  // HeiGIT's new API host requires the service prefix in the path.
+  // Example: https://api.heigit.org/openrouteservice/v2/directions
+  if (
+    url.hostname === 'api.heigit.org' &&
+    (url.pathname === '/' || url.pathname.trim() === '')
+  ) {
+    url.pathname = '/openrouteservice/';
+  }
+
+  if (!url.pathname.endsWith('/')) {
+    url.pathname = `${url.pathname}/`;
+  }
+
+  return url;
 }
 
 export function estimateRideFareUsdt(params: {
