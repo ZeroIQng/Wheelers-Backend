@@ -30,4 +30,9 @@ export {
   RoutePlanningError,
   estimateRideFareUsdt,
 } from './routing';
-export type { PlannedRouteMetrics, RouteWaypoint } from './routing';
+export type {
+  PlannedRouteGeometry,
+  PlannedRouteMetrics,
+  RouteBounds,
+  RouteWaypoint,
+} from './routing';
