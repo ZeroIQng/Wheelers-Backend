@@ -11,9 +11,13 @@ const GatewayEnvSchema = z.object({
   TWILIO_OTP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   POUCH_API_KEY:      z.string().min(1),
   POUCH_BASE_URL:     z.string().url().default('https://api.pouch.finance'),
+  COINGECKO_BASE_URL: z.string().url().default('https://api.coingecko.com/api/v3'),
   OPENROUTESERVICE_API_KEY: z.string().min(1),
   OPENROUTESERVICE_BASE_URL: z.string().url().default('https://api.openrouteservice.org'),
   OPENROUTESERVICE_PROFILE: z.string().default('driving-car'),
+  // Rider-facing fare display only. Internal ride settlement remains in USDT.
+  RIDE_DISPLAY_NGN_PER_USDT_FALLBACK: z.coerce.number().positive().default(1600),
+  RIDE_DISPLAY_RATE_TTL_MS: z.coerce.number().int().positive().default(60000),
   // Comma-separated list of allowed WebSocket/HTTP origins
   CORS_ORIGINS:       z.string().default('http://localhost:19006'),
   // How long a WebSocket connection can stay idle before being dropped (ms)

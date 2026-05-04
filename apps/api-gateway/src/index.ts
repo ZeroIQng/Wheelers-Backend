@@ -41,6 +41,7 @@ import {
 import { PouchClient } from './http/pouch.client';
 import { applyCorsHeaders, sendJson } from './http/utils';
 import { startGatewayKafkaConsumer } from './kafka/consumer';
+import { CoinGeckoRidePricingDisplayProvider } from './pricing/display';
 import { RedisClient } from './redis/client';
 import { GatewayPublisher } from './websocket/publisher';
 import { SocketRegistry } from './websocket/registry';
@@ -115,6 +116,11 @@ async function bootstrap(): Promise<void> {
     gatewayEnv.OPENROUTESERVICE_BASE_URL,
     gatewayEnv.OPENROUTESERVICE_API_KEY,
     gatewayEnv.OPENROUTESERVICE_PROFILE,
+  );
+  const ridePricingDisplayProvider = new CoinGeckoRidePricingDisplayProvider(
+    gatewayEnv.COINGECKO_BASE_URL,
+    gatewayEnv.RIDE_DISPLAY_RATE_TTL_MS,
+    gatewayEnv.RIDE_DISPLAY_NGN_PER_USDT_FALLBACK,
   );
   const registry = new SocketRegistry({
     instanceId: `${sharedEnv.KAFKA_CLIENT_ID}-${process.pid}-${Math.random().toString(16).slice(2, 8)}`,
@@ -203,6 +209,7 @@ async function bootstrap(): Promise<void> {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         routePlanner,
+        ridePricingDisplayProvider,
       });
       return;
     }
@@ -216,6 +223,7 @@ async function bootstrap(): Promise<void> {
       await handleRiderRideHistoryRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        ridePricingDisplayProvider,
       }, url);
       return;
     }
@@ -226,6 +234,7 @@ async function bootstrap(): Promise<void> {
           privyAppId: gatewayEnv.PRIVY_APP_ID,
           privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
           routePlanner,
+          ridePricingDisplayProvider,
         }, url);
         return;
       }
@@ -235,6 +244,7 @@ async function bootstrap(): Promise<void> {
           privyAppId: gatewayEnv.PRIVY_APP_ID,
           privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
           routePlanner,
+          ridePricingDisplayProvider,
         });
         return;
       }
@@ -259,6 +269,7 @@ async function bootstrap(): Promise<void> {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         routePlanner,
+        ridePricingDisplayProvider,
       }, decodeURIComponent(scheduledRideMatch[1]));
       return;
     }
@@ -415,11 +426,13 @@ async function bootstrap(): Promise<void> {
     registry,
     publisher,
     routePlanner,
+    ridePricingDisplayProvider,
   });
 
   await startGatewayKafkaConsumer({
     consumer,
     registry,
+    ridePricingDisplayProvider,
   });
 
   const port = Number(gatewayEnv.PORT);

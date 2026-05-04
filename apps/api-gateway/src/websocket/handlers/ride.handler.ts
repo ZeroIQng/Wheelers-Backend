@@ -16,6 +16,11 @@ import type { GatewayAuthContext } from '../../types';
 import { getBoolean, getNumber, getRecord, getString } from '../../utils/object';
 import type { GatewayPublisher } from '../publisher';
 import type { HandlerResponse } from './types';
+import {
+  convertUsdtToRideDisplayAmount,
+  type RidePricingDisplayProvider,
+  withRideDisplayPricing,
+} from '../../pricing/display';
 
 interface LatLngAddress {
   lat: number;
@@ -116,6 +121,7 @@ export async function handleRideMessage(
   auth: GatewayAuthContext,
   publisher: GatewayPublisher,
   routePlanner: OpenRouteServiceClient,
+  ridePricingDisplayProvider: RidePricingDisplayProvider,
 ): Promise<HandlerResponse | null> {
   const timestamp = new Date().toISOString();
 
@@ -146,16 +152,21 @@ export async function handleRideMessage(
     });
 
     await publisher.publishRideEvent(event);
+    const ridePricingDisplay = await ridePricingDisplayProvider.getPricingDisplay();
 
     return {
       type: 'ride:request:accepted',
-      payload: {
+      payload: withRideDisplayPricing({
         rideId: event.rideId,
         status: 'queued',
         plannedDistanceKm: event.plannedDistanceKm,
         plannedDurationSeconds: event.plannedDurationSeconds,
         fareEstimateUsdt: event.fareEstimateUsdt,
-      },
+        fareEstimateNgn: convertUsdtToRideDisplayAmount(
+          event.fareEstimateUsdt,
+          ridePricingDisplay,
+        ),
+      }, ridePricingDisplay),
     };
   }
 
@@ -186,15 +197,20 @@ export async function handleRideMessage(
     });
 
     await publisher.publishRideEvent(event);
+    const ridePricingDisplay = await ridePricingDisplayProvider.getPricingDisplay();
 
     return {
       type: 'ride:route:update:accepted',
-      payload: {
+      payload: withRideDisplayPricing({
         rideId: event.rideId,
         plannedDistanceKm: event.plannedDistanceKm,
         plannedDurationSeconds: event.plannedDurationSeconds,
         fareEstimateUsdt: event.fareEstimateUsdt,
-      },
+        fareEstimateNgn: convertUsdtToRideDisplayAmount(
+          event.fareEstimateUsdt,
+          ridePricingDisplay,
+        ),
+      }, ridePricingDisplay),
     };
   }
 

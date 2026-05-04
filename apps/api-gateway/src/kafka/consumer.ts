@@ -7,11 +7,17 @@ import {
   TOPICS,
   WalletEvent,
 } from '@wheleers/kafka-schemas';
+import {
+  convertUsdtToRideDisplayAmount,
+  type RidePricingDisplayProvider,
+  withRideDisplayPricing,
+} from '../pricing/display';
 import { SocketRegistry } from '../websocket/registry';
 
 interface StartGatewayConsumerDeps {
   consumer: WheelersConsumer;
   registry: SocketRegistry;
+  ridePricingDisplayProvider: RidePricingDisplayProvider;
 }
 
 interface RideParticipantState {
@@ -36,7 +42,12 @@ export async function startGatewayKafkaConsumer(deps: StartGatewayConsumerDeps):
         if (!parsed.success) {
           throw new Error(`Invalid ride event: ${parsed.error.message}`);
         }
-        await handleRideEvent(parsed.data, deps.registry, rideParticipants);
+        await handleRideEvent(
+          parsed.data,
+          deps.registry,
+          rideParticipants,
+          deps.ridePricingDisplayProvider,
+        );
         return;
       }
 
@@ -82,6 +93,7 @@ async function handleRideEvent(
   event: RideEvent,
   registry: SocketRegistry,
   rideParticipants: Map<string, RideParticipantState>,
+  ridePricingDisplayProvider: RidePricingDisplayProvider,
 ): Promise<void> {
   if (event.eventType === 'RIDE_REQUESTED') {
     rideParticipants.set(event.rideId, { riderId: event.riderId });
@@ -89,6 +101,7 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_DRIVER_ASSIGNED') {
+    const ridePricingDisplay = await ridePricingDisplayProvider.getPricingDisplay();
     rideParticipants.set(event.rideId, {
       riderId: event.riderId,
       driverId: event.driverId,
@@ -104,21 +117,26 @@ async function handleRideEvent(
       vehicleModel: event.vehicleModel,
       etaSeconds: event.etaSeconds,
       lockedFareUsdt: event.lockedFareUsdt,
+      lockedFareNgn: convertUsdtToRideDisplayAmount(event.lockedFareUsdt, ridePricingDisplay),
+      displayCurrency: ridePricingDisplay.displayCurrency,
+      displayExchangeRate: ridePricingDisplay.displayExchangeRate,
     });
 
     return;
   }
 
   if (event.eventType === 'RIDE_ROUTE_UPDATED') {
-    const routePayload = {
+    const ridePricingDisplay = await ridePricingDisplayProvider.getPricingDisplay();
+    const routePayload = withRideDisplayPricing({
       rideId: event.rideId,
       destination: event.destination,
       stops: event.stops,
       plannedDistanceKm: event.plannedDistanceKm,
       plannedDurationSeconds: event.plannedDurationSeconds,
       fareEstimateUsdt: event.fareEstimateUsdt,
+      fareEstimateNgn: convertUsdtToRideDisplayAmount(event.fareEstimateUsdt, ridePricingDisplay),
       updatedBy: event.updatedBy,
-    };
+    }, ridePricingDisplay);
 
     await registry.sendToUser(event.riderId, 'ride:route:updated', routePayload);
 
@@ -153,20 +171,27 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_COMPLETED') {
+    const ridePricingDisplay = await ridePricingDisplayProvider.getPricingDisplay();
     await registry.sendToUser(event.riderId, 'ride:completed', {
       rideId: event.rideId,
       fareUsdt: event.fareUsdt,
+      fareNgn: convertUsdtToRideDisplayAmount(event.fareUsdt, ridePricingDisplay),
       distanceKm: event.distanceKm,
       durationSeconds: event.durationSeconds,
       completedAt: event.completedAt,
+      displayCurrency: ridePricingDisplay.displayCurrency,
+      displayExchangeRate: ridePricingDisplay.displayExchangeRate,
     });
 
     await registry.sendToUser(event.driverId, 'ride:completed', {
       rideId: event.rideId,
       fareUsdt: event.fareUsdt,
+      fareNgn: convertUsdtToRideDisplayAmount(event.fareUsdt, ridePricingDisplay),
       distanceKm: event.distanceKm,
       durationSeconds: event.durationSeconds,
       completedAt: event.completedAt,
+      displayCurrency: ridePricingDisplay.displayCurrency,
+      displayExchangeRate: ridePricingDisplay.displayExchangeRate,
     });
 
     rideParticipants.delete(event.rideId);
@@ -174,11 +199,15 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_CANCELLED') {
+    const ridePricingDisplay = await ridePricingDisplayProvider.getPricingDisplay();
     await registry.sendToUser(event.riderId, 'ride:cancelled', {
       rideId: event.rideId,
       reason: event.reason,
       cancelStage: event.cancelStage,
       penaltyUsdt: event.penaltyUsdt,
+      penaltyNgn: convertUsdtToRideDisplayAmount(event.penaltyUsdt, ridePricingDisplay),
+      displayCurrency: ridePricingDisplay.displayCurrency,
+      displayExchangeRate: ridePricingDisplay.displayExchangeRate,
     });
 
     if (event.driverId) {

@@ -8,22 +8,30 @@ import { OpenRouteServiceClient } from '@wheleers/config';
 import { authenticateHttpUser } from './authenticate';
 import { readJsonBody, sendJson } from './utils';
 import { getNumber, getRecord, getString, isRecord } from '../utils/object';
+import {
+  convertUsdtToRideDisplayAmount,
+  type RidePricingDisplay,
+  type RidePricingDisplayProvider,
+} from '../pricing/display';
 
 interface RideRouteDeps {
   privyAppId: string;
   privyVerificationKey: string;
   routePlanner: OpenRouteServiceClient;
+  ridePricingDisplayProvider: RidePricingDisplayProvider;
 }
 
 interface RideHistoryRouteDeps {
   privyAppId: string;
   privyVerificationKey: string;
+  ridePricingDisplayProvider: RidePricingDisplayProvider;
 }
 
 interface ScheduledRideRouteDeps {
   privyAppId: string;
   privyVerificationKey: string;
   routePlanner: OpenRouteServiceClient;
+  ridePricingDisplayProvider: RidePricingDisplayProvider;
 }
 
 type LatLngAddress = {
@@ -138,7 +146,9 @@ function mapScheduledPaymentMethod(
 
 function mapScheduledRideItem(
   ride: Awaited<ReturnType<typeof scheduledRideClient.findByRider>>[number],
+  ridePricingDisplay: RidePricingDisplay,
 ) {
+  const fareEstimateUsdt = decimalToNumber(ride.fareEstimateUsdt);
   return {
     id: ride.id,
     status: ride.status,
@@ -148,9 +158,12 @@ function mapScheduledRideItem(
     destAddress: ride.destAddress,
     plannedDistanceKm: ride.plannedDistanceKm ?? null,
     plannedDurationSeconds: ride.plannedDurationSeconds ?? null,
-    fareEstimateUsdt: decimalToNumber(ride.fareEstimateUsdt),
+    fareEstimateUsdt,
+    fareEstimateNgn: convertUsdtToRideDisplayAmount(fareEstimateUsdt, ridePricingDisplay),
     requestedRideId: ride.requestedRideId ?? null,
     createdAt: ride.createdAt.toISOString(),
+    displayCurrency: ridePricingDisplay.displayCurrency,
+    displayExchangeRate: ridePricingDisplay.displayExchangeRate,
   };
 }
 
@@ -176,11 +189,18 @@ export async function handleRideEstimateRoute(
       stops,
       destination,
     });
+    const ridePricingDisplay = await deps.ridePricingDisplayProvider.getPricingDisplay();
 
     sendJson(res, 200, {
       plannedDistanceKm: plannedRoute.distanceKm,
       plannedDurationSeconds: plannedRoute.durationSeconds,
       fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
+      fareEstimateNgn: convertUsdtToRideDisplayAmount(
+        plannedRoute.fareEstimateUsdt,
+        ridePricingDisplay,
+      ),
+      displayCurrency: ridePricingDisplay.displayCurrency,
+      displayExchangeRate: ridePricingDisplay.displayExchangeRate,
     });
   } catch (error) {
     sendJson(res, 400, {
@@ -200,6 +220,7 @@ export async function handleRiderRideHistoryRoute(
     const limit = parseLimit(url.searchParams.get('limit'));
     const cursor = url.searchParams.get('cursor') ?? undefined;
     const rides = await rideClient.findRiderHistory(user.id, limit, cursor);
+    const ridePricingDisplay = await deps.ridePricingDisplayProvider.getPricingDisplay();
 
     sendJson(res, 200, {
       items: rides.map((ride) => ({
@@ -208,7 +229,15 @@ export async function handleRiderRideHistoryRoute(
         pickupAddress: ride.pickupAddress,
         destAddress: ride.destAddress,
         fareEstimateUsdt: decimalToNumber(ride.fareEstimateUsdt),
+        fareEstimateNgn: convertUsdtToRideDisplayAmount(
+          decimalToNumber(ride.fareEstimateUsdt),
+          ridePricingDisplay,
+        ),
         fareFinalUsdt: decimalToNumber(ride.fareFinalUsdt),
+        fareFinalNgn: convertUsdtToRideDisplayAmount(
+          decimalToNumber(ride.fareFinalUsdt),
+          ridePricingDisplay,
+        ),
         distanceKm: ride.distanceKm ?? null,
         durationSeconds: ride.durationSeconds ?? null,
         cancelReason: ride.cancelReason ?? null,
@@ -218,6 +247,8 @@ export async function handleRiderRideHistoryRoute(
         completedAt: ride.completedAt?.toISOString() ?? null,
         cancelledAt: ride.cancelledAt?.toISOString() ?? null,
         createdAt: ride.createdAt.toISOString(),
+        displayCurrency: ridePricingDisplay.displayCurrency,
+        displayExchangeRate: ridePricingDisplay.displayExchangeRate,
       })),
       nextCursor: rides.length === limit ? rides[rides.length - 1]?.id ?? null : null,
     });
@@ -272,9 +303,10 @@ export async function handleCreateScheduledRideRoute(
       plannedDurationSeconds: plannedRoute.durationSeconds,
       fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
     });
+    const ridePricingDisplay = await deps.ridePricingDisplayProvider.getPricingDisplay();
 
     sendJson(res, 201, {
-      item: mapScheduledRideItem(scheduledRide),
+      item: mapScheduledRideItem(scheduledRide, ridePricingDisplay),
     });
   } catch (error) {
     sendJson(res, 400, {
@@ -294,9 +326,10 @@ export async function handleListScheduledRidesRoute(
     const limit = parseLimit(url.searchParams.get('limit'));
     const cursor = url.searchParams.get('cursor') ?? undefined;
     const rides = await scheduledRideClient.findByRider(user.id, limit, cursor);
+    const ridePricingDisplay = await deps.ridePricingDisplayProvider.getPricingDisplay();
 
     sendJson(res, 200, {
-      items: rides.map(mapScheduledRideItem),
+      items: rides.map((ride) => mapScheduledRideItem(ride, ridePricingDisplay)),
       nextCursor: rides.length === limit ? rides[rides.length - 1]?.id ?? null : null,
     });
   } catch (error) {
