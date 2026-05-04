@@ -11,6 +11,21 @@ const LatLng = z.object({
   address: z.string(),
 });
 
+const RouteCoordinate = z.object({
+  lat: z.number(),
+  lng: z.number(),
+});
+
+const RouteBounds = z.object({
+  northEast: RouteCoordinate,
+  southWest: RouteCoordinate,
+});
+
+const RouteGeometry = z.object({
+  coordinates: z.array(RouteCoordinate).min(2),
+  bounds: RouteBounds,
+});
+
 const RideStopSnapshot = LatLng.extend({
   stopId: z.string().uuid(),
   stopOrder: z.number().int().nonnegative(),
@@ -31,6 +46,7 @@ export const RideRequestedEvent = BaseRideEvent.extend({
   plannedDistanceKm: z.number().optional(),
   plannedDurationSeconds: z.number().int().optional(),
   fareEstimateUsdt: z.number(),
+  route:            RouteGeometry.optional(),
   paymentMethod:    z.enum(['wallet_balance', 'smart_account']),
 });
 
@@ -43,6 +59,7 @@ export const RideRouteUpdateRequestedEvent = BaseRideEvent.extend({
   plannedDistanceKm: z.number().optional(),
   plannedDurationSeconds: z.number().int().optional(),
   fareEstimateUsdt: z.number().optional(),
+  route:            RouteGeometry.optional(),
   updatedBy:        z.enum(['rider', 'driver', 'system']),
 });
 
@@ -78,6 +95,7 @@ export const RideRouteUpdatedEvent = BaseRideEvent.extend({
   plannedDistanceKm: z.number().optional(),
   plannedDurationSeconds: z.number().int().optional(),
   fareEstimateUsdt: z.number().optional(),
+  route:            RouteGeometry.optional(),
   updatedBy:        z.enum(['rider', 'driver', 'system']),
 });
 

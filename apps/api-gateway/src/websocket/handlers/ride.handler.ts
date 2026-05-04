@@ -147,6 +147,7 @@ export async function handleRideMessage(
       plannedDistanceKm: plannedRoute.distanceKm,
       plannedDurationSeconds: plannedRoute.durationSeconds,
       fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
+      route: plannedRoute.geometry,
       paymentMethod: normalizePaymentMethod(payload['paymentMethod']),
       timestamp,
     });
@@ -159,6 +160,10 @@ export async function handleRideMessage(
       payload: withRideDisplayPricing({
         rideId: event.rideId,
         status: 'queued',
+        pickup,
+        destination,
+        stops,
+        route: plannedRoute.geometry,
         plannedDistanceKm: event.plannedDistanceKm,
         plannedDurationSeconds: event.plannedDurationSeconds,
         fareEstimateUsdt: event.fareEstimateUsdt,
@@ -192,6 +197,7 @@ export async function handleRideMessage(
       plannedDistanceKm: plannedRoute?.distanceKm,
       plannedDurationSeconds: plannedRoute?.durationSeconds,
       fareEstimateUsdt: plannedRoute?.fareEstimateUsdt,
+      route: plannedRoute?.geometry,
       updatedBy: auth.driverId ? 'driver' : 'rider',
       timestamp,
     });
@@ -203,6 +209,9 @@ export async function handleRideMessage(
       type: 'ride:route:update:accepted',
       payload: withRideDisplayPricing({
         rideId: event.rideId,
+        destination,
+        stops,
+        route: plannedRoute?.geometry,
         plannedDistanceKm: event.plannedDistanceKm,
         plannedDurationSeconds: event.plannedDurationSeconds,
         fareEstimateUsdt: event.fareEstimateUsdt,
