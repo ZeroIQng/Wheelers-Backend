@@ -62,6 +62,7 @@ export function createTripLifecycleHandler(params?: {
                   distanceKm: event.plannedDistanceKm,
                   durationSeconds: event.plannedDurationSeconds,
                   fareEstimateUsdt: event.fareEstimateUsdt,
+                  geometry: event.route,
                 }
               : await planUpdatedRoute(event.rideId, event.destination, event.stops);
 
@@ -78,6 +79,7 @@ export function createTripLifecycleHandler(params?: {
             plannedDistanceKm: plannedRoute?.distanceKm ?? event.plannedDistanceKm,
             plannedDurationSeconds: plannedRoute?.durationSeconds ?? event.plannedDurationSeconds,
             fareEstimateUsdt: plannedRoute?.fareEstimateUsdt ?? event.fareEstimateUsdt,
+            route: plannedRoute?.geometry ?? event.route,
             updatedBy: event.updatedBy,
             routeStops,
           });
@@ -206,6 +208,13 @@ export function createTripLifecycleHandler(params?: {
     plannedDistanceKm?: number;
     plannedDurationSeconds?: number;
     fareEstimateUsdt?: number;
+    route?: {
+      coordinates: Array<{ lat: number; lng: number }>;
+      bounds: {
+        northEast: { lat: number; lng: number };
+        southWest: { lat: number; lng: number };
+      };
+    };
     updatedBy: 'rider' | 'driver' | 'system';
     routeStops: Array<{
       id: string;
@@ -260,6 +269,7 @@ export function createTripLifecycleHandler(params?: {
       plannedDistanceKm: params.plannedDistanceKm,
       plannedDurationSeconds: params.plannedDurationSeconds,
       fareEstimateUsdt: params.fareEstimateUsdt,
+      route: params.route,
       updatedBy: params.updatedBy,
       timestamp: new Date().toISOString(),
     });
@@ -269,7 +279,18 @@ export function createTripLifecycleHandler(params?: {
     rideId: string,
     destination: { lat: number; lng: number },
     stops: Array<{ lat: number; lng: number }>,
-  ): Promise<{ distanceKm: number; durationSeconds: number; fareEstimateUsdt: number } | null> {
+  ): Promise<{
+    distanceKm: number;
+    durationSeconds: number;
+    fareEstimateUsdt: number;
+    geometry: {
+      coordinates: Array<{ lat: number; lng: number }>;
+      bounds: {
+        northEast: { lat: number; lng: number };
+        southWest: { lat: number; lng: number };
+      };
+    };
+  } | null> {
     if (!routePlanner) {
       return null;
     }

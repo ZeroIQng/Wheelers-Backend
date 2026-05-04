@@ -192,6 +192,10 @@ export async function handleRideEstimateRoute(
     const ridePricingDisplay = await deps.ridePricingDisplayProvider.getPricingDisplay();
 
     sendJson(res, 200, {
+      pickup,
+      destination,
+      stops,
+      route: plannedRoute.geometry,
       plannedDistanceKm: plannedRoute.distanceKm,
       plannedDurationSeconds: plannedRoute.durationSeconds,
       fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
