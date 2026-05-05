@@ -12,7 +12,6 @@ import { handleRideMessage } from './handlers/ride.handler';
 import { handleWalletMessage } from './handlers/wallet.handler';
 import type { GatewayPublisher } from './publisher';
 import { SocketRegistry } from './registry';
-import type { RidePricingDisplayProvider } from '../pricing/display';
 
 interface WebSocketServerDeps {
   server: HttpServer;
@@ -23,7 +22,6 @@ interface WebSocketServerDeps {
   registry: SocketRegistry;
   publisher: GatewayPublisher;
   routePlanner: OpenRouteServiceClient;
-  ridePricingDisplayProvider: RidePricingDisplayProvider;
 }
 
 function getRequestOrigin(request: IncomingMessage): string | null {
@@ -162,7 +160,6 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
             auth,
             deps.publisher,
             deps.routePlanner,
-            deps.ridePricingDisplayProvider,
           )) ??
           (await handleDriverMessage(parsed.type, payload, auth, deps.publisher)) ??
           (await handleWalletMessage(parsed.type, payload));

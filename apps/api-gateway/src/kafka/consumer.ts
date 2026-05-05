@@ -10,8 +10,8 @@ import {
 import {
   convertUsdtToRideDisplayAmount,
   type RidePricingDisplayProvider,
-  withRideDisplayPricing,
 } from '../pricing/display';
+import { buildRideEstimatePricing } from '../pricing/ride-estimate';
 import { SocketRegistry } from '../websocket/registry';
 
 interface StartGatewayConsumerDeps {
@@ -126,8 +126,7 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_ROUTE_UPDATED') {
-    const ridePricingDisplay = await ridePricingDisplayProvider.getPricingDisplay();
-    const routePayload = withRideDisplayPricing({
+    const routePayload = {
       rideId: event.rideId,
       destination: event.destination,
       stops: event.stops,
@@ -135,9 +134,9 @@ async function handleRideEvent(
       plannedDistanceKm: event.plannedDistanceKm,
       plannedDurationSeconds: event.plannedDurationSeconds,
       fareEstimateUsdt: event.fareEstimateUsdt,
-      fareEstimateNgn: convertUsdtToRideDisplayAmount(event.fareEstimateUsdt, ridePricingDisplay),
+      ...buildRideEstimatePricing(event.plannedDistanceKm),
       updatedBy: event.updatedBy,
-    }, ridePricingDisplay);
+    };
 
     await registry.sendToUser(event.riderId, 'ride:route:updated', routePayload);
 

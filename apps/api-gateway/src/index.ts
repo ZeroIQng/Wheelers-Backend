@@ -209,7 +209,6 @@ async function bootstrap(): Promise<void> {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         routePlanner,
-        ridePricingDisplayProvider,
       });
       return;
     }
@@ -426,7 +425,6 @@ async function bootstrap(): Promise<void> {
     registry,
     publisher,
     routePlanner,
-    ridePricingDisplayProvider,
   });
 
   await startGatewayKafkaConsumer({

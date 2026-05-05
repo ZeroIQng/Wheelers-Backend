@@ -1,5 +1,6 @@
 import { FEES } from './constants/fees';
 import { RIDE } from './constants/ride';
+import { calculateRidePrice, type RidePriceBreakdown } from './pricing';
 
 export type RouteWaypoint = {
   lat: number;
@@ -20,6 +21,7 @@ export type PlannedRouteMetrics = {
   distanceKm: number;
   durationSeconds: number;
   fareEstimateUsdt: number;
+  ridePrice: RidePriceBreakdown;
   geometry: PlannedRouteGeometry;
 };
 
@@ -96,11 +98,13 @@ export class OpenRouteServiceClient {
       durationSeconds,
       stopCount: params.stops?.length ?? 0,
     });
+    const ridePrice = calculateRidePrice(distanceKm);
 
     return {
       distanceKm,
       durationSeconds,
       fareEstimateUsdt,
+      ridePrice,
       geometry: {
         coordinates: route.coordinates,
         bounds: route.bounds,

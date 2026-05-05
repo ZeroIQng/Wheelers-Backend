@@ -16,11 +16,7 @@ import type { GatewayAuthContext } from '../../types';
 import { getBoolean, getNumber, getRecord, getString } from '../../utils/object';
 import type { GatewayPublisher } from '../publisher';
 import type { HandlerResponse } from './types';
-import {
-  convertUsdtToRideDisplayAmount,
-  type RidePricingDisplayProvider,
-  withRideDisplayPricing,
-} from '../../pricing/display';
+import { buildRideEstimatePricing } from '../../pricing/ride-estimate';
 
 interface LatLngAddress {
   lat: number;
@@ -121,7 +117,6 @@ export async function handleRideMessage(
   auth: GatewayAuthContext,
   publisher: GatewayPublisher,
   routePlanner: OpenRouteServiceClient,
-  ridePricingDisplayProvider: RidePricingDisplayProvider,
 ): Promise<HandlerResponse | null> {
   const timestamp = new Date().toISOString();
 
@@ -153,11 +148,9 @@ export async function handleRideMessage(
     });
 
     await publisher.publishRideEvent(event);
-    const ridePricingDisplay = await ridePricingDisplayProvider.getPricingDisplay();
-
     return {
       type: 'ride:request:accepted',
-      payload: withRideDisplayPricing({
+      payload: {
         rideId: event.rideId,
         status: 'queued',
         pickup,
@@ -167,11 +160,10 @@ export async function handleRideMessage(
         plannedDistanceKm: event.plannedDistanceKm,
         plannedDurationSeconds: event.plannedDurationSeconds,
         fareEstimateUsdt: event.fareEstimateUsdt,
-        fareEstimateNgn: convertUsdtToRideDisplayAmount(
-          event.fareEstimateUsdt,
-          ridePricingDisplay,
-        ),
-      }, ridePricingDisplay),
+        fareEstimateNgn: plannedRoute.ridePrice.tripPrice,
+        pricingCurrency: 'NGN',
+        pricingBreakdown: plannedRoute.ridePrice,
+      },
     };
   }
 
@@ -203,11 +195,9 @@ export async function handleRideMessage(
     });
 
     await publisher.publishRideEvent(event);
-    const ridePricingDisplay = await ridePricingDisplayProvider.getPricingDisplay();
-
     return {
       type: 'ride:route:update:accepted',
-      payload: withRideDisplayPricing({
+      payload: {
         rideId: event.rideId,
         destination,
         stops,
@@ -215,11 +205,8 @@ export async function handleRideMessage(
         plannedDistanceKm: event.plannedDistanceKm,
         plannedDurationSeconds: event.plannedDurationSeconds,
         fareEstimateUsdt: event.fareEstimateUsdt,
-        fareEstimateNgn: convertUsdtToRideDisplayAmount(
-          event.fareEstimateUsdt,
-          ridePricingDisplay,
-        ),
-      }, ridePricingDisplay),
+        ...buildRideEstimatePricing(event.plannedDistanceKm),
+      },
     };
   }
 
