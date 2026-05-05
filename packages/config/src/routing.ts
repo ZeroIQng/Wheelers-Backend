@@ -60,13 +60,13 @@ export class OpenRouteServiceClient {
 
     const response = await fetch(
       new URL(
-        `v2/directions/${encodeURIComponent(this.profile)}/geojson`,
+        `v2/directions/${encodeURIComponent(this.profile)}`,
         this.normalizedBaseUrl,
       ),
       {
         method: 'POST',
         headers: {
-          accept: 'application/json',
+          accept: 'application/json, application/geo+json, application/gpx+xml, */*',
           'content-type': 'application/json',
           Authorization: this.apiKey,
           'x-api-key': this.apiKey,
@@ -85,8 +85,14 @@ export class OpenRouteServiceClient {
       : await response.text();
 
     if (!response.ok) {
+      const detail =
+        typeof payload === 'string'
+          ? payload
+          : safeSerializeErrorPayload(payload);
       throw new RoutePlanningError(
-        `OpenRouteService request failed with status ${response.status}`,
+        `OpenRouteService request failed with status ${response.status}${
+          detail ? `: ${detail}` : ''
+        }`,
       );
     }
 
@@ -380,4 +386,12 @@ function round2(value: number): number {
 
 function round3(value: number): number {
   return Math.round(value * 1000) / 1000;
+}
+
+function safeSerializeErrorPayload(payload: unknown): string {
+  try {
+    return JSON.stringify(payload);
+  } catch {
+    return '';
+  }
 }

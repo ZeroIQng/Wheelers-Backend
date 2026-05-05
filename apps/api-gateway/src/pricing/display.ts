@@ -1,6 +1,6 @@
 const DEFAULT_RIDE_DISPLAY_CURRENCY = 'NGN';
 const COINGECKO_TETHER_PRICE_PATH =
-  '/simple/price?ids=tether&vs_currencies=ngn&precision=2';
+  'simple/price?ids=tether&vs_currencies=ngn&precision=2';
 
 export type RidePricingDisplay = {
   displayCurrency: 'NGN';
@@ -15,12 +15,15 @@ export class CoinGeckoRidePricingDisplayProvider implements RidePricingDisplayPr
   private cachedPricing: RidePricingDisplay | null = null;
   private cachedAt = 0;
   private inFlight: Promise<RidePricingDisplay> | null = null;
+  private readonly normalizedBaseUrl: URL;
 
   constructor(
     private readonly baseUrl: string,
     private readonly ttlMs: number,
     private readonly fallbackNgnPerUsdt: number,
-  ) {}
+  ) {
+    this.normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+  }
 
   async getPricingDisplay(): Promise<RidePricingDisplay> {
     const now = Date.now();
@@ -63,7 +66,7 @@ export class CoinGeckoRidePricingDisplayProvider implements RidePricingDisplayPr
   }
 
   private async fetchPricingDisplay(): Promise<RidePricingDisplay> {
-    const response = await fetch(new URL(COINGECKO_TETHER_PRICE_PATH, this.baseUrl), {
+    const response = await fetch(new URL(COINGECKO_TETHER_PRICE_PATH, this.normalizedBaseUrl), {
       headers: {
         accept: 'application/json',
       },
@@ -107,6 +110,16 @@ export function withRideDisplayPricing<T extends Record<string, unknown>>(
     displayCurrency: pricing.displayCurrency,
     displayExchangeRate: pricing.displayExchangeRate,
   };
+}
+
+function normalizeBaseUrl(baseUrl: string): URL {
+  const url = new URL(baseUrl);
+
+  if (!url.pathname.endsWith('/')) {
+    url.pathname = `${url.pathname}/`;
+  }
+
+  return url;
 }
 
 function extractNgnPerUsdt(payload: unknown): number {

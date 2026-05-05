@@ -13,7 +13,7 @@ export async function createConsumer(config: ConsumerConfig): Promise<WheelersCo
   const consumer = kafka.consumer({
     groupId:         config.groupId,
     maxWaitTimeInMs: config.maxWaitTimeMs ?? 100,
-    retry:           { retries: 5, initialRetryTime: 300, factor: 2 },
+    retry:           { retries: 5, initialRetryTime: 300, factor: 0.2 },
   });
 
   await consumer.connect();

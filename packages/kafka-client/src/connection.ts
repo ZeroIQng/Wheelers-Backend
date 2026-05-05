@@ -25,7 +25,7 @@ export function getKafkaInstance(): Kafka {
     retry: {
       initialRetryTime: 300,
       retries:          10,
-      factor:           2,
+      factor:           0.2,
       maxRetryTime:     30_000,
     },
     logLevel: process.env['NODE_ENV'] === 'development'

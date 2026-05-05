@@ -14,7 +14,7 @@ export async function createProducer(config: ProducerConfig): Promise<WheelersPr
     retry: {
       retries:          config.retries          ?? 5,
       initialRetryTime: config.initialRetryTime ?? 300,
-      factor:           2,
+      factor:           0.2,
       maxRetryTime:     30_000,
     },
   });
