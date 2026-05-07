@@ -305,6 +305,7 @@ async function bootstrap(): Promise<void> {
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         pouchClient,
         publisher,
+        ridePricingDisplayProvider,
       });
       return;
     }

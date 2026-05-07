@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { userClient } from '@wheleers/db';
+import type { RidePricingDisplayProvider } from '../pricing/display';
 import { verifyPrivyAccessToken } from '../auth/privy';
 import { getString, isRecord, pickNumber, pickString } from '../utils/object';
 import type { GatewayPublisher } from '../websocket/publisher';
@@ -21,6 +22,10 @@ interface PouchRouteDeps {
   privyVerificationKey: string;
   pouchClient: PouchClient;
   publisher: GatewayPublisher;
+}
+
+interface PouchCreateSessionRouteDeps extends PouchRouteDeps {
+  ridePricingDisplayProvider: RidePricingDisplayProvider;
 }
 
 interface PouchHealthRouteDeps {
@@ -56,7 +61,7 @@ export async function handlePouchChannelsRoute(
 export async function handlePouchCreateSessionRoute(
   req: IncomingMessage,
   res: ServerResponse,
-  deps: PouchRouteDeps,
+  deps: PouchCreateSessionRouteDeps,
 ): Promise<void> {
   try {
     const rawBody = await readJsonBody(req);
@@ -66,7 +71,11 @@ export async function handlePouchCreateSessionRoute(
     }
 
     const auth = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
-    const payload = buildCreateSessionPayload(rawBody, auth);
+    const payload = await buildCreateSessionPayload(
+      rawBody,
+      auth,
+      deps.ridePricingDisplayProvider,
+    );
     const session = await deps.pouchClient.createSession(payload);
     const createdEvent = normalizePouchSessionCreated(session);
 
@@ -281,15 +290,17 @@ async function authenticateHttpUser(
   return { user, verifiedToken };
 }
 
-function buildCreateSessionPayload(
+async function buildCreateSessionPayload(
   body: Record<string, unknown>,
   auth: {
     user: NonNullable<Awaited<ReturnType<typeof userClient.findByPrivyDid>>>;
     verifiedToken: ReturnType<typeof verifyPrivyAccessToken>;
   },
-): PouchSessionPayload {
+  ridePricingDisplayProvider: RidePricingDisplayProvider,
+): Promise<PouchSessionPayload> {
   const type = pickString(body, ['type'])?.toUpperCase();
-  const amount = pickNumber(body, ['amount', 'amountUsd', 'amountUSD']);
+  const amountUsd = pickNumber(body, ['amount', 'amountUsd', 'amountUSD']);
+  const amountLocal = pickNumber(body, ['amountLocal', 'localAmount', 'ngnAmount']);
   const countryCode = pickString(body, ['countryCode'])?.toUpperCase();
   const currency = pickString(body, ['currency', 'localCurrency'])?.toUpperCase();
   const cryptoCurrency = pickString(body, ['cryptoCurrency'])?.toUpperCase();
@@ -297,8 +308,8 @@ function buildCreateSessionPayload(
   const walletAddress =
     pickString(body, ['walletAddress'])?.toLowerCase() ?? auth.user.walletAddress?.toLowerCase();
 
-  if ((type !== 'ONRAMP' && type !== 'OFFRAMP') || !amount || amount <= 0) {
-    throw new Error('type must be ONRAMP or OFFRAMP and amount must be a positive number');
+  if (type !== 'ONRAMP' && type !== 'OFFRAMP') {
+    throw new Error('type must be ONRAMP or OFFRAMP');
   }
 
   if (!countryCode || !currency || !cryptoCurrency || !cryptoNetwork) {
@@ -317,6 +328,12 @@ function buildCreateSessionPayload(
     (typeof auth.verifiedToken.claims['email'] === 'string'
       ? auth.verifiedToken.claims['email']
       : undefined);
+  const amount = await resolveSessionAmountUsd({
+    amountUsd,
+    amountLocal,
+    currency,
+    ridePricingDisplayProvider,
+  });
 
   const payload: PouchSessionPayload = {
     ...(body as PouchSessionPayload),
@@ -336,6 +353,12 @@ function buildCreateSessionPayload(
     },
   };
 
+  delete payload['amountLocal'];
+  delete payload['localAmount'];
+  delete payload['ngnAmount'];
+  delete payload['amountUsd'];
+  delete payload['amountUSD'];
+
   const chain = pickString(body, ['chain'])?.toUpperCase();
   if (chain) {
     payload['chain'] = chain;
@@ -351,6 +374,38 @@ function buildCreateSessionPayload(
   }
 
   return payload;
+}
+
+async function resolveSessionAmountUsd(input: {
+  amountUsd: number | undefined;
+  amountLocal: number | undefined;
+  currency: string | undefined;
+  ridePricingDisplayProvider: RidePricingDisplayProvider;
+}): Promise<number> {
+  if (input.amountUsd && input.amountUsd > 0) {
+    return roundPouchAmount(input.amountUsd);
+  }
+
+  if (!input.amountLocal || input.amountLocal <= 0) {
+    throw new Error('amount or amountLocal must be a positive number');
+  }
+
+  if (input.currency !== 'NGN') {
+    throw new Error('amountLocal is currently supported only for NGN Pouch sessions');
+  }
+
+  const pricing = await input.ridePricingDisplayProvider.getPricingDisplay();
+  const amountUsd = input.amountLocal / pricing.displayExchangeRate;
+
+  if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+    throw new Error('Could not convert amountLocal into a valid Pouch session amount');
+  }
+
+  return roundPouchAmount(amountUsd);
+}
+
+function roundPouchAmount(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 function extractBearerToken(value: string | undefined): string | undefined {
