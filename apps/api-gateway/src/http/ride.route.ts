@@ -4,7 +4,7 @@ import {
   scheduledRideClient,
   rideClient,
 } from "@wheleers/db";
-import { OpenRouteServiceClient } from "@wheleers/config";
+import { GoogleMapsRoutePlanner } from "@wheleers/config";
 import { Queue } from "bullmq";
 import { authenticateHttpUser } from "./authenticate";
 import { readJsonBody, sendJson } from "./utils";
@@ -19,7 +19,7 @@ import { buildRideEstimatePricing } from "../pricing/ride-estimate";
 interface RideRouteDeps {
   privyAppId: string;
   privyVerificationKey: string;
-  routePlanner: OpenRouteServiceClient;
+  routePlanner: GoogleMapsRoutePlanner;
 }
 
 interface RideHistoryRouteDeps {
@@ -31,7 +31,7 @@ interface RideHistoryRouteDeps {
 interface ScheduledRideRouteDeps {
   privyAppId: string;
   privyVerificationKey: string;
-  routePlanner: OpenRouteServiceClient;
+  routePlanner: GoogleMapsRoutePlanner;
   ridePricingDisplayProvider: RidePricingDisplayProvider;
   dispatcherQueue: Queue;
   leadTimeMs: number;

@@ -1,4 +1,4 @@
-import { FEES, OpenRouteServiceClient } from '@wheleers/config';
+import { FEES, GoogleMapsRoutePlanner } from '@wheleers/config';
 import { CancelStage, DriverStatus, driverClient, rideClient } from '@wheleers/db';
 import type { MessageContext } from '@wheleers/kafka-client';
 import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
@@ -13,7 +13,7 @@ export type TripLifecycleHandler = {
 export function createTripLifecycleHandler(params?: {
   state?: RideServiceState;
   rideEventsProducer?: RideEventsProducer;
-  routePlanner?: OpenRouteServiceClient;
+  routePlanner?: GoogleMapsRoutePlanner;
 }): TripLifecycleHandler {
   const state = params?.state;
   const rideEventsProducer = params?.rideEventsProducer;

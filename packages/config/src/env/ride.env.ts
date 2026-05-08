@@ -11,9 +11,8 @@ const RideEnvSchema = z.object({
   SCHEDULED_RIDE_DISPATCH_LEAD_TIME_S: z.string().default('300'),
   // GPS stale detection — run every N seconds
   GPS_STALE_CHECK_INTERVAL_S: z.string().default('30'),
-  OPENROUTESERVICE_API_KEY:  z.string().min(1),
-  OPENROUTESERVICE_BASE_URL: z.string().url().default('https://api.openrouteservice.org'),
-  OPENROUTESERVICE_PROFILE:  z.string().default('driving-car'),
+  GOOGLE_MAPS_API_KEY:  z.string().min(1),
+  GOOGLE_MAPS_BASE_URL: z.string().url().default('https://routes.googleapis.com'),
 });
 
 export type RideEnv = z.infer<typeof RideEnvSchema>;

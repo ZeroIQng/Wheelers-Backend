@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { OpenRouteServiceClient } from '@wheleers/config';
+import { GoogleMapsRoutePlanner } from '@wheleers/config';
 import {
   DisputeOpenedEvent,
   FeedbackLoggedEvent,
@@ -116,7 +116,7 @@ export async function handleRideMessage(
   payload: Record<string, unknown>,
   auth: GatewayAuthContext,
   publisher: GatewayPublisher,
-  routePlanner: OpenRouteServiceClient,
+  routePlanner: GoogleMapsRoutePlanner,
 ): Promise<HandlerResponse | null> {
   const timestamp = new Date().toISOString();
 

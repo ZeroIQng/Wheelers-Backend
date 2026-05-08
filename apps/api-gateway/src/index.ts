@@ -9,8 +9,8 @@ import {
   TOPIC_PRESETS,
 } from "@wheleers/kafka-client";
 import {
+  GoogleMapsRoutePlanner,
   loadWorkspaceEnv,
-  OpenRouteServiceClient,
   validateGatewayEnv,
   validateSharedEnv,
 } from "@wheleers/config";
@@ -154,10 +154,9 @@ async function bootstrap(): Promise<void> {
     gatewayEnv.POUCH_API_KEY,
   );
 
-  const routePlanner = new OpenRouteServiceClient(
-    gatewayEnv.OPENROUTESERVICE_BASE_URL,
-    gatewayEnv.OPENROUTESERVICE_API_KEY,
-    gatewayEnv.OPENROUTESERVICE_PROFILE,
+  const routePlanner = new GoogleMapsRoutePlanner(
+    gatewayEnv.GOOGLE_MAPS_BASE_URL,
+    gatewayEnv.GOOGLE_MAPS_API_KEY,
   );
 
   const ridePricingDisplayProvider = new CoinGeckoRidePricingDisplayProvider(

@@ -2,7 +2,7 @@ import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { Duplex } from 'stream';
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import { driverClient, userClient } from '@wheleers/db';
-import type { OpenRouteServiceClient } from '@wheleers/config';
+import type { GoogleMapsRoutePlanner } from '@wheleers/config';
 import { buildGatewayAuthContext } from '../auth/context';
 import { verifyPrivyAccessToken } from '../auth/privy';
 import type { InboundWsMessage } from '../types';
@@ -21,7 +21,7 @@ interface WebSocketServerDeps {
   idleTimeoutMs: number;
   registry: SocketRegistry;
   publisher: GatewayPublisher;
-  routePlanner: OpenRouteServiceClient;
+  routePlanner: GoogleMapsRoutePlanner;
 }
 
 function getRequestOrigin(request: IncomingMessage): string | null {

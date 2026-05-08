@@ -41,7 +41,7 @@ export {
 } from './pricing';
 export type { RidePriceBreakdown, RidePricingParameters } from './pricing';
 export {
-  OpenRouteServiceClient,
+  GoogleMapsRoutePlanner,
   RoutePlanningError,
   estimateRideFareUsdt,
 } from './routing';

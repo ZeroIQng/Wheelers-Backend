@@ -32,15 +32,14 @@ export class RoutePlanningError extends Error {
   }
 }
 
-export class OpenRouteServiceClient {
+export class GoogleMapsRoutePlanner {
   private readonly normalizedBaseUrl: URL;
 
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
-    private readonly profile = 'driving-car',
   ) {
-    this.normalizedBaseUrl = normalizeOpenRouteServiceBaseUrl(baseUrl);
+    this.normalizedBaseUrl = normalizeGoogleMapsBaseUrl(baseUrl);
   }
 
   async planRoute(params: {
@@ -48,33 +47,29 @@ export class OpenRouteServiceClient {
     stops?: RouteWaypoint[];
     destination: RouteWaypoint;
   }): Promise<PlannedRouteMetrics> {
-    const coordinates = [
-      [params.origin.lng, params.origin.lat],
-      ...(params.stops ?? []).map((stop) => [stop.lng, stop.lat]),
-      [params.destination.lng, params.destination.lat],
-    ];
-
-    if (coordinates.length < 2) {
-      throw new RoutePlanningError('At least origin and destination are required');
-    }
-
     const response = await fetch(
-      new URL(
-        `v2/directions/${encodeURIComponent(this.profile)}`,
-        this.normalizedBaseUrl,
-      ),
+      new URL('directions/v2:computeRoutes', this.normalizedBaseUrl),
       {
         method: 'POST',
         headers: {
-          accept: 'application/json, application/geo+json, application/gpx+xml, */*',
           'content-type': 'application/json',
-          Authorization: this.apiKey,
-          'x-api-key': this.apiKey,
+          'x-goog-api-key': this.apiKey,
+          'x-goog-fieldmask':
+            'routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline,routes.viewport',
         },
         body: JSON.stringify({
-          coordinates,
-          instructions: false,
-          maneuvers: false,
+          origin: buildWaypoint(params.origin),
+          destination: buildWaypoint(params.destination),
+          ...(params.stops?.length
+            ? { intermediates: params.stops.map((stop) => buildWaypoint(stop)) }
+            : {}),
+          travelMode: 'DRIVE',
+          routingPreference: 'TRAFFIC_UNAWARE',
+          computeAlternativeRoutes: false,
+          languageCode: 'en-US',
+          units: 'METRIC',
+          polylineQuality: 'OVERVIEW',
+          polylineEncoding: 'ENCODED_POLYLINE',
         }),
       },
     );
@@ -90,15 +85,15 @@ export class OpenRouteServiceClient {
           ? payload
           : safeSerializeErrorPayload(payload);
       throw new RoutePlanningError(
-        `OpenRouteService request failed with status ${response.status}${
+        `Google Maps route request failed with status ${response.status}${
           detail ? `: ${detail}` : ''
         }`,
       );
     }
 
     const route = extractPrimaryRoute(payload);
-    const distanceKm = round3(route.distance / 1000);
-    const durationSeconds = Math.max(0, Math.round(route.duration));
+    const distanceKm = round3(route.distanceMeters / 1000);
+    const durationSeconds = Math.max(0, Math.round(route.durationSeconds));
     const fareEstimateUsdt = estimateRideFareUsdt({
       distanceKm,
       durationSeconds,
@@ -119,23 +114,30 @@ export class OpenRouteServiceClient {
   }
 }
 
-function normalizeOpenRouteServiceBaseUrl(baseUrl: string): URL {
+function normalizeGoogleMapsBaseUrl(baseUrl: string): URL {
   const url = new URL(baseUrl);
-
-  // HeiGIT's new API host requires the service prefix in the path.
-  // Example: https://api.heigit.org/openrouteservice/v2/directions
-  if (
-    url.hostname === 'api.heigit.org' &&
-    (url.pathname === '/' || url.pathname.trim() === '')
-  ) {
-    url.pathname = '/openrouteservice/';
-  }
-
   if (!url.pathname.endsWith('/')) {
     url.pathname = `${url.pathname}/`;
   }
-
   return url;
+}
+
+function buildWaypoint(point: RouteWaypoint): {
+  location: {
+    latLng: {
+      latitude: number;
+      longitude: number;
+    };
+  };
+} {
+  return {
+    location: {
+      latLng: {
+        latitude: point.lat,
+        longitude: point.lng,
+      },
+    },
+  };
 }
 
 export function estimateRideFareUsdt(params: {
@@ -154,153 +156,116 @@ export function estimateRideFareUsdt(params: {
 }
 
 function extractPrimaryRoute(payload: unknown): {
-  distance: number;
-  duration: number;
+  distanceMeters: number;
+  durationSeconds: number;
   coordinates: RouteWaypoint[];
   bounds: RouteBounds;
 } {
   if (!payload || typeof payload !== 'object') {
-    throw new RoutePlanningError('OpenRouteService returned an invalid response body');
+    throw new RoutePlanningError('Google Maps returned an invalid response body');
   }
 
-  const featureCollection = payload as {
-    features?: unknown;
-    bbox?: unknown;
-  };
-  if (Array.isArray(featureCollection.features) && featureCollection.features.length > 0) {
-    const feature = featureCollection.features[0] as {
-      geometry?: unknown;
-      properties?: unknown;
-    };
-    const summary = getRouteSummary(feature.properties);
-    const coordinates = parseLineCoordinates(feature.geometry);
-    const bounds = parseBounds(featureCollection.bbox) ?? computeBounds(coordinates);
-
-    return {
-      distance: summary.distance,
-      duration: summary.duration,
-      coordinates,
-      bounds,
-    };
-  }
-
-  const routeCollection = payload as { bbox?: unknown; routes?: unknown };
-  const routes = routeCollection.routes;
+  const routes = (payload as { routes?: unknown }).routes;
   if (!Array.isArray(routes) || routes.length === 0) {
-    throw new RoutePlanningError('OpenRouteService returned no routes');
+    throw new RoutePlanningError('Google Maps returned no routes');
   }
 
-  const primaryRoute = routes[0] as { bbox?: unknown; geometry?: unknown; summary?: unknown };
-  const summary = getRouteSummary(primaryRoute.summary);
-  const coordinates = parseJsonRouteCoordinates(primaryRoute.geometry);
+  const primaryRoute = routes[0];
+  if (!primaryRoute || typeof primaryRoute !== 'object') {
+    throw new RoutePlanningError('Google Maps returned an invalid route');
+  }
+
+  const distanceMeters = (primaryRoute as { distanceMeters?: unknown }).distanceMeters;
+  if (typeof distanceMeters !== 'number' || !Number.isFinite(distanceMeters)) {
+    throw new RoutePlanningError('Google Maps response is missing route distance');
+  }
+
+  const durationSeconds = parseDurationSeconds(
+    (primaryRoute as { duration?: unknown }).duration,
+  );
+
+  const encodedPolyline = extractEncodedPolyline(primaryRoute);
+  const coordinates = decodePolyline(encodedPolyline);
   const bounds =
-    parseBounds(primaryRoute.bbox) ??
-    parseBounds(routeCollection.bbox) ??
+    parseViewport((primaryRoute as { viewport?: unknown }).viewport) ??
     computeBounds(coordinates);
 
   return {
-    distance: summary.distance,
-    duration: summary.duration,
+    distanceMeters,
+    durationSeconds,
     coordinates,
     bounds,
   };
 }
 
-function getRouteSummary(summary: unknown): { distance: number; duration: number } {
-  if (!summary || typeof summary !== 'object') {
-    throw new RoutePlanningError('OpenRouteService response is missing route summary');
+function parseDurationSeconds(value: unknown): number {
+  if (typeof value !== 'string') {
+    throw new RoutePlanningError('Google Maps response is missing route duration');
   }
 
-  const distance = (summary as { distance?: unknown }).distance;
-  const duration = (summary as { duration?: unknown }).duration;
+  const match = /^(-?\d+(?:\.\d+)?)s$/.exec(value.trim());
+  if (!match) {
+    throw new RoutePlanningError('Google Maps returned an invalid route duration');
+  }
+
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed)) {
+    throw new RoutePlanningError('Google Maps returned an invalid route duration');
+  }
+
+  return parsed;
+}
+
+function extractEncodedPolyline(route: object): string {
+  const polyline = (route as { polyline?: unknown }).polyline;
+  if (!polyline || typeof polyline !== 'object') {
+    throw new RoutePlanningError('Google Maps response is missing route polyline');
+  }
+
+  const encodedPolyline = (polyline as { encodedPolyline?: unknown }).encodedPolyline;
+  if (typeof encodedPolyline !== 'string' || encodedPolyline.length === 0) {
+    throw new RoutePlanningError('Google Maps returned an invalid route polyline');
+  }
+
+  return encodedPolyline;
+}
+
+function parseViewport(value: unknown): RouteBounds | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const low = parseGoogleLatLng((value as { low?: unknown }).low);
+  const high = parseGoogleLatLng((value as { high?: unknown }).high);
+  if (!low || !high) {
+    return null;
+  }
+
+  return {
+    southWest: low,
+    northEast: high,
+  };
+}
+
+function parseGoogleLatLng(value: unknown): RouteWaypoint | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const latitude = (value as { latitude?: unknown }).latitude;
+  const longitude = (value as { longitude?: unknown }).longitude;
   if (
-    typeof distance !== 'number' ||
-    !Number.isFinite(distance) ||
-    typeof duration !== 'number' ||
-    !Number.isFinite(duration)
-  ) {
-    throw new RoutePlanningError('OpenRouteService returned invalid distance or duration');
-  }
-
-  return { distance, duration };
-}
-
-function parseLineCoordinates(geometry: unknown): RouteWaypoint[] {
-  if (!geometry || typeof geometry !== 'object') {
-    throw new RoutePlanningError('OpenRouteService response is missing route geometry');
-  }
-
-  const coordinates = (geometry as { coordinates?: unknown }).coordinates;
-  return parseCoordinatePairs(coordinates);
-}
-
-function parseJsonRouteCoordinates(geometry: unknown): RouteWaypoint[] {
-  if (typeof geometry === 'string') {
-    return decodePolyline(geometry);
-  }
-
-  if (Array.isArray(geometry)) {
-    return parseCoordinatePairs(geometry);
-  }
-
-  if (geometry && typeof geometry === 'object') {
-    return parseCoordinatePairs((geometry as { coordinates?: unknown }).coordinates);
-  }
-
-  throw new RoutePlanningError('OpenRouteService response is missing route geometry');
-}
-
-function parseCoordinatePairs(value: unknown): RouteWaypoint[] {
-  if (!Array.isArray(value) || value.length < 2) {
-    throw new RoutePlanningError('OpenRouteService returned invalid route coordinates');
-  }
-
-  const coordinates = value.map((pair) => {
-    if (
-      !Array.isArray(pair) ||
-      pair.length < 2 ||
-      typeof pair[0] !== 'number' ||
-      !Number.isFinite(pair[0]) ||
-      typeof pair[1] !== 'number' ||
-      !Number.isFinite(pair[1])
-    ) {
-      throw new RoutePlanningError('OpenRouteService returned invalid coordinate pairs');
-    }
-
-    return {
-      lng: pair[0],
-      lat: pair[1],
-    };
-  });
-
-  if (coordinates.length < 2) {
-    throw new RoutePlanningError('OpenRouteService returned too few route coordinates');
-  }
-
-  return coordinates;
-}
-
-function parseBounds(value: unknown): RouteBounds | null {
-  if (
-    !Array.isArray(value) ||
-    value.length < 4 ||
-    typeof value[0] !== 'number' ||
-    typeof value[1] !== 'number' ||
-    typeof value[2] !== 'number' ||
-    typeof value[3] !== 'number'
+    typeof latitude !== 'number' ||
+    !Number.isFinite(latitude) ||
+    typeof longitude !== 'number' ||
+    !Number.isFinite(longitude)
   ) {
     return null;
   }
 
   return {
-    southWest: {
-      lng: value[0],
-      lat: value[1],
-    },
-    northEast: {
-      lng: value[2],
-      lat: value[3],
-    },
+    lat: latitude,
+    lng: longitude,
   };
 }
 
@@ -351,7 +316,7 @@ function decodePolyline(encoded: string): RouteWaypoint[] {
   }
 
   if (coordinates.length < 2) {
-    throw new RoutePlanningError('OpenRouteService returned too few polyline coordinates');
+    throw new RoutePlanningError('Google Maps returned too few polyline coordinates');
   }
 
   return coordinates;
@@ -377,7 +342,7 @@ function decodePolylineValue(
     }
   }
 
-  throw new RoutePlanningError('OpenRouteService returned an invalid encoded polyline');
+  throw new RoutePlanningError('Google Maps returned an invalid encoded polyline');
 }
 
 function round2(value: number): number {

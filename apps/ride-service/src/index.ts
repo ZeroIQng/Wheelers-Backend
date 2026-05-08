@@ -1,4 +1,4 @@
-import { loadWorkspaceEnv, OpenRouteServiceClient, validateRideEnv, validateSharedEnv } from '@wheleers/config';
+import { GoogleMapsRoutePlanner, loadWorkspaceEnv, validateRideEnv, validateSharedEnv } from '@wheleers/config';
 import { createConsumer, createProducer, onShutdown } from '@wheleers/kafka-client';
 import { TOPICS } from '@wheleers/kafka-schemas';
 
@@ -89,10 +89,9 @@ async function bootstrap(): Promise<void> {
 
   const producer = await createProducer({ serviceId: SERVICE_ID });
   const consumer = await createConsumer({ groupId: SERVICE_ID, concurrency: 1 });
-  const routePlanner = new OpenRouteServiceClient(
-    rideEnv.OPENROUTESERVICE_BASE_URL,
-    rideEnv.OPENROUTESERVICE_API_KEY,
-    rideEnv.OPENROUTESERVICE_PROFILE,
+  const routePlanner = new GoogleMapsRoutePlanner(
+    rideEnv.GOOGLE_MAPS_BASE_URL,
+    rideEnv.GOOGLE_MAPS_API_KEY,
   );
 
   const state: RideServiceState = {
