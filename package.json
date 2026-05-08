@@ -14,6 +14,7 @@
 
     "start:api-gateway": "npm -w @wheleers/api-gateway run start",
     "start:ride-service": "npm -w @wheleers/ride-service run start",
+    "start:group-ride": "npm -w @wheleers/group-ride run start",
     "start:payment-service": "npm -w @wheleers/payment-service run start",
     "start:wallet-service": "npm -w @wheleers/wallet-service run start",
     "start:notification-worker": "npm -w @wheleers/notification-worker run start",
