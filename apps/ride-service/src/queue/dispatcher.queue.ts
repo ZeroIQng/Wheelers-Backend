@@ -1,7 +1,7 @@
 import { Queue, Worker, type Job } from 'bullmq';
 import IORedis from 'ioredis';
 
-export const SCHEDULED_RIDE_QUEUE = 'wheleers:scheduled-rides';
+export const SCHEDULED_RIDE_QUEUE = 'wheleers-scheduled-rides';
 
 export type ScheduledRideJobData = {
   scheduledRideId: string;

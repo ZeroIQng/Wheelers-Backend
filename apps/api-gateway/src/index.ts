@@ -46,10 +46,12 @@ import { applyCorsHeaders, sendJson } from "./http/utils";
 import { startGatewayKafkaConsumer } from "./kafka/consumer";
 import { CoinGeckoRidePricingDisplayProvider } from "./pricing/display";
 import { RedisClient } from "./redis/client";
+import { asRawProducer, startOutboxPublisher } from "./outbox/outbox-publisher";
 import { GatewayPublisher } from "./websocket/publisher";
 import { SocketRegistry } from "./websocket/registry";
 import { createGatewayWebSocketServer } from "./websocket/server";
-import { startOutboxPublisher, asRawProducer } from "@wheleers/ride-service/outbox/outbox-publisher";
+
+const SCHEDULED_RIDE_QUEUE = "wheleers-scheduled-rides";
 
 function parseAllowedOrigins(raw: string): Set<string> {
   return new Set(
@@ -98,7 +100,7 @@ async function bootstrap(): Promise<void> {
     enableReadyCheck: false,
   });
 
-  const dispatcherQueue = new Queue("wheleers:scheduled-rides", {
+  const dispatcherQueue = new Queue(SCHEDULED_RIDE_QUEUE, {
     connection: dispatcherRedis,
     defaultJobOptions: {
       attempts: 3,
