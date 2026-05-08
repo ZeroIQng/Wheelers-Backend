@@ -473,7 +473,7 @@ async function bootstrap(): Promise<void> {
   });
 
   const outboxPublisher = startOutboxPublisher({
-    Rawproducer: producer, // same raw producer already created
+    producer, // same raw producer already created
     intervalMs: 500, // poll every 500 ms
     batchSize: 100,
   });
