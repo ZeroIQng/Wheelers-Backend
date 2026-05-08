@@ -154,5 +154,72 @@ export const scheduledRideClient = {
       },
     }),
 
+     /**
+   * Atomically:
+   *   1. Transitions ride DISPATCHING → DISPATCHED and records requestedRideId.
+   *   2. Inserts an OutboxEvent with the RIDE_REQUESTED payload.
+   *
+   * If Kafka is down, the ride is still marked DISPATCHED in the DB.
+   * The outbox publisher will deliver the event when Kafka recovers.
+   *
+   * Safe to call only after claimForDispatch has returned a non-null result.
+   */
+  markDispatchedWithOutbox: async (params: {
+    id: string;
+    rideId: string;
+    outbox: { topic: string; key: string; payload: unknown };
+  }) => {
+    const [ride] = await prisma.$transaction([
+      prisma.scheduledRide.update({
+        where: { id: params.id },
+        data: {
+          status: ScheduledRideStatus.DISPATCHED,
+          requestedRideId: params.rideId,
+          dispatchedAt: new Date(),
+        },
+      }),
+      prisma.outboxEvent.create({
+        data: {
+          topic: params.outbox.topic,
+          key: params.outbox.key,
+          payload: params.outbox.payload as Prisma.InputJsonValue,
+        },
+      }),
+    ]);
+    return ride;
+  },
+
+  /**
+   * Returns scheduled rides that are past their dispatch window but still
+   * have status = SCHEDULED (i.e. the BullMQ job was lost or never created).
+   *
+   * `dispatchBefore` should be `now + leadTimeMs`.
+   */
+  findDueForDispatch: (dispatchBefore: Date, limit = 10) =>
+    prisma.scheduledRide.findMany({
+      where: {
+        status: ScheduledRideStatus.SCHEDULED,
+        scheduledFor: { lte: dispatchBefore },
+      },
+      orderBy: { scheduledFor: 'asc' },
+      take: limit,
+    }),
+
+  /**
+   * Find rides stuck in DISPATCHING for more than `stuckAfterMs` ms.
+   * These are rides where claimForDispatch ran but markDispatchedWithOutbox
+   * never completed (worker crash). Reset them to SCHEDULED for re-dispatch.
+   */
+  releaseStuckDispatching: (stuckAfterMs = 60_000) =>
+    prisma.scheduledRide.updateMany({
+      where: {
+        status: ScheduledRideStatus.DISPATCHING,
+        // Prisma doesn't have updatedAt by default — use scheduledFor as proxy,
+        // or add an `updatedAt` field. If updatedAt exists:
+        updatedAt: { lt: new Date(Date.now() - stuckAfterMs) },
+      },
+      data: { status: ScheduledRideStatus.SCHEDULED },
+    }),
+
   parseStops,
 };

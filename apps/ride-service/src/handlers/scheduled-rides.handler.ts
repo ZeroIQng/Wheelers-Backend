@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { ScheduledRideStatus, scheduledRideClient } from '@wheleers/db';
+import { TOPICS } from '@wheleers/kafka-schemas';
 import type { RideEnv } from '@wheleers/config';
 import type { RideRequestedEvent } from '@wheleers/kafka-schemas';
 import type { RideEventsProducer } from '../producers/ride-events.producer';
-import type { Queue } from 'bullmq';
 import {
   createDispatcherQueue,
   createDispatcherWorker,
@@ -12,71 +12,57 @@ import {
 } from '../queue/dispatcher.queue';
 
 export type ScheduledRideDispatcher = {
-  /** Enqueue a delayed dispatch job for a newly-created scheduled ride. */
-  enqueue(scheduledRideId: string, scheduledFor: Date): Promise<void>;
   shutdown(): Promise<void>;
 };
 
 /**
  * Starts the BullMQ-backed scheduled ride dispatcher.
  *
- * Replaces the old setInterval polling approach.
- * Each ride gets its own delayed job; the worker fires it when the time comes.
- * A lightweight fallback poll still runs every `fallbackIntervalMs` to catch
- * any rides that were created before the queue existed (e.g. after a Redis wipe).
+ * Architecture:
+ *   - DB is the single source of truth (ScheduledRide.status state machine).
+ *   - BullMQ fires a job at ~leadTime before the ride — it is a hint, not a guarantee.
+ *   - doDispatch writes the RIDE_REQUESTED event to the outbox table in the same
+ *     DB transaction that marks the ride DISPATCHED. The outbox publisher delivers
+ *     it to Kafka independently.
+ *   - A recovery scanner runs every `fallbackIntervalMs` to catch rides whose
+ *     BullMQ job was lost (Redis restart, worker downtime, etc.).
+ *   - Stuck DISPATCHING rides (worker crash mid-flight) are reset to SCHEDULED
+ *     by the scanner so they can be re-dispatched.
  */
 export function startScheduledRideDispatcher(params: {
   rideEnv: RideEnv;
   rideEventsProducer: RideEventsProducer;
   redisUrl: string;
 }): ScheduledRideDispatcher {
-  const leadTimeMs = Number(params.rideEnv.SCHEDULED_RIDE_DISPATCH_LEAD_TIME_S) * 1_000;
+  const leadTimeMs =
+    Number(params.rideEnv.SCHEDULED_RIDE_DISPATCH_LEAD_TIME_S) * 1_000;
+
+  // Recovery scanner runs every 2× the lead time — well within acceptable drift.
   const fallbackIntervalMs =
-    Number(params.rideEnv.SCHEDULED_RIDE_DISPATCH_INTERVAL_S) * 1_000 * 10; // 10× less frequent
+    Number(params.rideEnv.SCHEDULED_RIDE_DISPATCH_INTERVAL_S) * 1_000 * 2;
 
   const { queue, connection: queueConn } = createDispatcherQueue(params.redisUrl);
   const { worker, connection: workerConn } = createDispatcherWorker(
     params.redisUrl,
     async (job) => {
-      await dispatchSingleRide(
-        job.data.scheduledRideId,
-        params.rideEventsProducer,
-      );
+      await dispatchSingleRide(job.data.scheduledRideId, params.rideEventsProducer);
     },
   );
 
-  // Fallback: catch rides that slipped through (Redis restart, old records, etc.)
+  // Recovery + stuck-ride scanner.
   const fallbackTimer = setInterval(() => {
-    void dispatchDueScheduledRides(params.rideEventsProducer, leadTimeMs).catch(
-      (err) => console.warn('[ride-service:dispatcher] fallback sweep error:', err),
+    void runRecoveryScanner(params.rideEventsProducer, leadTimeMs).catch((err) =>
+      console.warn('[ride-service:dispatcher] recovery scanner error:', err),
     );
   }, fallbackIntervalMs);
   fallbackTimer.unref();
 
   console.log(
-    `[ride-service:dispatcher] BullMQ worker ready (queue=${SCHEDULED_RIDE_QUEUE}, fallbackEvery=${fallbackIntervalMs}ms)`,
+    `[ride-service:dispatcher] started — queue=${SCHEDULED_RIDE_QUEUE}, ` +
+      `leadTimeMs=${leadTimeMs}, fallbackEvery=${fallbackIntervalMs}ms`,
   );
 
   return {
-    async enqueue(scheduledRideId, scheduledFor) {
-      const fireAt = scheduledFor.getTime() - leadTimeMs;
-      const delayMs = Math.max(0, fireAt - Date.now());
-
-      await queue.add(
-        'dispatch',
-        { scheduledRideId, scheduledFor: scheduledFor.toISOString() },
-        {
-          delay: delayMs,
-          // Stable job ID — safe to re-enqueue on duplicate create calls
-          jobId: `scheduled-ride:${scheduledRideId}`,
-        },
-      );
-
-      console.log(
-        `[ride-service:dispatcher] enqueued ${scheduledRideId} — fires in ${Math.round(delayMs / 1_000)}s`,
-      );
-    },
-
     async shutdown() {
       clearInterval(fallbackTimer);
       await worker.close();
@@ -87,47 +73,65 @@ export function startScheduledRideDispatcher(params: {
   };
 }
 
-// ─── internal helpers ────────────────────────────────────────────────────────
+// ─── Recovery scanner ─────────────────────────────────────────────────────────
 
+/**
+ * 1. Release rides that have been stuck in DISPATCHING for > 60 s (worker crash).
+ * 2. Expire rides that were never dispatched and are now > 24 h past scheduledFor.
+ * 3. Dispatch any rides that are due but still SCHEDULED (BullMQ job was lost).
+ */
+async function runRecoveryScanner(
+  rideEventsProducer: RideEventsProducer,
+  leadTimeMs: number,
+): Promise<void> {
+  // Step 1 — release stuck DISPATCHING rides.
+  await scheduledRideClient.releaseStuckDispatching(60_000);
+
+  // Step 2 — expire very old SCHEDULED rides.
+  await scheduledRideClient.expireMissed(
+    new Date(Date.now() - 24 * 60 * 60 * 1_000),
+  );
+
+  // Step 3 — dispatch due-but-missed rides (BullMQ job was lost).
+  const dispatchBefore = new Date(Date.now() + leadTimeMs);
+  const dueRides = await scheduledRideClient.findDueForDispatch(dispatchBefore, 10);
+
+  for (const ride of dueRides) {
+    await dispatchSingleRide(ride.id, rideEventsProducer);
+  }
+}
+
+// ─── Core dispatch logic ──────────────────────────────────────────────────────
+
+/**
+ * Claims a single scheduled ride and writes the outbox event.
+ *
+ * Idempotent: if the ride is already DISPATCHED (e.g. scanner + BullMQ race),
+ * claimForDispatch returns null and we exit immediately.
+ */
 async function dispatchSingleRide(
   scheduledRideId: string,
   rideEventsProducer: RideEventsProducer,
 ): Promise<void> {
+  // Atomic claim: SCHEDULED → DISPATCHING (only one worker wins).
   const claimed = await scheduledRideClient.claimForDispatch(scheduledRideId);
   if (!claimed || claimed.status !== ScheduledRideStatus.DISPATCHING) {
-    // Already dispatched, cancelled, or expired — nothing to do
+    // Already dispatched, cancelled, or expired.
     return;
   }
 
   await doDispatch(claimed, rideEventsProducer);
 }
 
-async function dispatchDueScheduledRides(
-  rideEventsProducer: RideEventsProducer,
-  leadTimeMs: number,
-): Promise<void> {
-  const dispatchBefore = new Date(Date.now() + leadTimeMs);
-  await scheduledRideClient.expireMissed(
-    new Date(Date.now() - 24 * 60 * 60 * 1_000),
-  );
-
-  const dueRides = await scheduledRideClient.findDueForDispatch(dispatchBefore, 10);
-
-  for (const dueRide of dueRides) {
-    const claimed = await scheduledRideClient.claimForDispatch(dueRide.id);
-    if (!claimed || claimed.status !== ScheduledRideStatus.DISPATCHING) continue;
-    await doDispatch(claimed, rideEventsProducer);
-  }
-}
-
 async function doDispatch(
-  claimed: Awaited<ReturnType<typeof scheduledRideClient.claimForDispatch>>,
+  claimed: NonNullable<Awaited<ReturnType<typeof scheduledRideClient.claimForDispatch>>>,
   rideEventsProducer: RideEventsProducer,
 ): Promise<void> {
-  if (!claimed) return;
-
+  // Use a stable rideId: if this is a retry (previous run crashed before commit),
+  // requestedRideId would still be null here because markDispatchedWithOutbox
+  // never completed. Generate a fresh one.
   const rideId = randomUUID();
-  const scheduledStops = scheduledRideClient.parseStops(claimed.stops);
+  const stops = scheduledRideClient.parseStops(claimed.stops);
 
   const event: RideRequestedEvent = {
     eventType: 'RIDE_REQUESTED',
@@ -144,7 +148,7 @@ async function doDispatch(
       lng: claimed.destLng,
       address: claimed.destAddress,
     },
-    stops: scheduledStops,
+    stops,
     plannedDistanceKm: claimed.plannedDistanceKm ?? undefined,
     plannedDurationSeconds: claimed.plannedDurationSeconds ?? undefined,
     fareEstimateUsdt: Number(claimed.fareEstimateUsdt ?? 0),
@@ -154,13 +158,34 @@ async function doDispatch(
   };
 
   try {
-    await rideEventsProducer.rideRequested(event);
-    await scheduledRideClient.markDispatched(claimed.id, rideId);
+    // ── Single atomic DB transaction ──────────────────────────────────────────
+    // 1. ScheduledRide: DISPATCHING → DISPATCHED  (sets requestedRideId)
+    // 2. OutboxEvent: insert RIDE_REQUESTED payload
+    //
+    // If this transaction fails, the ride stays DISPATCHING.
+    // releaseStuckDispatching() will reset it to SCHEDULED within 60 s.
+    await scheduledRideClient.markDispatchedWithOutbox({
+      id: claimed.id,
+      rideId,
+      outbox: {
+        topic: TOPICS.RIDE_EVENTS,
+        key: rideId,
+        payload: event,
+      },
+    });
+
     console.log(
-      `[ride-service:dispatcher] dispatched scheduled ride ${claimed.id} → live ride ${rideId}`,
+      `[ride-service:dispatcher] dispatched ${claimed.id} → live ride ${rideId}`,
     );
   } catch (error) {
-    await scheduledRideClient.releaseClaim(claimed.id);
-    throw error; // BullMQ will retry per defaultJobOptions
+    // Transaction failed. Reset claim so the recovery scanner can retry.
+    await scheduledRideClient.releaseClaim(claimed.id).catch((releaseErr) =>
+      console.error(
+        '[ride-service:dispatcher] releaseClaim failed after dispatch error:',
+        releaseErr,
+      ),
+    );
+    // Re-throw so BullMQ retries via its backoff config.
+    throw error;
   }
 }

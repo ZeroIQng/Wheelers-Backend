@@ -7,7 +7,394 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ─── Enums ────────────────────────────────────────────────────────────────────
+model User {
+  id            String         @id @default(uuid())
+  privyDid      String         @unique
+  walletAddress String?        @unique
+  role          UserRole       @default(RIDER)
+  name          String?
+  phone         String?
+  photoUrl      String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  email         String?
+  driver        Driver?
+  notifications Notification[]
+  consents      UserConsent[]
+  wallet        Wallet?
+
+  @@index([privyDid])
+  @@index([walletAddress])
+  @@index([email])
+}
+
+model UserConsent {
+  id             String      @id @default(uuid())
+  userId         String
+  consentType    ConsentType
+  consentVersion String
+  consentTxHash  String
+  grantedAt      DateTime    @default(now())
+  revokedAt      DateTime?
+  user           User        @relation(fields: [userId], references: [id])
+
+  @@unique([userId, consentType, consentVersion])
+  @@index([userId])
+}
+
+model Driver {
+  id                String            @id @default(uuid())
+  userId            String            @unique
+  status            DriverStatus      @default(OFFLINE)
+  kycStatus         KycStatus         @default(PENDING)
+  lat               Float?
+  lng               Float?
+  lastSeenAt        DateTime?
+  vehicleMake       String?
+  vehicleModel      String?
+  vehiclePlate      String?
+  vehicleYear       Int?
+  licenceCid        String?
+  insuranceCid      String?
+  selfieHash        String?
+  rating            Float             @default(5.0)
+  totalRides        Int               @default(0)
+  totalEarningsUsdt Decimal           @default(0) @db.Decimal(18, 6)
+  user              User              @relation(fields: [userId], references: [id])
+  kycReviews        DriverKycReview[]
+  rides             Ride[]            @relation("DriverRides")
+
+  @@index([status])
+  @@index([kycStatus])
+}
+
+model DriverKycReview {
+  id          String    @id @default(uuid())
+  driverId    String
+  submittedAt DateTime  @default(now())
+  reviewedAt  DateTime?
+  reviewedBy  String?
+  outcome     KycStatus
+  notes       String?
+  driver      Driver    @relation(fields: [driverId], references: [id])
+
+  @@index([driverId])
+}
+
+model Wallet {
+  id             String          @id @default(uuid())
+  userId         String          @unique
+  address        String          @unique
+  balanceUsdt    Decimal         @default(0) @db.Decimal(18, 6)
+  lockedUsdt     Decimal         @default(0) @db.Decimal(18, 6)
+  stakedUsdt     Decimal         @default(0) @db.Decimal(18, 6)
+  chain          String          @default("base")
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  defiPositions  DefiPosition[]
+  rideHolds      RideHold[]
+  transactions   Transaction[]
+  virtualAccount VirtualAccount?
+  user           User            @relation(fields: [userId], references: [id])
+
+  @@index([address])
+}
+
+model VirtualAccount {
+  id            String   @id @default(uuid())
+  walletId      String   @unique
+  bankName      String
+  accountNumber String
+  accountName   String
+  korapayRef    String   @unique
+  createdAt     DateTime @default(now())
+  wallet        Wallet   @relation(fields: [walletId], references: [id])
+}
+
+model PaymentRecord {
+  id                       String              @id @default(uuid())
+  paymentId                String              @unique
+  userId                   String
+  provider                 String
+  providerReference        String              @unique
+  userWallet               String
+  amountLocal              Decimal             @db.Decimal(18, 2)
+  amountUsdt               Decimal?            @db.Decimal(18, 6)
+  exchangeRate             Decimal?            @db.Decimal(18, 6)
+  status                   PaymentRecordStatus @default(RECEIVED)
+  conversionLeaseExpiresAt DateTime?
+  metadata                 Json?
+  createdAt                DateTime            @default(now())
+  updatedAt                DateTime            @updatedAt
+  localCurrency            String              @default("NGN")
+
+  @@index([userId, status])
+}
+
+model PaymentIntent {
+  id                  String              @id @default(uuid())
+  paymentId           String              @unique
+  userId              String
+  provider            String
+  providerReference   String              @unique
+  sessionType         PaymentSessionType
+  lifecycleStatus     PaymentIntentStatus @default(PENDING)
+  providerStatus      String
+  userWallet          String
+  amountUsd           Decimal             @db.Decimal(18, 6)
+  amountLocal         Decimal?            @db.Decimal(18, 2)
+  localCurrency       String              @default("NGN")
+  cryptoCurrency      String
+  cryptoNetwork       String
+  cryptoAmount        Decimal?            @db.Decimal(18, 6)
+  chain               String?
+  customerEmail       String?
+  walletTag           String?
+  settlementReference String?
+  providerPayload     Json?
+  metadata            Json?
+  lastSyncedAt        DateTime?
+  settledAt           DateTime?
+  failedAt            DateTime?
+  expiresAt           DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@index([userId, lifecycleStatus])
+  @@index([sessionType, lifecycleStatus])
+}
+
+model RideHold {
+  id                String         @id @default(uuid())
+  rideId            String         @unique
+  walletId          String
+  riderId           String
+  amountUsdt        Decimal        @db.Decimal(18, 6)
+  status            RideHoldStatus @default(ACTIVE)
+  settledAmountUsdt Decimal?       @db.Decimal(18, 6)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  settledAt         DateTime?
+  wallet            Wallet         @relation(fields: [walletId], references: [id])
+
+  @@index([walletId, status])
+  @@index([riderId, status])
+}
+
+model Transaction {
+  id           String               @id @default(uuid())
+  walletId     String
+  type         TransactionType
+  direction    TransactionDirection
+  amountUsdt   Decimal              @db.Decimal(18, 6)
+  balanceAfter Decimal              @db.Decimal(18, 6)
+  referenceId  String
+  metadata     Json?
+  createdAt    DateTime             @default(now())
+  wallet       Wallet               @relation(fields: [walletId], references: [id])
+
+  @@unique([walletId, type, direction, referenceId])
+  @@index([walletId, createdAt])
+  @@index([referenceId])
+}
+
+model Ride {
+  id               String       @id @default(uuid())
+  riderId          String
+  driverId         String?
+  status           RideStatus   @default(REQUESTED)
+  pickupLat        Float
+  pickupLng        Float
+  pickupAddress    String
+  destLat          Float
+  destLng          Float
+  destAddress      String
+  fareEstimateUsdt Decimal?     @db.Decimal(18, 6)
+  fareFinalUsdt    Decimal?     @db.Decimal(18, 6)
+  platformFeeUsdt  Decimal?     @db.Decimal(18, 6)
+  distanceKm       Float?
+  durationSeconds  Int?
+  cancelStage      CancelStage?
+  cancelReason     String?
+  penaltyUsdt      Decimal?     @db.Decimal(18, 6)
+  recordingId      String?
+  recordingCid     String?
+  recordingHash    String?
+  matchedAt        DateTime?
+  arrivedAt        DateTime?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  cancelledAt      DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  disputes         Dispute[]
+  gpsLogs          GpsLog[]
+  driver           Driver?      @relation("DriverRides", fields: [driverId], references: [id])
+  routeStops       RideStop[]
+
+  @@index([riderId, createdAt])
+  @@index([driverId, status])
+  @@index([status])
+}
+
+model RideStop {
+  id          String         @id @default(uuid())
+  rideId      String
+  stopOrder   Int
+  type        RideStopType   @default(INTERMEDIATE)
+  status      RideStopStatus @default(PENDING)
+  lat         Float
+  lng         Float
+  address     String
+  completedAt DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  ride        Ride           @relation(fields: [rideId], references: [id], onDelete: Cascade)
+
+  @@unique([rideId, stopOrder])
+  @@index([rideId, status, stopOrder])
+}
+
+model ScheduledRide {
+  id                     String                     @id @default(uuid())
+  riderId                String
+  riderWallet            String
+  status                 ScheduledRideStatus        @default(SCHEDULED)
+  paymentMethod          ScheduledRidePaymentMethod @default(WALLET_BALANCE)
+  scheduledFor           DateTime
+  requestedRideId        String?                    @unique
+  pickupLat              Float
+  pickupLng              Float
+  pickupAddress          String
+  destLat                Float
+  destLng                Float
+  destAddress            String
+  stops                  Json?
+  plannedDistanceKm      Float?
+  plannedDurationSeconds Int?
+  fareEstimateUsdt       Decimal?                   @db.Decimal(18, 6)
+  cancellationReason     String?
+  cancelledAt            DateTime?
+  dispatchedAt           DateTime?
+  createdAt              DateTime                   @default(now())
+  updatedAt              DateTime                   @updatedAt
+
+  @@index([riderId, scheduledFor])
+  @@index([status, scheduledFor])
+}
+
+model GpsLog {
+  id        String   @id @default(uuid())
+  rideId    String
+  lat       Float
+  lng       Float
+  speedKmh  Float?
+  timestamp DateTime
+  ride      Ride     @relation(fields: [rideId], references: [id])
+
+  @@index([rideId, timestamp])
+}
+
+model Recording {
+  id              String   @id @default(uuid())
+  rideId          String   @unique
+  ipfsCid         String
+  sha256Hash      String
+  consentTxHash   String
+  encryptedWith   String
+  durationSeconds Int
+  storedAt        DateTime @default(now())
+  onchainTxHash   String?
+
+  @@index([rideId])
+}
+
+model Dispute {
+  id           String             @id @default(uuid())
+  rideId       String
+  openedBy     String
+  openedByRole String
+  againstId    String
+  reason       String
+  status       DisputeStatus      @default(OPEN)
+  resolution   DisputeResolution?
+  resolvedBy   String?
+  notes        String?
+  refundUsdt   Decimal?           @db.Decimal(18, 6)
+  bonusUsdt    Decimal?           @db.Decimal(18, 6)
+  createdAt    DateTime           @default(now())
+  resolvedAt   DateTime?
+  ride         Ride               @relation(fields: [rideId], references: [id])
+
+  @@index([rideId])
+  @@index([openedBy])
+  @@index([status])
+}
+
+model Feedback {
+  id             String   @id @default(uuid())
+  rideId         String
+  reviewerId     String
+  reviewerRole   String
+  revieweeId     String
+  revieweeWallet String
+  rating         Int
+  comment        String?
+  commentHash    String?
+  onchainTxHash  String?
+  createdAt      DateTime @default(now())
+
+  @@unique([rideId, reviewerId])
+  @@index([revieweeId])
+}
+
+model DefiPosition {
+  id             String             @id @default(uuid())
+  walletId       String
+  protocol       DefiProtocol
+  tier           DefiTier
+  stakedUsdt     Decimal            @db.Decimal(18, 6)
+  expectedApyPct Float
+  txHash         String
+  chainId        Int
+  status         DefiPositionStatus @default(ACTIVE)
+  unstakeTxHash  String?
+  createdAt      DateTime           @default(now())
+  closedAt       DateTime?
+  wallet         Wallet             @relation(fields: [walletId], references: [id])
+  yieldHarvests  YieldHarvest[]
+
+  @@index([walletId, status])
+}
+
+model YieldHarvest {
+  id           String       @id @default(uuid())
+  positionId   String
+  yieldUsdt    Decimal      @db.Decimal(18, 6)
+  apyActualPct Float
+  periodDays   Int
+  txHash       String
+  chainId      Int
+  harvestedAt  DateTime     @default(now())
+  position     DefiPosition @relation(fields: [positionId], references: [id])
+
+  @@index([positionId])
+}
+
+model Notification {
+  id            String               @id @default(uuid())
+  userId        String
+  title         String
+  body          String
+  category      NotificationCategory
+  referenceId   String?
+  referenceType String?
+  read          Boolean              @default(false)
+  createdAt     DateTime             @default(now())
+  user          User                 @relation(fields: [userId], references: [id])
+
+  @@index([userId, read, createdAt])
+}
 
 enum UserRole {
   RIDER
@@ -30,11 +417,11 @@ enum DriverStatus {
 
 enum RideStatus {
   REQUESTED
-  MATCHING          // ride-service is searching for a driver
+  MATCHING
   DRIVER_ASSIGNED
-  DRIVER_EN_ROUTE   // driver accepted, travelling to pickup
-  ARRIVED           // driver at pickup location
-  IN_PROGRESS       // trip underway
+  DRIVER_EN_ROUTE
+  ARRIVED
+  IN_PROGRESS
   COMPLETED
   CANCELLED
   DISPUTED
@@ -67,9 +454,9 @@ enum TransactionType {
 }
 
 enum DefiTier {
-  TIER1  // Aave / Compound — highest liquidity
-  TIER2  // LP stable pairs — 24-48h withdrawal
-  TIER3  // Protocol staking — longest lockup, opt-in only
+  TIER1
+  TIER2
+  TIER3
 }
 
 enum DefiProtocol {
@@ -165,468 +552,4 @@ enum ScheduledRideStatus {
 enum ScheduledRidePaymentMethod {
   WALLET_BALANCE
   SMART_ACCOUNT
-}
-
-// ─── User & Auth ──────────────────────────────────────────────────────────────
-
-model User {
-  id            String    @id @default(uuid())
-  privyDid      String    @unique            // Privy's internal DID — never changes
-  walletAddress String?   @unique            // EVM wallet address (lowercase), if linked
-  email         String?
-  role          UserRole  @default(RIDER)
-  name          String?
-  phone         String?
-  photoUrl      String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-
-  wallet        Wallet?
-  driver        Driver?
-  consents      UserConsent[]
-  notifications Notification[]
-
-  @@index([privyDid])
-  @@index([walletAddress])
-  @@index([email])
-}
-
-// Records each consent the user has given, on-chain consent tx logged here.
-// ride-service checks recordingConsentTxHash before starting a recording.
-model UserConsent {
-  id             String      @id @default(uuid())
-  userId         String
-  user           User        @relation(fields: [userId], references: [id])
-  consentType    ConsentType
-  consentVersion String      // e.g. "v1.0" — bump when terms change
-  consentTxHash  String      // on-chain tx that logged this consent
-  grantedAt      DateTime    @default(now())
-  revokedAt      DateTime?   // null = still active
-
-  @@unique([userId, consentType, consentVersion])
-  @@index([userId])
-}
-
-// ─── Driver ───────────────────────────────────────────────────────────────────
-
-model Driver {
-  id            String       @id @default(uuid())
-  userId        String       @unique
-  user          User         @relation(fields: [userId], references: [id])
-  status        DriverStatus @default(OFFLINE)
-  kycStatus     KycStatus    @default(PENDING)
-
-  // Live location — updated every GPS ping via Redis, persisted here on status change
-  lat           Float?
-  lng           Float?
-  lastSeenAt    DateTime?
-
-  // Vehicle
-  vehicleMake   String?
-  vehicleModel  String?
-  vehiclePlate  String?
-  vehicleYear   Int?
-
-  // KYC document references (stored on IPFS, only CID here)
-  licenceCid    String?
-  insuranceCid  String?
-  selfieHash    String?      // SHA-256 of face verification photo
-
-  // Rating
-  rating        Float        @default(5.0)
-  totalRides    Int          @default(0)
-  totalEarningsUsdt Decimal  @default(0) @db.Decimal(18, 6)
-
-  rides         Ride[]       @relation("DriverRides")
-  kycReviews    DriverKycReview[]
-
-  @@index([status])
-  @@index([kycStatus])
-}
-
-// Each KYC submission and its review outcome is stored separately so
-// there's an audit trail if a driver resubmits after rejection.
-model DriverKycReview {
-  id          String    @id @default(uuid())
-  driverId    String
-  driver      Driver    @relation(fields: [driverId], references: [id])
-  submittedAt DateTime  @default(now())
-  reviewedAt  DateTime?
-  reviewedBy  String?   // admin user ID
-  outcome     KycStatus // APPROVED or REJECTED
-  notes       String?   // rejection reason shown to driver
-
-  @@index([driverId])
-}
-
-// ─── Wallet & Payments ────────────────────────────────────────────────────────
-
-model Wallet {
-  id              String    @id @default(uuid())
-  userId          String    @unique
-  user            User      @relation(fields: [userId], references: [id])
-  address         String    @unique  // EVM wallet address — same as User.walletAddress
-  balanceUsdt     Decimal   @default(0) @db.Decimal(18, 6)
-  // Funds locked for an in-progress ride — not spendable until ride ends
-  lockedUsdt      Decimal   @default(0) @db.Decimal(18, 6)
-  // Funds currently staked in a DeFi protocol — not in wallet balance
-  stakedUsdt      Decimal   @default(0) @db.Decimal(18, 6)
-  chain           String    @default("base")
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-
-  virtualAccount  VirtualAccount?
-  rideHolds       RideHold[]
-  transactions    Transaction[]
-  defiPositions   DefiPosition[]
-
-  @@index([address])
-}
-
-// Provider-backed virtual account for NGN deposits.
-// One per wallet if the selected funding provider supports dedicated accounts.
-model VirtualAccount {
-  id            String   @id @default(uuid())
-  walletId      String   @unique
-  wallet        Wallet   @relation(fields: [walletId], references: [id])
-  bankName      String
-  accountNumber String
-  accountName   String
-  korapayRef    String   @unique  // provider reference retained for backwards compatibility
-  createdAt     DateTime @default(now())
-}
-
-model PaymentRecord {
-  id                     String              @id @default(uuid())
-  paymentId              String              @unique
-  userId                 String
-  provider               String
-  providerReference      String              @unique
-  userWallet             String
-  amountLocal            Decimal             @db.Decimal(18, 2)
-  localCurrency          String              @default("NGN")
-  amountUsdt             Decimal?            @db.Decimal(18, 6)
-  exchangeRate           Decimal?            @db.Decimal(18, 6)
-  status                 PaymentRecordStatus @default(RECEIVED)
-  conversionLeaseExpiresAt DateTime?
-  metadata               Json?
-  createdAt              DateTime            @default(now())
-  updatedAt              DateTime            @updatedAt
-
-  @@index([userId, status])
-}
-
-model PaymentIntent {
-  id                 String              @id @default(uuid())
-  paymentId          String              @unique
-  userId             String
-  provider           String
-  providerReference  String              @unique
-  sessionType        PaymentSessionType
-  lifecycleStatus    PaymentIntentStatus @default(PENDING)
-  providerStatus     String
-  userWallet         String
-  amountUsd          Decimal             @db.Decimal(18, 6)
-  amountLocal        Decimal?            @db.Decimal(18, 2)
-  localCurrency      String              @default("NGN")
-  cryptoCurrency     String
-  cryptoNetwork      String
-  cryptoAmount       Decimal?            @db.Decimal(18, 6)
-  chain              String?
-  customerEmail      String?
-  walletTag          String?
-  settlementReference String?
-  providerPayload    Json?
-  metadata           Json?
-  lastSyncedAt       DateTime?
-  settledAt          DateTime?
-  failedAt           DateTime?
-  expiresAt          DateTime?
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
-
-  @@index([userId, lifecycleStatus])
-  @@index([sessionType, lifecycleStatus])
-}
-
-model RideHold {
-  id                String         @id @default(uuid())
-  rideId            String         @unique
-  walletId          String
-  wallet            Wallet         @relation(fields: [walletId], references: [id])
-  riderId           String
-  amountUsdt        Decimal        @db.Decimal(18, 6)
-  status            RideHoldStatus @default(ACTIVE)
-  settledAmountUsdt Decimal?       @db.Decimal(18, 6)
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
-  settledAt         DateTime?
-
-  @@index([walletId, status])
-  @@index([riderId, status])
-}
-
-// Immutable record of every balance change.
-// Never update a transaction — only insert new ones.
-model Transaction {
-  id          String               @id @default(uuid())
-  walletId    String
-  wallet      Wallet               @relation(fields: [walletId], references: [id])
-  type        TransactionType
-  direction   TransactionDirection
-  amountUsdt  Decimal              @db.Decimal(18, 6)
-  // Snapshot of balance after this transaction — makes auditing trivial
-  balanceAfter Decimal             @db.Decimal(18, 6)
-  // referenceId links to the source event: rideId, paymentId, positionId etc.
-  referenceId String
-  metadata    Json?                // extra context for onramps, rides, DeFi, etc.
-  createdAt   DateTime             @default(now())
-
-  @@index([walletId, createdAt])
-  @@index([referenceId])
-  @@unique([walletId, type, direction, referenceId])
-}
-
-// ─── Ride ─────────────────────────────────────────────────────────────────────
-
-model Ride {
-  id              String      @id @default(uuid())
-  riderId         String
-  driverId        String?
-  driver          Driver?     @relation("DriverRides", fields: [driverId], references: [id])
-  status          RideStatus  @default(REQUESTED)
-
-  // Pickup
-  pickupLat       Float
-  pickupLng       Float
-  pickupAddress   String
-
-  // Destination
-  destLat         Float
-  destLng         Float
-  destAddress     String
-
-  // Fares
-  fareEstimateUsdt Decimal?   @db.Decimal(18, 6)  // calculated at request time
-  fareFinalUsdt    Decimal?   @db.Decimal(18, 6)  // set on completion
-  platformFeeUsdt  Decimal?   @db.Decimal(18, 6)  // 0.3% of driver profit, 0 if no profit
-  distanceKm       Float?
-  durationSeconds  Int?
-
-  // Cancellation
-  cancelStage     CancelStage?
-  cancelReason    String?
-  penaltyUsdt     Decimal?    @db.Decimal(18, 6)
-
-  // Recording
-  recordingId     String?     // UUID of the Recording record if trip was recorded
-  recordingCid    String?     // IPFS CID of the encrypted recording
-  recordingHash   String?     // SHA-256 — this is what's logged on-chain
-
-  // Timestamps
-  matchedAt       DateTime?
-  arrivedAt       DateTime?
-  startedAt       DateTime?
-  completedAt     DateTime?
-  cancelledAt     DateTime?
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-
-  gpsLogs         GpsLog[]
-  routeStops      RideStop[]
-  disputes        Dispute[]
-
-  @@index([riderId, createdAt])
-  @@index([driverId, status])
-  @@index([status])
-}
-
-model RideStop {
-  id          String         @id @default(uuid())
-  rideId       String
-  ride         Ride           @relation(fields: [rideId], references: [id], onDelete: Cascade)
-  stopOrder    Int
-  type         RideStopType   @default(INTERMEDIATE)
-  status       RideStopStatus @default(PENDING)
-  lat          Float
-  lng          Float
-  address      String
-  completedAt  DateTime?
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
-
-  @@unique([rideId, stopOrder])
-  @@index([rideId, status, stopOrder])
-}
-
-model ScheduledRide {
-  id                     String                    @id @default(uuid())
-  riderId                String
-  riderWallet            String
-  status                 ScheduledRideStatus      @default(SCHEDULED)
-  paymentMethod          ScheduledRidePaymentMethod @default(WALLET_BALANCE)
-  scheduledFor           DateTime
-  requestedRideId        String?                   @unique
-
-  pickupLat              Float
-  pickupLng              Float
-  pickupAddress          String
-  destLat                Float
-  destLng                Float
-  destAddress            String
-  stops                  Json?
-
-  requestedRideId        String?
-  plannedDistanceKm      Float?
-  plannedDurationSeconds Int?
-  fareEstimateUsdt       Decimal?                  @db.Decimal(18, 6)
-
-  cancellationReason     String?
-  cancelledAt            DateTime?
-  dispatchedAt           DateTime?
-  createdAt              DateTime                  @default(now())
-  updatedAt              DateTime                  @updatedAt
-
-  @@index([riderId, scheduledFor])
-  @@index([status, scheduledFor])
-  
-}
-
-// GPS snapshots written periodically during a ride for dispute evidence.
-// Not every ping — ride-service samples every 30s and writes here.
-// Live GPS (every 3s) goes through Redis only.
-model GpsLog {
-  id        String   @id @default(uuid())
-  rideId    String
-  ride      Ride     @relation(fields: [rideId], references: [id])
-  lat       Float
-  lng       Float
-  speedKmh  Float?
-  timestamp DateTime
-
-  @@index([rideId, timestamp])
-}
-
-// ─── Recordings ───────────────────────────────────────────────────────────────
-
-model Recording {
-  id              String   @id @default(uuid())
-  rideId          String   @unique
-  ipfsCid         String   // content ID on IPFS
-  sha256Hash      String   // hash of encrypted file — logged on-chain
-  onchainTxHash   String?
-  consentTxHash   String   // on-chain consent that authorised this recording
-  encryptedWith   String   // key scheme identifier e.g. "aes256-gcm-v1"
-  durationSeconds Int
-  storedAt        DateTime @default(now())
-
-  @@index([rideId])
-}
-
-// ─── Disputes ─────────────────────────────────────────────────────────────────
-
-model Dispute {
-  id           String            @id @default(uuid())
-  rideId       String
-  ride         Ride              @relation(fields: [rideId], references: [id])
-  openedBy     String            // userId
-  openedByRole String            // "rider" | "driver"
-  againstId    String            // userId of the other party
-  reason       String
-  status       DisputeStatus     @default(OPEN)
-  resolution   DisputeResolution?
-  resolvedBy   String?           // admin userId
-  notes        String?
-  refundUsdt   Decimal?          @db.Decimal(18, 6)
-  bonusUsdt    Decimal?          @db.Decimal(18, 6)
-  createdAt    DateTime          @default(now())
-  resolvedAt   DateTime?
-
-  @@index([rideId])
-  @@index([openedBy])
-  @@index([status])
-}
-
-// ─── Feedback ─────────────────────────────────────────────────────────────────
-
-model Feedback {
-  id             String   @id @default(uuid())
-  rideId         String
-  reviewerId     String
-  reviewerRole   String   // "rider" | "driver"
-  revieweeId     String
-  revieweeWallet String
-  rating         Int      // 1–5
-  comment        String?
-  commentHash    String?  // SHA-256 of comment — logged on-chain
-  onchainTxHash  String?  // set after compliance-worker logs it
-  createdAt      DateTime @default(now())
-
-  @@unique([rideId, reviewerId])  // one review per person per ride
-  @@index([revieweeId])
-}
-
-// ─── DeFi ─────────────────────────────────────────────────────────────────────
-
-model DefiPosition {
-  id              String             @id @default(uuid())
-  walletId        String
-  wallet          Wallet             @relation(fields: [walletId], references: [id])
-  protocol        DefiProtocol
-  tier            DefiTier
-  stakedUsdt      Decimal            @db.Decimal(18, 6)
-  expectedApyPct  Float
-  txHash          String             // stake transaction hash
-  chainId         Int
-  status          DefiPositionStatus @default(ACTIVE)
-  unstakeTxHash   String?            // set when unstaking
-  createdAt       DateTime           @default(now())
-  closedAt        DateTime?
-
-  yieldHarvests   YieldHarvest[]
-
-  @@index([walletId, status])
-}
-
-model YieldHarvest {
-  id              String       @id @default(uuid())
-  positionId      String
-  position        DefiPosition @relation(fields: [positionId], references: [id])
-  yieldUsdt       Decimal      @db.Decimal(18, 6)
-  apyActualPct    Float
-  periodDays      Int
-  txHash          String
-  chainId         Int
-  harvestedAt     DateTime     @default(now())
-
-  @@index([positionId])
-}
-
-// ─── Notifications ────────────────────────────────────────────────────────────
-
-// In-app notification centre — push goes through Expo, this persists the record.
-model Notification {
-  id            String               @id @default(uuid())
-  userId        String
-  user          User                 @relation(fields: [userId], references: [id])
-  title         String
-  body          String
-  category      NotificationCategory
-  referenceId   String?              // rideId, paymentId etc for deep-link
-  referenceType String?
-  read          Boolean              @default(false)
-  createdAt     DateTime             @default(now())
-
-  @@index([userId, read, createdAt])
-}
-
-model OutboxEvent {
-  id          String    @id @default(uuid())
-  topic       String
-  key         String?
-  payload     Json
-  publishedAt DateTime?
-  createdAt   DateTime  @default(now())
-
-  @@index([publishedAt, createdAt])
 }
