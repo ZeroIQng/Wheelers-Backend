@@ -1,20 +1,20 @@
-import type { IncomingMessage, ServerResponse } from 'http';
+import type { IncomingMessage, ServerResponse } from "http";
 import {
   ScheduledRidePaymentMethod,
   scheduledRideClient,
   rideClient,
-} from '@wheleers/db';
-import { OpenRouteServiceClient } from '@wheleers/config';
-import { Queue } from 'bullmq';
-import { authenticateHttpUser } from './authenticate';
-import { readJsonBody, sendJson } from './utils';
-import { getNumber, getRecord, getString, isRecord } from '../utils/object';
+} from "@wheleers/db";
+import { OpenRouteServiceClient } from "@wheleers/config";
+import { Queue } from "bullmq";
+import { authenticateHttpUser } from "./authenticate";
+import { readJsonBody, sendJson } from "./utils";
+import { getNumber, getRecord, getString, isRecord } from "../utils/object";
 import {
   convertUsdtToRideDisplayAmount,
   type RidePricingDisplay,
   type RidePricingDisplayProvider,
-} from '../pricing/display';
-import { buildRideEstimatePricing } from '../pricing/ride-estimate';
+} from "../pricing/display";
+import { buildRideEstimatePricing } from "../pricing/ride-estimate";
 
 interface RideRouteDeps {
   privyAppId: string;
@@ -43,15 +43,18 @@ type LatLngAddress = {
   address: string;
 };
 
-function parseWaypoint(record: Record<string, unknown>, key: string): LatLngAddress {
+function parseWaypoint(
+  record: Record<string, unknown>,
+  key: string,
+): LatLngAddress {
   const value = getRecord(record, key);
   if (!value) {
     throw new Error(`Missing required field: ${key}`);
   }
 
-  const lat = getNumber(value, 'lat');
-  const lng = getNumber(value, 'lng');
-  const address = getString(value, 'address');
+  const lat = getNumber(value, "lat");
+  const lng = getNumber(value, "lng");
+  const address = getString(value, "address");
 
   if (lat === undefined || lng === undefined || !address) {
     throw new Error(`Invalid ${key} payload`);
@@ -60,7 +63,10 @@ function parseWaypoint(record: Record<string, unknown>, key: string): LatLngAddr
   return { lat, lng, address };
 }
 
-function parseStops(record: Record<string, unknown>, key: string): LatLngAddress[] {
+function parseStops(
+  record: Record<string, unknown>,
+  key: string,
+): LatLngAddress[] {
   const value = record[key];
   if (value === undefined) {
     return [];
@@ -75,9 +81,9 @@ function parseStops(record: Record<string, unknown>, key: string): LatLngAddress
       throw new Error(`Invalid ${key}[${index}] payload`);
     }
 
-    const lat = getNumber(item, 'lat');
-    const lng = getNumber(item, 'lng');
-    const address = getString(item, 'address');
+    const lat = getNumber(item, "lat");
+    const lng = getNumber(item, "lng");
+    const address = getString(item, "address");
 
     if (lat === undefined || lng === undefined || !address) {
       throw new Error(`Invalid ${key}[${index}] payload`);
@@ -101,20 +107,20 @@ function parseLimit(value: string | null): number {
 }
 
 function decimalToNumber(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
+  if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
 
-  if (typeof value === 'string' && value.trim().length > 0) {
+  if (typeof value === "string" && value.trim().length > 0) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
   }
 
   if (
     value &&
-    typeof value === 'object' &&
-    'toString' in value &&
-    typeof value.toString === 'function'
+    typeof value === "object" &&
+    "toString" in value &&
+    typeof value.toString === "function"
   ) {
     const parsed = Number(value.toString());
     return Number.isFinite(parsed) ? parsed : null;
@@ -124,13 +130,13 @@ function decimalToNumber(value: unknown): number | null {
 }
 
 function parseScheduledFor(value: unknown): Date {
-  if (typeof value !== 'string') {
-    throw new Error('scheduledFor must be an ISO datetime string');
+  if (typeof value !== "string") {
+    throw new Error("scheduledFor must be an ISO datetime string");
   }
 
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    throw new Error('scheduledFor must be a valid ISO datetime string');
+    throw new Error("scheduledFor must be a valid ISO datetime string");
   }
 
   return parsed;
@@ -139,17 +145,17 @@ function parseScheduledFor(value: unknown): Date {
 function normalizeScheduledPaymentMethod(
   value: unknown,
 ): ScheduledRidePaymentMethod {
-  return value === 'smart_account'
+  return value === "smart_account"
     ? ScheduledRidePaymentMethod.SMART_ACCOUNT
     : ScheduledRidePaymentMethod.WALLET_BALANCE;
 }
 
 function mapScheduledPaymentMethod(
   value: ScheduledRidePaymentMethod,
-): 'wallet_balance' | 'smart_account' {
+): "wallet_balance" | "smart_account" {
   return value === ScheduledRidePaymentMethod.SMART_ACCOUNT
-    ? 'smart_account'
-    : 'wallet_balance';
+    ? "smart_account"
+    : "wallet_balance";
 }
 
 function mapScheduledRideItem(
@@ -185,13 +191,13 @@ export async function handleRideEstimateRoute(
 
     const rawBody = await readJsonBody(req);
     if (!isRecord(rawBody)) {
-      sendJson(res, 400, { error: 'Body must be a JSON object' });
+      sendJson(res, 400, { error: "Body must be a JSON object" });
       return;
     }
 
-    const pickup = parseWaypoint(rawBody, 'pickup');
-    const destination = parseWaypoint(rawBody, 'destination');
-    const stops = parseStops(rawBody, 'stops');
+    const pickup = parseWaypoint(rawBody, "pickup");
+    const destination = parseWaypoint(rawBody, "destination");
+    const stops = parseStops(rawBody, "stops");
     const plannedRoute = await deps.routePlanner.planRoute({
       origin: pickup,
       stops,
@@ -207,12 +213,15 @@ export async function handleRideEstimateRoute(
       plannedDurationSeconds: plannedRoute.durationSeconds,
       fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
       fareEstimateNgn: plannedRoute.ridePrice.tripPrice,
-      pricingCurrency: 'NGN',
+      pricingCurrency: "NGN",
       pricingBreakdown: plannedRoute.ridePrice,
     });
   } catch (error) {
     sendJson(res, 400, {
-      error: error instanceof Error ? error.message : 'Could not estimate ride route',
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not estimate ride route",
     });
   }
 }
@@ -224,11 +233,16 @@ export async function handleRiderRideHistoryRoute(
   url: URL,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
-    const limit = parseLimit(url.searchParams.get('limit'));
-    const cursor = url.searchParams.get('cursor') ?? undefined;
+    const user = await authenticateHttpUser(
+      req,
+      deps.privyAppId,
+      deps.privyVerificationKey,
+    );
+    const limit = parseLimit(url.searchParams.get("limit"));
+    const cursor = url.searchParams.get("cursor") ?? undefined;
     const rides = await rideClient.findRiderHistory(user.id, limit, cursor);
-    const ridePricingDisplay = await deps.ridePricingDisplayProvider.getPricingDisplay();
+    const ridePricingDisplay =
+      await deps.ridePricingDisplayProvider.getPricingDisplay();
 
     sendJson(res, 200, {
       items: rides.map((ride) => ({
@@ -258,11 +272,13 @@ export async function handleRiderRideHistoryRoute(
         displayCurrency: ridePricingDisplay.displayCurrency,
         displayExchangeRate: ridePricingDisplay.displayExchangeRate,
       })),
-      nextCursor: rides.length === limit ? rides[rides.length - 1]?.id ?? null : null,
+      nextCursor:
+        rides.length === limit ? (rides[rides.length - 1]?.id ?? null) : null,
     });
   } catch (error) {
     sendJson(res, 401, {
-      error: error instanceof Error ? error.message : 'Could not load ride history',
+      error:
+        error instanceof Error ? error.message : "Could not load ride history",
     });
   }
 }
@@ -273,22 +289,26 @@ export async function handleCreateScheduledRideRoute(
   deps: ScheduledRideRouteDeps,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
+    const user = await authenticateHttpUser(
+      req,
+      deps.privyAppId,
+      deps.privyVerificationKey,
+    );
     if (!user.walletAddress) {
-      sendJson(res, 400, { error: 'Link a wallet before scheduling a ride.' });
+      sendJson(res, 400, { error: "Link a wallet before scheduling a ride." });
       return;
     }
 
     const rawBody = await readJsonBody(req);
     if (!isRecord(rawBody)) {
-      sendJson(res, 400, { error: 'Body must be a JSON object' });
+      sendJson(res, 400, { error: "Body must be a JSON object" });
       return;
     }
 
-    const scheduledFor = parseScheduledFor(rawBody['scheduledFor']);
-    const pickup = parseWaypoint(rawBody, 'pickup');
-    const destination = parseWaypoint(rawBody, 'destination');
-    const stops = parseStops(rawBody, 'stops');
+    const scheduledFor = parseScheduledFor(rawBody["scheduledFor"]);
+    const pickup = parseWaypoint(rawBody, "pickup");
+    const destination = parseWaypoint(rawBody, "destination");
+    const stops = parseStops(rawBody, "stops");
     const plannedRoute = await deps.routePlanner.planRoute({
       origin: pickup,
       stops,
@@ -299,7 +319,7 @@ export async function handleCreateScheduledRideRoute(
       riderId: user.id,
       riderWallet: user.walletAddress.toLowerCase(),
       scheduledFor,
-      paymentMethod: normalizeScheduledPaymentMethod(rawBody['paymentMethod']),
+      paymentMethod: normalizeScheduledPaymentMethod(rawBody["paymentMethod"]),
       pickupLat: pickup.lat,
       pickupLng: pickup.lng,
       pickupAddress: pickup.address,
@@ -317,24 +337,31 @@ export async function handleCreateScheduledRideRoute(
       scheduledRide.scheduledFor.getTime() - deps.leadTimeMs - Date.now(),
     );
 
-    await deps.dispatcherQueue.add(
-      'dispatch',
-      {
-        scheduledRideId: scheduledRide.id,
-        scheduledFor: scheduledRide.scheduledFor.toISOString(),
-      },
-      {
-        delay: delayMs,
-        jobId: `scheduled-ride:${scheduledRide.id}`,
-      },
-    );
+    deps.dispatcherQueue
+      .add(
+        "dispatch",
+        {
+          scheduledRideId: scheduledRide.id,
+          scheduledFor: scheduledRide.scheduledFor.toISOString(),
+        },
+        {
+          delay: delayMs,
+          jobId: `scheduled-ride:${scheduledRide.id}`, // deduplication key
+        },
+      )
+      .catch((err) =>
+        console.warn(
+          `[api-gateway] BullMQ enqueue failed for ${scheduledRide.id} (recovery scanner will catch it):`,
+          err,
+        ),
+      );
 
     sendJson(res, 201, {
       item: mapScheduledRideItem(scheduledRide),
     });
   } catch (error) {
     sendJson(res, 400, {
-      error: error instanceof Error ? error.message : 'Could not schedule ride',
+      error: error instanceof Error ? error.message : "Could not schedule ride",
     });
   }
 }
@@ -346,18 +373,26 @@ export async function handleListScheduledRidesRoute(
   url: URL,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
-    const limit = parseLimit(url.searchParams.get('limit'));
-    const cursor = url.searchParams.get('cursor') ?? undefined;
+    const user = await authenticateHttpUser(
+      req,
+      deps.privyAppId,
+      deps.privyVerificationKey,
+    );
+    const limit = parseLimit(url.searchParams.get("limit"));
+    const cursor = url.searchParams.get("cursor") ?? undefined;
     const rides = await scheduledRideClient.findByRider(user.id, limit, cursor);
 
     sendJson(res, 200, {
       items: rides.map((ride) => mapScheduledRideItem(ride)),
-      nextCursor: rides.length === limit ? rides[rides.length - 1]?.id ?? null : null,
+      nextCursor:
+        rides.length === limit ? (rides[rides.length - 1]?.id ?? null) : null,
     });
   } catch (error) {
     sendJson(res, 401, {
-      error: error instanceof Error ? error.message : 'Could not load scheduled rides',
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not load scheduled rides",
     });
   }
 }
@@ -369,26 +404,47 @@ export async function handleCancelScheduledRideRoute(
   scheduledRideId: string,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
+    const user = await authenticateHttpUser(
+      req,
+      deps.privyAppId,
+      deps.privyVerificationKey,
+    );
     const rawBody = await readJsonBody(req).catch(() => ({}));
     const reason =
-      isRecord(rawBody) && typeof rawBody['reason'] === 'string'
-        ? rawBody['reason']
+      isRecord(rawBody) && typeof rawBody["reason"] === "string"
+        ? rawBody["reason"]
         : undefined;
-    const result = await scheduledRideClient.cancel(scheduledRideId, user.id, reason);
+    const result = await scheduledRideClient.cancel(
+      scheduledRideId,
+      user.id,
+      reason,
+    );
 
     if (result.count === 0) {
-      sendJson(res, 404, { error: 'Scheduled ride not found or already closed.' });
+      sendJson(res, 404, {
+        error: "Scheduled ride not found or already closed.",
+      });
       return;
     }
 
+    deps.dispatcherQueue
+      .remove(`scheduled-ride:${scheduledRideId}`)
+      .catch((err) =>
+        console.warn(
+          `[api-gateway] could not remove BullMQ job for ${scheduledRideId}:`,
+          err,
+        ),
+      );
     sendJson(res, 200, {
       cancelled: true,
       scheduledRideId,
     });
   } catch (error) {
     sendJson(res, 400, {
-      error: error instanceof Error ? error.message : 'Could not cancel scheduled ride',
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not cancel scheduled ride",
     });
   }
 }

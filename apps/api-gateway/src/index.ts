@@ -1,4 +1,4 @@
-import { createServer, type ServerResponse } from 'http';
+import { createServer, type ServerResponse } from "http";
 import {
   buildTopicList,
   createConsumer,
@@ -7,24 +7,24 @@ import {
   onShutdown,
   registerShutdownHandlers,
   TOPIC_PRESETS,
-} from '@wheleers/kafka-client';
+} from "@wheleers/kafka-client";
 import {
   loadWorkspaceEnv,
   OpenRouteServiceClient,
   validateGatewayEnv,
   validateSharedEnv,
-} from '@wheleers/config';
-import { TOPICS } from '@wheleers/kafka-schemas';
-import { Queue } from 'bullmq';
-import IORedis from 'ioredis';
-import { handlePrivyAuthRoute } from './http/auth.route';
+} from "@wheleers/config";
+import { TOPICS } from "@wheleers/kafka-schemas";
+import { Queue } from "bullmq";
+import IORedis from "ioredis";
+import { handlePrivyAuthRoute } from "./http/auth.route";
 import {
   handleCancelScheduledRideRoute,
   handleCreateScheduledRideRoute,
   handleListScheduledRidesRoute,
   handleRideEstimateRoute,
   handleRiderRideHistoryRoute,
-} from './http/ride.route';
+} from "./http/ride.route";
 import {
   handlePouchChannelsRoute,
   handlePouchCreateSessionRoute,
@@ -35,24 +35,25 @@ import {
   handlePouchQuoteRoute,
   handlePouchSubmitKycRoute,
   handlePouchVerifyOtpRoute,
-} from './http/pouch.route';
+} from "./http/pouch.route";
 import {
   handleSendPhoneOtpRoute,
   handleVerifyPhoneOtpRoute,
-} from './http/phone.route';
-import { PouchClient } from './http/pouch.client';
-import { applyCorsHeaders, sendJson } from './http/utils';
-import { startGatewayKafkaConsumer } from './kafka/consumer';
-import { CoinGeckoRidePricingDisplayProvider } from './pricing/display';
-import { RedisClient } from './redis/client';
-import { GatewayPublisher } from './websocket/publisher';
-import { SocketRegistry } from './websocket/registry';
-import { createGatewayWebSocketServer } from './websocket/server';
+} from "./http/phone.route";
+import { PouchClient } from "./http/pouch.client";
+import { applyCorsHeaders, sendJson } from "./http/utils";
+import { startGatewayKafkaConsumer } from "./kafka/consumer";
+import { CoinGeckoRidePricingDisplayProvider } from "./pricing/display";
+import { RedisClient } from "./redis/client";
+import { GatewayPublisher } from "./websocket/publisher";
+import { SocketRegistry } from "./websocket/registry";
+import { createGatewayWebSocketServer } from "./websocket/server";
+import { startOutboxPublisher } from "@wheleers/ride-service/outbox/outbox-publisher";
 
 function parseAllowedOrigins(raw: string): Set<string> {
   return new Set(
     raw
-      .split(',')
+      .split(",")
       .map((origin) => origin.trim())
       .filter((origin) => origin.length > 0),
   );
@@ -71,16 +72,17 @@ function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
 }
 
 function sendMethodNotAllowed(res: ServerResponse): void {
-  sendJson(res, 405, { error: 'Method not allowed' });
+  sendJson(res, 405, { error: "Method not allowed" });
 }
 
 async function bootstrap(): Promise<void> {
   loadWorkspaceEnv();
-  process.env['NODE_ENV'] ??= 'development';
-  process.env['KAFKA_CLIENT_ID'] ??= 'api-gateway';
-  process.env['KAFKA_BROKERS'] ??= 'localhost:29092';
-  process.env['DATABASE_URL'] ??= 'postgresql://postgres:postgres@localhost:5432/wheelers';
-  process.env['REDIS_URL'] ??= 'redis://localhost:6379';
+  process.env["NODE_ENV"] ??= "development";
+  process.env["KAFKA_CLIENT_ID"] ??= "api-gateway";
+  process.env["KAFKA_BROKERS"] ??= "localhost:29092";
+  process.env["DATABASE_URL"] ??=
+    "postgresql://postgres:postgres@localhost:5432/wheelers";
+  process.env["REDIS_URL"] ??= "redis://localhost:6379";
 
   const sharedEnv = validateSharedEnv();
   const gatewayEnv = validateGatewayEnv();
@@ -90,17 +92,17 @@ async function bootstrap(): Promise<void> {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
   });
-  const dispatcherQueue = new Queue('wheleers:scheduled-rides', {
+  const dispatcherQueue = new Queue("wheleers:scheduled-rides", {
     connection: dispatcherRedis,
     defaultJobOptions: {
       attempts: 3,
-      backoff: { type: 'exponential', delay: 5_000 },
+      backoff: { type: "exponential", delay: 5_000 },
       removeOnComplete: { count: 200 },
       removeOnFail: { count: 500 },
     },
   });
   const leadTimeMs = 5 * 60 * 1_000; // 5 minutes lead time
-  registerShutdownHandlers('api-gateway');
+  registerShutdownHandlers("api-gateway");
 
   await ensureTopics(
     buildTopicList([
@@ -116,7 +118,9 @@ async function bootstrap(): Promise<void> {
     ]),
   );
 
-  const producer = await createProducer({ serviceId: sharedEnv.KAFKA_CLIENT_ID });
+  const producer = await createProducer({
+    serviceId: sharedEnv.KAFKA_CLIENT_ID,
+  });
   const consumer = await createConsumer({ groupId: sharedEnv.KAFKA_CLIENT_ID });
   const redisCommandClient = new RedisClient(sharedEnv.REDIS_URL);
   const redisSubscriberClient = new RedisClient(sharedEnv.REDIS_URL);
@@ -158,27 +162,27 @@ async function bootstrap(): Promise<void> {
   };
 
   const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? '/', 'http://localhost');
+    const url = new URL(req.url ?? "/", "http://localhost");
 
     applyCorsHeaders(req, res, allowedOrigins);
 
-    if (req.method === 'OPTIONS') {
+    if (req.method === "OPTIONS") {
       res.statusCode = 204;
       res.end();
       return;
     }
 
-    if (req.method === 'GET' && url.pathname === '/health') {
+    if (req.method === "GET" && url.pathname === "/health") {
       sendJson(res, 200, {
-        status: 'ok',
-        service: 'api-gateway',
+        status: "ok",
+        service: "api-gateway",
         timestamp: new Date().toISOString(),
       });
       return;
     }
 
-    if (url.pathname === '/auth/privy') {
-      if (req.method !== 'POST') {
+    if (url.pathname === "/auth/privy") {
+      if (req.method !== "POST") {
         sendMethodNotAllowed(res);
         return;
       }
@@ -190,8 +194,8 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname === '/auth/phone/send-otp') {
-      if (req.method !== 'POST') {
+    if (url.pathname === "/auth/phone/send-otp") {
+      if (req.method !== "POST") {
         sendMethodNotAllowed(res);
         return;
       }
@@ -207,8 +211,8 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname === '/auth/phone/verify-otp') {
-      if (req.method !== 'POST') {
+    if (url.pathname === "/auth/phone/verify-otp") {
+      if (req.method !== "POST") {
         sendMethodNotAllowed(res);
         return;
       }
@@ -224,8 +228,8 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname === '/rides/estimate') {
-      if (req.method !== 'POST') {
+    if (url.pathname === "/rides/estimate") {
+      if (req.method !== "POST") {
         sendMethodNotAllowed(res);
         return;
       }
@@ -237,26 +241,31 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname === '/rides/history') {
-      if (req.method !== 'GET') {
+    if (url.pathname === "/rides/history") {
+      if (req.method !== "GET") {
         sendMethodNotAllowed(res);
         return;
       }
-      await handleRiderRideHistoryRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-        ridePricingDisplayProvider,
-      }, url);
+      await handleRiderRideHistoryRoute(
+        req,
+        res,
+        {
+          privyAppId: gatewayEnv.PRIVY_APP_ID,
+          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+          ridePricingDisplayProvider,
+        },
+        url,
+      );
       return;
     }
 
-    if (url.pathname === '/scheduled-rides') {
-      if (req.method === 'GET') {
+    if (url.pathname === "/scheduled-rides") {
+      if (req.method === "GET") {
         await handleListScheduledRidesRoute(req, res, scheduledRideDeps, url);
         return;
       }
 
-      if (req.method === 'POST') {
+      if (req.method === "POST") {
         await handleCreateScheduledRideRoute(req, res, scheduledRideDeps);
         return;
       }
@@ -265,14 +274,16 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname.startsWith('/scheduled-rides/')) {
-      const scheduledRideMatch = url.pathname.match(/^\/scheduled-rides\/([^/]+)\/cancel$/);
+    if (url.pathname.startsWith("/scheduled-rides/")) {
+      const scheduledRideMatch = url.pathname.match(
+        /^\/scheduled-rides\/([^/]+)\/cancel$/,
+      );
       if (!scheduledRideMatch) {
-        sendJson(res, 404, { error: 'Not found' });
+        sendJson(res, 404, { error: "Not found" });
         return;
       }
 
-      if (req.method !== 'POST') {
+      if (req.method !== "POST") {
         sendMethodNotAllowed(res);
         return;
       }
@@ -286,8 +297,8 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname === '/payments/pouch/health') {
-      if (req.method !== 'GET') {
+    if (url.pathname === "/payments/pouch/health") {
+      if (req.method !== "GET") {
         sendMethodNotAllowed(res);
         return;
       }
@@ -295,8 +306,8 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname === '/payments/pouch/channels') {
-      if (req.method !== 'GET') {
+    if (url.pathname === "/payments/pouch/channels") {
+      if (req.method !== "GET") {
         sendMethodNotAllowed(res);
         return;
       }
@@ -304,8 +315,8 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname === '/payments/pouch/sessions') {
-      if (req.method !== 'POST') {
+    if (url.pathname === "/payments/pouch/sessions") {
+      if (req.method !== "POST") {
         sendMethodNotAllowed(res);
         return;
       }
@@ -319,13 +330,13 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname.startsWith('/payments/pouch/sessions/')) {
+    if (url.pathname.startsWith("/payments/pouch/sessions/")) {
       const sessionMatch = url.pathname.match(
         /^\/payments\/pouch\/sessions\/([^/]+)(?:\/(quote|identify|verify-otp|kyc-requirements|kyc))?$/,
       );
 
       if (!sessionMatch) {
-        sendJson(res, 404, { error: 'Not found' });
+        sendJson(res, 404, { error: "Not found" });
         return;
       }
 
@@ -333,73 +344,121 @@ async function bootstrap(): Promise<void> {
       const action = sessionMatch[2];
 
       if (!action) {
-        if (req.method !== 'GET') { sendMethodNotAllowed(res); return; }
-        await handlePouchGetSessionRoute(req, res, {
-          privyAppId: gatewayEnv.PRIVY_APP_ID,
-          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-          pouchClient,
-          publisher,
-        }, sessionId);
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handlePouchGetSessionRoute(
+          req,
+          res,
+          {
+            privyAppId: gatewayEnv.PRIVY_APP_ID,
+            privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+            pouchClient,
+            publisher,
+          },
+          sessionId,
+        );
         return;
       }
 
-      if (action === 'quote') {
-        if (req.method !== 'GET') { sendMethodNotAllowed(res); return; }
-        await handlePouchQuoteRoute(req, res, {
-          privyAppId: gatewayEnv.PRIVY_APP_ID,
-          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-          pouchClient,
-          publisher,
-        }, sessionId);
+      if (action === "quote") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handlePouchQuoteRoute(
+          req,
+          res,
+          {
+            privyAppId: gatewayEnv.PRIVY_APP_ID,
+            privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+            pouchClient,
+            publisher,
+          },
+          sessionId,
+        );
         return;
       }
 
-      if (action === 'identify') {
-        if (req.method !== 'POST') { sendMethodNotAllowed(res); return; }
-        await handlePouchIdentifyRoute(req, res, {
-          privyAppId: gatewayEnv.PRIVY_APP_ID,
-          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-          pouchClient,
-          publisher,
-        }, sessionId);
+      if (action === "identify") {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handlePouchIdentifyRoute(
+          req,
+          res,
+          {
+            privyAppId: gatewayEnv.PRIVY_APP_ID,
+            privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+            pouchClient,
+            publisher,
+          },
+          sessionId,
+        );
         return;
       }
 
-      if (action === 'verify-otp') {
-        if (req.method !== 'POST') { sendMethodNotAllowed(res); return; }
-        await handlePouchVerifyOtpRoute(req, res, {
-          privyAppId: gatewayEnv.PRIVY_APP_ID,
-          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-          pouchClient,
-          publisher,
-        }, sessionId);
+      if (action === "verify-otp") {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handlePouchVerifyOtpRoute(
+          req,
+          res,
+          {
+            privyAppId: gatewayEnv.PRIVY_APP_ID,
+            privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+            pouchClient,
+            publisher,
+          },
+          sessionId,
+        );
         return;
       }
 
-      if (action === 'kyc-requirements') {
-        if (req.method !== 'GET') { sendMethodNotAllowed(res); return; }
-        await handlePouchKycRequirementsRoute(req, res, {
-          privyAppId: gatewayEnv.PRIVY_APP_ID,
-          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-          pouchClient,
-          publisher,
-        }, sessionId);
+      if (action === "kyc-requirements") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handlePouchKycRequirementsRoute(
+          req,
+          res,
+          {
+            privyAppId: gatewayEnv.PRIVY_APP_ID,
+            privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+            pouchClient,
+            publisher,
+          },
+          sessionId,
+        );
         return;
       }
 
-      if (action === 'kyc') {
-        if (req.method !== 'POST') { sendMethodNotAllowed(res); return; }
-        await handlePouchSubmitKycRoute(req, res, {
-          privyAppId: gatewayEnv.PRIVY_APP_ID,
-          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-          pouchClient,
-          publisher,
-        }, sessionId);
+      if (action === "kyc") {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handlePouchSubmitKycRoute(
+          req,
+          res,
+          {
+            privyAppId: gatewayEnv.PRIVY_APP_ID,
+            privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+            pouchClient,
+            publisher,
+          },
+          sessionId,
+        );
         return;
       }
     }
 
-    sendJson(res, 404, { error: 'Not found' });
+    sendJson(res, 404, { error: "Not found" });
   });
 
   createGatewayWebSocketServer({
@@ -411,6 +470,12 @@ async function bootstrap(): Promise<void> {
     registry,
     publisher,
     routePlanner,
+  });
+
+  const outboxPublisher = startOutboxPublisher({
+    Rawproducer: producer, // same raw producer already created
+    intervalMs: 500, // poll every 500 ms
+    batchSize: 100,
   });
 
   await startGatewayKafkaConsumer({
@@ -428,16 +493,33 @@ async function bootstrap(): Promise<void> {
     });
   });
 
-  onShutdown(async () => { await closeServer(server); });
-  onShutdown(async () => { await dispatcherQueue.close(); });
-  onShutdown(async () => { await dispatcherRedis.quit(); });
-  onShutdown(async () => { await producer.disconnect(); });
-  onShutdown(async () => { await consumer.disconnect(); });
-  onShutdown(async () => { await redisSubscriberClient.disconnect(); });
-  onShutdown(async () => { await redisCommandClient.disconnect(); });
+  onShutdown(async () => {
+    await closeServer(server);
+  });
+  onShutdown(async () => {
+    await dispatcherQueue.close();
+  });
+  onShutdown(async () => {
+    await dispatcherRedis.quit();
+  });
+  onShutdown(async () => {
+    await producer.disconnect();
+  });
+  onShutdown(async () => {
+    await consumer.disconnect();
+  });
+  onShutdown(async () => {
+    await redisSubscriberClient.disconnect();
+  });
+  onShutdown(async () => {
+    await redisCommandClient.disconnect();
+  });
+  onShutdown(async () => { 
+    outboxPublisher.shutdown(); 
+  });
 }
 
 bootstrap().catch((error) => {
-  console.error('[api-gateway] Failed to start:', error);
+  console.error("[api-gateway] Failed to start:", error);
   process.exit(1);
 });
