@@ -8,6 +8,7 @@ export { validateWalletEnv }       from './env/wallet.env';
 export { validateComplianceEnv }   from './env/compliance.env';
 export { validateDefiEnv }         from './env/defi.env';
 export { validateNotificationEnv } from './env/notification.env';
+export { validateGroupRideEnv }    from './env/group-ride.env';
 
 // Env types
 export type { SharedEnv }       from './env/shared.env';
@@ -18,6 +19,7 @@ export type { WalletEnv }       from './env/wallet.env';
 export type { ComplianceEnv }   from './env/compliance.env';
 export type { DefiEnv }         from './env/defi.env';
 export type { NotificationEnv } from './env/notification.env';
+export type { GroupRideEnv }    from './env/group-ride.env';
 
 // Constants
 export { FEES }                        from './constants/fees';
