@@ -1,5 +1,5 @@
 import { loadWorkspaceEnv, OpenRouteServiceClient, validateRideEnv, validateSharedEnv } from '@wheleers/config';
-import { createConsumer, createProducer } from '@wheleers/kafka-client';
+import { createConsumer, createProducer, onShutdown } from '@wheleers/kafka-client';
 import { TOPICS } from '@wheleers/kafka-schemas';
 
 import { createRideEventsProducer } from './producers/ride-events.producer';
@@ -162,9 +162,17 @@ async function bootstrap(): Promise<void> {
     rideEventsProducer,
   });
 
-  startScheduledRideDispatcher({
-    rideEnv,
+
+   const dispatcher = startScheduledRideDispatcher({
+   rideEnv,
     rideEventsProducer,
+    redisUrl: process.env.REDIS_URL,       // add REDIS_URL to validateSharedEnv if not already there
+  });
+
+  onShutdown(async () => {
+    await dispatcher.shutdown();
+    await consumer.disconnect();
+    await producer.disconnect();
   });
 
   console.log(`[${SERVICE_ID}] consuming (matchRadiusKm=${rideEnv.MATCH_RADIUS_KM})`);

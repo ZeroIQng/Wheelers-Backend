@@ -5,6 +5,7 @@ import {
   rideClient,
 } from '@wheleers/db';
 import { OpenRouteServiceClient } from '@wheleers/config';
+import { Queue } from 'bullmq';
 import { authenticateHttpUser } from './authenticate';
 import { readJsonBody, sendJson } from './utils';
 import { getNumber, getRecord, getString, isRecord } from '../utils/object';
@@ -32,6 +33,8 @@ interface ScheduledRideRouteDeps {
   privyVerificationKey: string;
   routePlanner: OpenRouteServiceClient;
   ridePricingDisplayProvider: RidePricingDisplayProvider;
+  dispatcherQueue: Queue;
+  leadTimeMs: number;
 }
 
 type LatLngAddress = {
@@ -107,7 +110,12 @@ function decimalToNumber(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
 
-  if (value && typeof value === 'object' && 'toString' in value && typeof value.toString === 'function') {
+  if (
+    value &&
+    typeof value === 'object' &&
+    'toString' in value &&
+    typeof value.toString === 'function'
+  ) {
     const parsed = Number(value.toString());
     return Number.isFinite(parsed) ? parsed : null;
   }
@@ -304,6 +312,23 @@ export async function handleCreateScheduledRideRoute(
       fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
     });
 
+    const delayMs = Math.max(
+      0,
+      scheduledRide.scheduledFor.getTime() - deps.leadTimeMs - Date.now(),
+    );
+
+    await deps.dispatcherQueue.add(
+      'dispatch',
+      {
+        scheduledRideId: scheduledRide.id,
+        scheduledFor: scheduledRide.scheduledFor.toISOString(),
+      },
+      {
+        delay: delayMs,
+        jobId: `scheduled-ride:${scheduledRide.id}`,
+      },
+    );
+
     sendJson(res, 201, {
       item: mapScheduledRideItem(scheduledRide),
     });
@@ -347,7 +372,9 @@ export async function handleCancelScheduledRideRoute(
     const user = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
     const rawBody = await readJsonBody(req).catch(() => ({}));
     const reason =
-      isRecord(rawBody) && typeof rawBody['reason'] === 'string' ? rawBody['reason'] : undefined;
+      isRecord(rawBody) && typeof rawBody['reason'] === 'string'
+        ? rawBody['reason']
+        : undefined;
     const result = await scheduledRideClient.cancel(scheduledRideId, user.id, reason);
 
     if (result.count === 0) {

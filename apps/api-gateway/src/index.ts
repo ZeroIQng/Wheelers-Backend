@@ -15,6 +15,8 @@ import {
   validateSharedEnv,
 } from '@wheleers/config';
 import { TOPICS } from '@wheleers/kafka-schemas';
+import { Queue } from 'bullmq';
+import IORedis from 'ioredis';
 import { handlePrivyAuthRoute } from './http/auth.route';
 import {
   handleCancelScheduledRideRoute,
@@ -83,6 +85,21 @@ async function bootstrap(): Promise<void> {
   const sharedEnv = validateSharedEnv();
   const gatewayEnv = validateGatewayEnv();
 
+  // ── BullMQ dispatcher queue (gateway only enqueues — worker lives in ride-service) ──
+  const dispatcherRedis = new IORedis(sharedEnv.REDIS_URL, {
+    maxRetriesPerRequest: null,
+    enableReadyCheck: false,
+  });
+  const dispatcherQueue = new Queue('wheleers:scheduled-rides', {
+    connection: dispatcherRedis,
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5_000 },
+      removeOnComplete: { count: 200 },
+      removeOnFail: { count: 500 },
+    },
+  });
+  const leadTimeMs = 5 * 60 * 1_000; // 5 minutes lead time
   registerShutdownHandlers('api-gateway');
 
   await ensureTopics(
@@ -130,6 +147,16 @@ async function bootstrap(): Promise<void> {
   await registry.start();
   const allowedOrigins = parseAllowedOrigins(gatewayEnv.CORS_ORIGINS);
 
+  // shared deps spread for all scheduled-ride routes
+  const scheduledRideDeps = {
+    privyAppId: gatewayEnv.PRIVY_APP_ID,
+    privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+    routePlanner,
+    ridePricingDisplayProvider,
+    dispatcherQueue,
+    leadTimeMs,
+  };
+
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
 
@@ -168,7 +195,6 @@ async function bootstrap(): Promise<void> {
         sendMethodNotAllowed(res);
         return;
       }
-
       await handleSendPhoneOtpRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
@@ -186,7 +212,6 @@ async function bootstrap(): Promise<void> {
         sendMethodNotAllowed(res);
         return;
       }
-
       await handleVerifyPhoneOtpRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
@@ -204,7 +229,6 @@ async function bootstrap(): Promise<void> {
         sendMethodNotAllowed(res);
         return;
       }
-
       await handleRideEstimateRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
@@ -218,7 +242,6 @@ async function bootstrap(): Promise<void> {
         sendMethodNotAllowed(res);
         return;
       }
-
       await handleRiderRideHistoryRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
@@ -229,22 +252,12 @@ async function bootstrap(): Promise<void> {
 
     if (url.pathname === '/scheduled-rides') {
       if (req.method === 'GET') {
-        await handleListScheduledRidesRoute(req, res, {
-          privyAppId: gatewayEnv.PRIVY_APP_ID,
-          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-          routePlanner,
-          ridePricingDisplayProvider,
-        }, url);
+        await handleListScheduledRidesRoute(req, res, scheduledRideDeps, url);
         return;
       }
 
       if (req.method === 'POST') {
-        await handleCreateScheduledRideRoute(req, res, {
-          privyAppId: gatewayEnv.PRIVY_APP_ID,
-          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-          routePlanner,
-          ridePricingDisplayProvider,
-        });
+        await handleCreateScheduledRideRoute(req, res, scheduledRideDeps);
         return;
       }
 
@@ -264,12 +277,12 @@ async function bootstrap(): Promise<void> {
         return;
       }
 
-      await handleCancelScheduledRideRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-        routePlanner,
-        ridePricingDisplayProvider,
-      }, decodeURIComponent(scheduledRideMatch[1]));
+      await handleCancelScheduledRideRoute(
+        req,
+        res,
+        scheduledRideDeps,
+        decodeURIComponent(scheduledRideMatch[1]),
+      );
       return;
     }
 
@@ -278,9 +291,7 @@ async function bootstrap(): Promise<void> {
         sendMethodNotAllowed(res);
         return;
       }
-      await handlePouchHealthRoute(req, res, {
-        pouchClient,
-      });
+      await handlePouchHealthRoute(req, res, { pouchClient });
       return;
     }
 
@@ -289,9 +300,7 @@ async function bootstrap(): Promise<void> {
         sendMethodNotAllowed(res);
         return;
       }
-      await handlePouchChannelsRoute(req, res, {
-        pouchClient,
-      });
+      await handlePouchChannelsRoute(req, res, { pouchClient });
       return;
     }
 
@@ -324,11 +333,7 @@ async function bootstrap(): Promise<void> {
       const action = sessionMatch[2];
 
       if (!action) {
-        if (req.method !== 'GET') {
-          sendMethodNotAllowed(res);
-          return;
-        }
-
+        if (req.method !== 'GET') { sendMethodNotAllowed(res); return; }
         await handlePouchGetSessionRoute(req, res, {
           privyAppId: gatewayEnv.PRIVY_APP_ID,
           privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
@@ -339,11 +344,7 @@ async function bootstrap(): Promise<void> {
       }
 
       if (action === 'quote') {
-        if (req.method !== 'GET') {
-          sendMethodNotAllowed(res);
-          return;
-        }
-
+        if (req.method !== 'GET') { sendMethodNotAllowed(res); return; }
         await handlePouchQuoteRoute(req, res, {
           privyAppId: gatewayEnv.PRIVY_APP_ID,
           privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
@@ -354,11 +355,7 @@ async function bootstrap(): Promise<void> {
       }
 
       if (action === 'identify') {
-        if (req.method !== 'POST') {
-          sendMethodNotAllowed(res);
-          return;
-        }
-
+        if (req.method !== 'POST') { sendMethodNotAllowed(res); return; }
         await handlePouchIdentifyRoute(req, res, {
           privyAppId: gatewayEnv.PRIVY_APP_ID,
           privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
@@ -369,11 +366,7 @@ async function bootstrap(): Promise<void> {
       }
 
       if (action === 'verify-otp') {
-        if (req.method !== 'POST') {
-          sendMethodNotAllowed(res);
-          return;
-        }
-
+        if (req.method !== 'POST') { sendMethodNotAllowed(res); return; }
         await handlePouchVerifyOtpRoute(req, res, {
           privyAppId: gatewayEnv.PRIVY_APP_ID,
           privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
@@ -384,11 +377,7 @@ async function bootstrap(): Promise<void> {
       }
 
       if (action === 'kyc-requirements') {
-        if (req.method !== 'GET') {
-          sendMethodNotAllowed(res);
-          return;
-        }
-
+        if (req.method !== 'GET') { sendMethodNotAllowed(res); return; }
         await handlePouchKycRequirementsRoute(req, res, {
           privyAppId: gatewayEnv.PRIVY_APP_ID,
           privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
@@ -399,11 +388,7 @@ async function bootstrap(): Promise<void> {
       }
 
       if (action === 'kyc') {
-        if (req.method !== 'POST') {
-          sendMethodNotAllowed(res);
-          return;
-        }
-
+        if (req.method !== 'POST') { sendMethodNotAllowed(res); return; }
         await handlePouchSubmitKycRoute(req, res, {
           privyAppId: gatewayEnv.PRIVY_APP_ID,
           privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
@@ -443,25 +428,13 @@ async function bootstrap(): Promise<void> {
     });
   });
 
-  onShutdown(async () => {
-    await closeServer(server);
-  });
-
-  onShutdown(async () => {
-    await producer.disconnect();
-  });
-
-  onShutdown(async () => {
-    await consumer.disconnect();
-  });
-
-  onShutdown(async () => {
-    await redisSubscriberClient.disconnect();
-  });
-
-  onShutdown(async () => {
-    await redisCommandClient.disconnect();
-  });
+  onShutdown(async () => { await closeServer(server); });
+  onShutdown(async () => { await dispatcherQueue.close(); });
+  onShutdown(async () => { await dispatcherRedis.quit(); });
+  onShutdown(async () => { await producer.disconnect(); });
+  onShutdown(async () => { await consumer.disconnect(); });
+  onShutdown(async () => { await redisSubscriberClient.disconnect(); });
+  onShutdown(async () => { await redisCommandClient.disconnect(); });
 }
 
 bootstrap().catch((error) => {
