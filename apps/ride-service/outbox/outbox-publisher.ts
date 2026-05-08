@@ -1,4 +1,5 @@
 import { outboxClient } from '@wheleers/db';
+import type { WheelersProducer } from '@wheleers/kafka-client';
 
 /** Minimal interface satisfied by the KafkaJS producer returned by createProducer. */
 export interface RawProducer {
@@ -6,6 +7,24 @@ export interface RawProducer {
     topic: string;
     messages: Array<{ key?: string | null; value: string }>;
   }): Promise<unknown>;
+}
+
+/**
+ * Adapter: converts WheelersProducer (high-level) to RawProducer (KafkaJS-like).
+ * This allows the outbox-publisher to accept either type.
+ */
+export function asRawProducer(producer: WheelersProducer): RawProducer {
+  return {
+    send: async (record) => {
+      for (const msg of record.messages) {
+        await producer.send(
+          record.topic,
+          JSON.parse(msg.value),
+          { key: msg.key ?? undefined }
+        );
+      }
+    },
+  };
 }
 
 export function startOutboxPublisher(params: {

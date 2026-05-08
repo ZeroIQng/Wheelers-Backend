@@ -17,6 +17,7 @@ import {
 import { TOPICS } from "@wheleers/kafka-schemas";
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
+
 import { handlePrivyAuthRoute } from "./http/auth.route";
 import {
   handleCancelScheduledRideRoute,
@@ -48,7 +49,7 @@ import { RedisClient } from "./redis/client";
 import { GatewayPublisher } from "./websocket/publisher";
 import { SocketRegistry } from "./websocket/registry";
 import { createGatewayWebSocketServer } from "./websocket/server";
-import { startOutboxPublisher } from "@wheleers/ride-service/outbox/outbox-publisher";
+import { startOutboxPublisher, asRawProducer } from "@wheleers/ride-service/outbox/outbox-publisher";
 
 function parseAllowedOrigins(raw: string): Set<string> {
   return new Set(
@@ -66,6 +67,7 @@ function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
         reject(error);
         return;
       }
+
       resolve();
     });
   });
@@ -77,6 +79,7 @@ function sendMethodNotAllowed(res: ServerResponse): void {
 
 async function bootstrap(): Promise<void> {
   loadWorkspaceEnv();
+
   process.env["NODE_ENV"] ??= "development";
   process.env["KAFKA_CLIENT_ID"] ??= "api-gateway";
   process.env["KAFKA_BROKERS"] ??= "localhost:29092";
@@ -87,21 +90,33 @@ async function bootstrap(): Promise<void> {
   const sharedEnv = validateSharedEnv();
   const gatewayEnv = validateGatewayEnv();
 
-  // ── BullMQ dispatcher queue (gateway only enqueues — worker lives in ride-service) ──
+  // BullMQ dispatcher queue.
+  // Gateway only enqueues scheduled rides.
+  // Ride-service owns the worker that dispatches them.
   const dispatcherRedis = new IORedis(sharedEnv.REDIS_URL, {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
   });
+
   const dispatcherQueue = new Queue("wheleers:scheduled-rides", {
     connection: dispatcherRedis,
     defaultJobOptions: {
       attempts: 3,
-      backoff: { type: "exponential", delay: 5_000 },
-      removeOnComplete: { count: 200 },
-      removeOnFail: { count: 500 },
+      backoff: {
+        type: "exponential",
+        delay: 5_000,
+      },
+      removeOnComplete: {
+        count: 200,
+      },
+      removeOnFail: {
+        count: 500,
+      },
     },
   });
-  const leadTimeMs = 5 * 60 * 1_000; // 5 minutes lead time
+
+  const leadTimeMs = 5 * 60 * 1_000;
+
   registerShutdownHandlers("api-gateway");
 
   await ensureTopics(
@@ -121,7 +136,11 @@ async function bootstrap(): Promise<void> {
   const producer = await createProducer({
     serviceId: sharedEnv.KAFKA_CLIENT_ID,
   });
-  const consumer = await createConsumer({ groupId: sharedEnv.KAFKA_CLIENT_ID });
+
+  const consumer = await createConsumer({
+    groupId: sharedEnv.KAFKA_CLIENT_ID,
+  });
+
   const redisCommandClient = new RedisClient(sharedEnv.REDIS_URL);
   const redisSubscriberClient = new RedisClient(sharedEnv.REDIS_URL);
 
@@ -129,29 +148,36 @@ async function bootstrap(): Promise<void> {
   await redisSubscriberClient.connect();
 
   const publisher = new GatewayPublisher(producer);
+
   const pouchClient = new PouchClient(
     gatewayEnv.POUCH_BASE_URL,
     gatewayEnv.POUCH_API_KEY,
   );
+
   const routePlanner = new OpenRouteServiceClient(
     gatewayEnv.OPENROUTESERVICE_BASE_URL,
     gatewayEnv.OPENROUTESERVICE_API_KEY,
     gatewayEnv.OPENROUTESERVICE_PROFILE,
   );
+
   const ridePricingDisplayProvider = new CoinGeckoRidePricingDisplayProvider(
     gatewayEnv.COINGECKO_BASE_URL,
     gatewayEnv.RIDE_DISPLAY_RATE_TTL_MS,
     gatewayEnv.RIDE_DISPLAY_NGN_PER_USDT_FALLBACK,
   );
+
   const registry = new SocketRegistry({
-    instanceId: `${sharedEnv.KAFKA_CLIENT_ID}-${process.pid}-${Math.random().toString(16).slice(2, 8)}`,
+    instanceId: `${sharedEnv.KAFKA_CLIENT_ID}-${process.pid}-${Math.random()
+      .toString(16)
+      .slice(2, 8)}`,
     commandRedis: redisCommandClient,
     subscriberRedis: redisSubscriberClient,
   });
+
   await registry.start();
+
   const allowedOrigins = parseAllowedOrigins(gatewayEnv.CORS_ORIGINS);
 
-  // shared deps spread for all scheduled-ride routes
   const scheduledRideDeps = {
     privyAppId: gatewayEnv.PRIVY_APP_ID,
     privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
@@ -186,11 +212,13 @@ async function bootstrap(): Promise<void> {
         sendMethodNotAllowed(res);
         return;
       }
+
       await handlePrivyAuthRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         publisher,
       });
+
       return;
     }
 
@@ -199,6 +227,7 @@ async function bootstrap(): Promise<void> {
         sendMethodNotAllowed(res);
         return;
       }
+
       await handleSendPhoneOtpRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
@@ -208,6 +237,7 @@ async function bootstrap(): Promise<void> {
         twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
         twilioOtpTtlSeconds: gatewayEnv.TWILIO_OTP_TTL_SECONDS,
       });
+
       return;
     }
 
@@ -216,6 +246,7 @@ async function bootstrap(): Promise<void> {
         sendMethodNotAllowed(res);
         return;
       }
+
       await handleVerifyPhoneOtpRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
@@ -225,6 +256,7 @@ async function bootstrap(): Promise<void> {
         twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
         twilioOtpTtlSeconds: gatewayEnv.TWILIO_OTP_TTL_SECONDS,
       });
+
       return;
     }
 
@@ -233,11 +265,13 @@ async function bootstrap(): Promise<void> {
         sendMethodNotAllowed(res);
         return;
       }
+
       await handleRideEstimateRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         routePlanner,
       });
+
       return;
     }
 
@@ -246,6 +280,7 @@ async function bootstrap(): Promise<void> {
         sendMethodNotAllowed(res);
         return;
       }
+
       await handleRiderRideHistoryRoute(
         req,
         res,
@@ -256,6 +291,7 @@ async function bootstrap(): Promise<void> {
         },
         url,
       );
+
       return;
     }
 
@@ -278,6 +314,7 @@ async function bootstrap(): Promise<void> {
       const scheduledRideMatch = url.pathname.match(
         /^\/scheduled-rides\/([^/]+)\/cancel$/,
       );
+
       if (!scheduledRideMatch) {
         sendJson(res, 404, { error: "Not found" });
         return;
@@ -294,6 +331,7 @@ async function bootstrap(): Promise<void> {
         scheduledRideDeps,
         decodeURIComponent(scheduledRideMatch[1]),
       );
+
       return;
     }
 
@@ -302,7 +340,11 @@ async function bootstrap(): Promise<void> {
         sendMethodNotAllowed(res);
         return;
       }
-      await handlePouchHealthRoute(req, res, { pouchClient });
+
+      await handlePouchHealthRoute(req, res, {
+        pouchClient,
+      });
+
       return;
     }
 
@@ -311,7 +353,11 @@ async function bootstrap(): Promise<void> {
         sendMethodNotAllowed(res);
         return;
       }
-      await handlePouchChannelsRoute(req, res, { pouchClient });
+
+      await handlePouchChannelsRoute(req, res, {
+        pouchClient,
+      });
+
       return;
     }
 
@@ -320,6 +366,7 @@ async function bootstrap(): Promise<void> {
         sendMethodNotAllowed(res);
         return;
       }
+
       await handlePouchCreateSessionRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
@@ -327,6 +374,7 @@ async function bootstrap(): Promise<void> {
         publisher,
         ridePricingDisplayProvider,
       });
+
       return;
     }
 
@@ -348,6 +396,7 @@ async function bootstrap(): Promise<void> {
           sendMethodNotAllowed(res);
           return;
         }
+
         await handlePouchGetSessionRoute(
           req,
           res,
@@ -359,6 +408,7 @@ async function bootstrap(): Promise<void> {
           },
           sessionId,
         );
+
         return;
       }
 
@@ -367,6 +417,7 @@ async function bootstrap(): Promise<void> {
           sendMethodNotAllowed(res);
           return;
         }
+
         await handlePouchQuoteRoute(
           req,
           res,
@@ -378,6 +429,7 @@ async function bootstrap(): Promise<void> {
           },
           sessionId,
         );
+
         return;
       }
 
@@ -386,6 +438,7 @@ async function bootstrap(): Promise<void> {
           sendMethodNotAllowed(res);
           return;
         }
+
         await handlePouchIdentifyRoute(
           req,
           res,
@@ -397,6 +450,7 @@ async function bootstrap(): Promise<void> {
           },
           sessionId,
         );
+
         return;
       }
 
@@ -405,6 +459,7 @@ async function bootstrap(): Promise<void> {
           sendMethodNotAllowed(res);
           return;
         }
+
         await handlePouchVerifyOtpRoute(
           req,
           res,
@@ -416,6 +471,7 @@ async function bootstrap(): Promise<void> {
           },
           sessionId,
         );
+
         return;
       }
 
@@ -424,6 +480,7 @@ async function bootstrap(): Promise<void> {
           sendMethodNotAllowed(res);
           return;
         }
+
         await handlePouchKycRequirementsRoute(
           req,
           res,
@@ -435,6 +492,7 @@ async function bootstrap(): Promise<void> {
           },
           sessionId,
         );
+
         return;
       }
 
@@ -443,6 +501,7 @@ async function bootstrap(): Promise<void> {
           sendMethodNotAllowed(res);
           return;
         }
+
         await handlePouchSubmitKycRoute(
           req,
           res,
@@ -454,11 +513,14 @@ async function bootstrap(): Promise<void> {
           },
           sessionId,
         );
+
         return;
       }
     }
 
-    sendJson(res, 404, { error: "Not found" });
+    sendJson(res, 404, {
+      error: "Not found",
+    });
   });
 
   createGatewayWebSocketServer({
@@ -473,8 +535,8 @@ async function bootstrap(): Promise<void> {
   });
 
   const outboxPublisher = startOutboxPublisher({
-    producer, // same raw producer already created
-    intervalMs: 500, // poll every 500 ms
+    producer: asRawProducer(producer),
+    intervalMs: 500,
     batchSize: 100,
   });
 
@@ -496,26 +558,33 @@ async function bootstrap(): Promise<void> {
   onShutdown(async () => {
     await closeServer(server);
   });
+
   onShutdown(async () => {
     await dispatcherQueue.close();
   });
+
   onShutdown(async () => {
     await dispatcherRedis.quit();
   });
+
+  onShutdown(async () => {
+    outboxPublisher.shutdown();
+  });
+
   onShutdown(async () => {
     await producer.disconnect();
   });
+
   onShutdown(async () => {
     await consumer.disconnect();
   });
+
   onShutdown(async () => {
     await redisSubscriberClient.disconnect();
   });
+
   onShutdown(async () => {
     await redisCommandClient.disconnect();
-  });
-  onShutdown(async () => { 
-    outboxPublisher.shutdown(); 
   });
 }
 
