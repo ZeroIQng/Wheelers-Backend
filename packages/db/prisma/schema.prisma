@@ -476,6 +476,7 @@ model ScheduledRide {
   destAddress            String
   stops                  Json?
 
+  requestedRideId        String?
   plannedDistanceKm      Float?
   plannedDurationSeconds Int?
   fareEstimateUsdt       Decimal?                  @db.Decimal(18, 6)
@@ -488,6 +489,7 @@ model ScheduledRide {
 
   @@index([riderId, scheduledFor])
   @@index([status, scheduledFor])
+  
 }
 
 // GPS snapshots written periodically during a ride for dispute evidence.
@@ -616,4 +618,15 @@ model Notification {
   createdAt     DateTime             @default(now())
 
   @@index([userId, read, createdAt])
+}
+
+model OutboxEvent {
+  id          String    @id @default(uuid())
+  topic       String
+  key         String?
+  payload     Json
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([publishedAt, createdAt])
 }
