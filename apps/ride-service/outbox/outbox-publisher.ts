@@ -1,4 +1,4 @@
-import {outboxClient  } from '@wheleers/db';
+import { outboxClient } from '@wheleers/db';
 import type { WheelersProducer } from '@wheleers/kafka-client';
 
 /** Minimal interface satisfied by the KafkaJS producer returned by createProducer. */

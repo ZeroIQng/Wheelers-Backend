@@ -94,16 +94,6 @@ export const scheduledRideClient = {
       },
     }),
 
-  findDueForDispatch: (dispatchBefore: Date, limit = 10) =>
-    prisma.scheduledRide.findMany({
-      where: {
-        status: ScheduledRideStatus.SCHEDULED,
-        scheduledFor: { lte: dispatchBefore },
-      },
-      orderBy: { scheduledFor: 'asc' },
-      take: limit,
-    }),
-
   claimForDispatch: async (id: string) => {
     const result = await prisma.scheduledRide.updateMany({
       where: {
@@ -154,7 +144,7 @@ export const scheduledRideClient = {
       },
     }),
 
-     /**
+  /**
    * Atomically:
    *   1. Transitions ride DISPATCHING → DISPATCHED and records requestedRideId.
    *   2. Inserts an OutboxEvent with the RIDE_REQUESTED payload.

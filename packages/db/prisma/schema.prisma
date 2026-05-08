@@ -283,6 +283,18 @@ model ScheduledRide {
   @@index([status, scheduledFor])
 }
 
+model OutboxEvent {
+  id          String   @id @default(uuid())
+  topic       String
+  key         String?
+  payload     Json
+  createdAt   DateTime @default(now())
+  publishedAt DateTime?
+
+  @@index([publishedAt, createdAt])
+  @@index([createdAt])
+}
+
 model GpsLog {
   id        String   @id @default(uuid())
   rideId    String
