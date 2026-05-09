@@ -80,7 +80,12 @@ export function createGroupRidePlanner(params: {
         timestamp: new Date().toISOString(),
       };
 
-      await params.groupRideEventsProducer.candidatesIdentified(candidateEvent);
+      try {
+        await params.groupRideEventsProducer.candidatesIdentified(candidateEvent);
+      } catch (error) {
+        params.state.emittedCandidateFingerprints.delete(fingerprint);
+        throw error;
+      }
     },
 
     async handleGroupRideEvent(event) {
@@ -99,11 +104,6 @@ export function createGroupRidePlanner(params: {
           members,
         });
 
-        for (const member of members) {
-          params.state.assignedRideIds.add(member.rideId);
-          params.state.pendingRequestsByRideId.delete(member.rideId);
-        }
-
         await params.groupRideEventsProducer.groupPlanned({
           eventType: 'GROUP_RIDE_PLANNED',
           groupId: event.groupId,
@@ -115,6 +115,11 @@ export function createGroupRidePlanner(params: {
           sequenceAlgorithm: sequence.algorithm,
           timestamp: new Date().toISOString(),
         });
+
+        for (const member of members) {
+          params.state.assignedRideIds.add(member.rideId);
+          params.state.pendingRequestsByRideId.delete(member.rideId);
+        }
         return;
       }
 
