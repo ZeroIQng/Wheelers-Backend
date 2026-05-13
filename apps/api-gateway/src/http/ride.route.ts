@@ -43,6 +43,10 @@ type LatLngAddress = {
   address: string;
 };
 
+function buildScheduledRideJobId(scheduledRideId: string): string {
+  return `scheduled-ride-${scheduledRideId}`;
+}
+
 function parseWaypoint(
   record: Record<string, unknown>,
   key: string,
@@ -346,7 +350,7 @@ export async function handleCreateScheduledRideRoute(
         },
         {
           delay: delayMs,
-          jobId: `scheduled-ride:${scheduledRide.id}`, // deduplication key
+          jobId: buildScheduledRideJobId(scheduledRide.id),
         },
       )
       .catch((err) =>
@@ -428,7 +432,7 @@ export async function handleCancelScheduledRideRoute(
     }
 
     deps.dispatcherQueue
-      .remove(`scheduled-ride:${scheduledRideId}`)
+      .remove(buildScheduledRideJobId(scheduledRideId))
       .catch((err) =>
         console.warn(
           `[api-gateway] could not remove BullMQ job for ${scheduledRideId}:`,
