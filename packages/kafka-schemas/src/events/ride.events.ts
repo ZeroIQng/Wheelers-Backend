@@ -128,8 +128,7 @@ export const RideCompletionRequestedEvent = BaseRideEvent.extend({
 });
 
 // Fired by ride-service when both parties end the trip (or auto-end triggers).
-// Consumed by: payment-service (calculate and emit DRIVER_PAYOUT),
-// wallet-service (unlock rider funds, debit final fare),
+// Consumed by: wallet-service (unlock rider funds, debit final fare),
 // compliance-worker (finalise recording, log on-chain receipt),
 // notification-worker (completion push to both),
 // defi-scheduler (check rider idle balance after debit).
@@ -149,9 +148,7 @@ export const RideCompletedEvent = BaseRideEvent.extend({
 });
 
 // Fired by api-gateway when rider cancels.
-// Stage determines penalty tier.
-// Consumed by: payment-service (apply penalty if stage warrants),
-// wallet-service (unlock fare hold), ride-service (free driver),
+// Consumed by: wallet-service (unlock fare hold), ride-service (free driver),
 // notification-worker (push to driver).
 export const RideCancelledEvent = BaseRideEvent.extend({
   eventType:    z.literal('RIDE_CANCELLED'),
@@ -159,13 +156,6 @@ export const RideCancelledEvent = BaseRideEvent.extend({
   driverId:     z.string().uuid().optional(), // not set if cancelled before match
   riderWallet:  z.string(),
   driverWallet: z.string().optional(),
-  cancelStage:  z.enum([
-    'before_match',       // no penalty
-    'after_match',        // small penalty
-    'driver_en_route',    // medium penalty
-    'active_trip',        // high penalty
-  ]),
-  penaltyUsdt:  z.number(),                  // 0 if before_match
   reason:       z.string().optional(),
 });
 

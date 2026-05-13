@@ -199,22 +199,15 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_CANCELLED') {
-    const ridePricingDisplay = await ridePricingDisplayProvider.getPricingDisplay();
     await registry.sendToUser(event.riderId, 'ride:cancelled', {
       rideId: event.rideId,
       reason: event.reason,
-      cancelStage: event.cancelStage,
-      penaltyUsdt: event.penaltyUsdt,
-      penaltyNgn: convertUsdtToRideDisplayAmount(event.penaltyUsdt, ridePricingDisplay),
-      displayCurrency: ridePricingDisplay.displayCurrency,
-      displayExchangeRate: ridePricingDisplay.displayExchangeRate,
     });
 
     if (event.driverId) {
       await registry.sendToUser(event.driverId, 'ride:cancelled', {
         rideId: event.rideId,
         reason: event.reason,
-        cancelStage: event.cancelStage,
       });
     }
 

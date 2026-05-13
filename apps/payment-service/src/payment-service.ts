@@ -7,10 +7,8 @@ import {
 } from '@wheleers/kafka-client';
 import { TOPICS } from '@wheleers/kafka-schemas';
 import { createPaymentEventsConsumer } from './consumers/payment-events.consumer';
-import { createRideEventsConsumer } from './consumers/ride-events.consumer';
 import { applyPaymentServiceDefaults, getPaymentServiceId } from './config/runtime';
 import { createPaymentEventsHandler } from './handlers/payment-events.handler';
-import { createRideEventsHandler } from './handlers/ride-events.handler';
 import { createPaymentEventsProducer } from './producers/payment-events.producer';
 
 export async function startPaymentService(): Promise<void> {
@@ -37,27 +35,16 @@ export async function startPaymentService(): Promise<void> {
   const paymentEventsHandler = createPaymentEventsHandler({
     paymentEventsProducer,
   });
-  const rideEventsHandler = createRideEventsHandler({
-    paymentEventsProducer,
-  });
 
   const paymentEventsConsumer = createPaymentEventsConsumer({
     paymentEventsHandler,
   });
-  const rideEventsConsumer = createRideEventsConsumer({
-    rideEventsHandler,
-  });
 
   await consumer.subscribe(
-    [TOPICS.PAYMENT_EVENTS, TOPICS.RIDE_EVENTS],
+    [TOPICS.PAYMENT_EVENTS],
     async (value, ctx) => {
       if (ctx.topic === TOPICS.PAYMENT_EVENTS) {
         await paymentEventsConsumer.handle(value, ctx);
-        return;
-      }
-
-      if (ctx.topic === TOPICS.RIDE_EVENTS) {
-        await rideEventsConsumer.handle(value, ctx);
       }
     },
   );

@@ -7,8 +7,6 @@ import type { WalletEventsProducer } from '../producers/wallet-events.producer';
 
 const FIAT_ONRAMP_TYPE = 'CRYPTO_DEPOSIT' as TransactionType;
 const CRYPTO_DEPOSIT_TYPE = 'CRYPTO_DEPOSIT' as TransactionType;
-const DRIVER_PAYOUT_TYPE = 'DRIVER_PAYOUT' as TransactionType;
-const PENALTY_TYPE = 'PENALTY' as TransactionType;
 
 export function createPaymentEventsConsumer(params: {
   walletRepository: WalletRepository;
@@ -93,69 +91,6 @@ export function createPaymentEventsConsumer(params: {
           }, { key: event.userId });
         } catch (error) {
           console.warn(`[${serviceId}] crypto credit failed:`, getErrorMessage(error));
-          throw error;
-        }
-
-        return;
-      }
-
-      if (event.eventType === 'DRIVER_PAYOUT') {
-        try {
-          const wallet = await walletRepository.findByAddress(event.driverWallet);
-          const creditResult = await walletRepository.credit({
-            walletId: wallet.id,
-            amountUsdt: event.netPayoutUsdt,
-            type: DRIVER_PAYOUT_TYPE,
-            referenceId: event.rideId,
-            metadata: { platformFeeUsdt: event.platformFeeUsdt },
-          });
-
-          if (!creditResult.applied) {
-            return;
-          }
-
-          await walletEventsProducer.publishCredited({
-            walletId: creditResult.wallet.id,
-            userId: creditResult.wallet.userId,
-            walletAddress: creditResult.wallet.address,
-            amountUsdt: event.netPayoutUsdt,
-            newBalanceUsdt: Number(creditResult.wallet.balanceUsdt),
-            creditType: 'driver_payout',
-            referenceId: event.rideId,
-          }, { key: event.driverId });
-        } catch (error) {
-          console.warn(`[${serviceId}] payout credit failed:`, getErrorMessage(error));
-          throw error;
-        }
-
-        return;
-      }
-
-      if (event.eventType === 'PENALTY_APPLIED') {
-        try {
-          const wallet = await walletRepository.findByAddress(event.riderWallet);
-          const debitResult = await walletRepository.debit({
-            walletId: wallet.id,
-            amountUsdt: event.penaltyUsdt,
-            type: PENALTY_TYPE,
-            referenceId: event.rideId,
-          });
-
-          if (!debitResult.applied) {
-            return;
-          }
-
-          await walletEventsProducer.publishDebited({
-            walletId: debitResult.wallet.id,
-            userId: debitResult.wallet.userId,
-            walletAddress: debitResult.wallet.address,
-            amountUsdt: event.penaltyUsdt,
-            newBalanceUsdt: Number(debitResult.wallet.balanceUsdt),
-            debitType: 'penalty',
-            referenceId: event.rideId,
-          }, { key: event.userId });
-        } catch (error) {
-          console.warn(`[${serviceId}] penalty debit failed:`, getErrorMessage(error));
           throw error;
         }
       }

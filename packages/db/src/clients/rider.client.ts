@@ -1,5 +1,5 @@
 import { prisma } from '../prisma';
-import type { CancelStage, RideStatus, RideStopStatus, RideStopType } from '@prisma/client';
+import type { RideStatus, RideStopStatus, RideStopType } from '@prisma/client';
 
 type RouteStopInput = {
   lat: number;
@@ -220,9 +220,7 @@ export const rideClient = {
     }),
 
   cancel: (rideId: string, data: {
-    cancelStage:  CancelStage;
     cancelReason?: string;
-    penaltyUsdt:  number;
   }) =>
     prisma.ride.update({
       where: { id: rideId },

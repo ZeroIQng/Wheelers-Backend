@@ -1,20 +1,3 @@
-import type { RideCancelledEvent, RideCompletedEvent } from '@wheleers/kafka-schemas';
-import type { PaymentEventsProducer } from '../producers/payment-events.producer';
-
-interface RideEventsHandlerDeps {
-  paymentEventsProducer: PaymentEventsProducer;
-}
-
-export function createRideEventsHandler(deps: RideEventsHandlerDeps) {
-  return {
-    async handleRideCompleted(event: RideCompletedEvent): Promise<void> {
-      await deps.paymentEventsProducer.publishDriverPayout(event);
-    },
-
-    async handleRideCancelled(event: RideCancelledEvent): Promise<void> {
-      await deps.paymentEventsProducer.publishPenalty(event);
-    },
-  };
-}
-
-export type RideEventsHandler = ReturnType<typeof createRideEventsHandler>;
+// Ride events are no longer handled by payment-service.
+// Driver payout and cancellation penalty logic has been removed.
+// This file is kept as a placeholder if future ride-related payment handling is needed.

@@ -66,40 +66,6 @@ export const OnrampSettledEvent = BasePaymentEvent.extend({
   settlementReference:  z.string().optional(),
 });
 
-// Fired by payment-service after fare is calculated post ride-completion.
-// Fee is only applied when driverProfitUsdt > 0 (we never charge on a loss).
-// Consumed by: wallet-service (credit driver wallet),
-// compliance-worker (log payout on-chain),
-// notification-worker (push earnings summary to driver).
-export const DriverPayoutEvent = BasePaymentEvent.extend({
-  eventType:        z.literal('DRIVER_PAYOUT'),
-  rideId:           z.string().uuid(),
-  driverId:         z.string().uuid(),
-  driverWallet:     z.string(),
-  grossFareUsdt:    z.number(),
-  driverCostsUsdt:  z.number(),    // fuel, tolls etc if tracked — 0 initially
-  driverProfitUsdt: z.number(),    // grossFare - driverCosts
-  platformFeeUsdt:  z.number(),    // 0.3% of profit, 0 if profit <= 0
-  netPayoutUsdt:    z.number(),    // what driver actually receives
-  feeApplied:       z.boolean(),
-});
-
-// Fired by payment-service after applying a cancellation penalty.
-// Consumed by: wallet-service (debit rider wallet),
-// notification-worker (push penalty notice to rider).
-export const PenaltyAppliedEvent = BasePaymentEvent.extend({
-  eventType:    z.literal('PENALTY_APPLIED'),
-  rideId:       z.string().uuid(),
-  riderWallet:  z.string(),
-  penaltyUsdt:  z.number(),
-  reason:       z.enum([
-    'rider_cancel_after_match',
-    'rider_cancel_en_route',
-    'rider_cancel_active_trip',
-    'no_show',
-  ]),
-});
-
 // Fired by payment-service when a crypto deposit is detected on-chain.
 // Consumed by: wallet-service (credit USDT balance directly — no conversion needed),
 // notification-worker (push "crypto deposit received" to user).
@@ -116,15 +82,11 @@ export const PaymentEvent = z.discriminatedUnion('eventType', [
   PaymentSessionCreatedEvent,
   PaymentSessionSyncedEvent,
   OnrampSettledEvent,
-  DriverPayoutEvent,
-  PenaltyAppliedEvent,
   CryptoDepositReceivedEvent,
 ]);
 
 export type PaymentSessionCreatedEvent = z.infer<typeof PaymentSessionCreatedEvent>;
 export type PaymentSessionSyncedEvent  = z.infer<typeof PaymentSessionSyncedEvent>;
 export type OnrampSettledEvent         = z.infer<typeof OnrampSettledEvent>;
-export type DriverPayoutEvent          = z.infer<typeof DriverPayoutEvent>;
-export type PenaltyAppliedEvent        = z.infer<typeof PenaltyAppliedEvent>;
 export type CryptoDepositReceivedEvent = z.infer<typeof CryptoDepositReceivedEvent>;
 export type PaymentEvent               = z.infer<typeof PaymentEvent>;

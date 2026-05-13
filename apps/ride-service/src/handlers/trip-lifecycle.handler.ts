@@ -1,5 +1,5 @@
 import { FEES, GoogleMapsRoutePlanner } from '@wheleers/config';
-import { CancelStage, DriverStatus, driverClient, rideClient } from '@wheleers/db';
+import { DriverStatus, driverClient, rideClient } from '@wheleers/db';
 import type { MessageContext } from '@wheleers/kafka-client';
 import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
 
@@ -158,8 +158,6 @@ export function createTripLifecycleHandler(params?: {
       }
 
       if (event.eventType === 'RIDE_COMPLETED') {
-        const platformFeeUsdt = round2(event.fareUsdt * FEES.PLATFORM_FEE_PERCENT);
-        const driverEarningsUsdt = round2(event.fareUsdt - platformFeeUsdt);
         state?.rideParticipantsByRideId.delete(event.rideId);
         state?.gpsByRideId.delete(event.rideId);
         state?.routeByRideId.delete(event.rideId);
@@ -167,13 +165,11 @@ export function createTripLifecycleHandler(params?: {
         try {
           await rideClient.complete(event.rideId, {
             fareFinalUsdt: event.fareUsdt,
-            platformFeeUsdt,
             distanceKm: event.distanceKm,
             durationSeconds: event.durationSeconds,
             recordingCid: event.recordingCid,
             recordingHash: event.recordingHash,
           });
-          await driverClient.recordCompletedRide(event.driverId, driverEarningsUsdt);
           await driverClient.updateStatus(event.driverId, DriverStatus.ONLINE);
         } catch (err) {
           console.warn(`[ride-service] ride completion persistence skipped:`, (err as any)?.message ?? err);
@@ -187,9 +183,7 @@ export function createTripLifecycleHandler(params?: {
 
         try {
           await rideClient.cancel(event.rideId, {
-            cancelStage: stageToDb(event.cancelStage),
             cancelReason: event.reason,
-            penaltyUsdt: event.penaltyUsdt,
           });
           if (event.driverId) {
             await driverClient.updateStatus(event.driverId, DriverStatus.ONLINE);
