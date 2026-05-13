@@ -9,7 +9,7 @@ const {
   buildNearestRouteGroup,
 } = require('../apps/group-ride/dist/algorithms/grouping.js');
 const {
-  planGroupStops,
+  planGroupStops, 
 } = require('../apps/group-ride/dist/algorithms/stop-sequencer.js');
 const {
   createGroupRidePlanner,

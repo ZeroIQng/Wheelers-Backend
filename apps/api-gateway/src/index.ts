@@ -117,7 +117,7 @@ async function bootstrap(): Promise<void> {
     },
   });
 
-  const leadTimeMs = 5 * 60 * 1_000;
+  const leadTimeMs = gatewayEnv.SCHEDULED_RIDE_DISPATCH_LEAD_TIME_S * 1_000;
 
   registerShutdownHandlers("api-gateway");
 

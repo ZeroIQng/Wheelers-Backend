@@ -17,6 +17,8 @@ const GatewayEnvSchema = z.object({
   // Rider-facing fare display only. Internal ride settlement remains in USDT.
   RIDE_DISPLAY_NGN_PER_USDT_FALLBACK: z.coerce.number().positive().default(1600),
   RIDE_DISPLAY_RATE_TTL_MS: z.coerce.number().int().positive().default(60000),
+  // Must match ride-service so BullMQ enqueue timing aligns with dispatcher recovery.
+  SCHEDULED_RIDE_DISPATCH_LEAD_TIME_S: z.coerce.number().int().positive().default(300),
   // Comma-separated list of allowed WebSocket/HTTP origins
   CORS_ORIGINS:       z.string().default('http://localhost:19006'),
   // How long a WebSocket connection can stay idle before being dropped (ms)

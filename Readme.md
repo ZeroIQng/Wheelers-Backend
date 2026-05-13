@@ -95,6 +95,11 @@ This is what makes the system scale: when a ride completes, `ride-service` emits
 **HTTP control plane**
 The gateway exposes a small authenticated REST surface for auth and Pouch session orchestration:
 - `POST /auth/privy` — Privy auth callback
+- `POST /rides/estimate` — rider-facing route and fare estimate
+- `GET /rides/history` — completed and cancelled rider ride history
+- `GET /scheduled-rides` — list rider scheduled rides
+- `POST /scheduled-rides` — create a scheduled ride and enqueue dispatch
+- `POST /scheduled-rides/:id/cancel` — cancel a scheduled ride before dispatch completes
 - `GET /payments/pouch/health` — provider health proxy
 - `GET /payments/pouch/channels` — supported Pouch chains/networks
 - `POST /payments/pouch/sessions` — authenticated onramp/offramp session creation

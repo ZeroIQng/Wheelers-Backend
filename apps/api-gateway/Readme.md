@@ -23,6 +23,11 @@ It does 3 main jobs:
 It also exposes these HTTP endpoints:
 
 - `POST /auth/privy`
+- `POST /rides/estimate`
+- `GET /rides/history`
+- `GET /scheduled-rides`
+- `POST /scheduled-rides`
+- `POST /scheduled-rides/:id/cancel`
 - `GET /payments/pouch/health`
 - `GET /payments/pouch/channels`
 - `POST /payments/pouch/sessions`
@@ -198,6 +203,7 @@ Gateway specific:
 - `PORT`
 - `PRIVY_APP_ID`
 - `PRIVY_VERIFICATION_KEY`
+- `SCHEDULED_RIDE_DISPATCH_LEAD_TIME_S`
 - `CORS_ORIGINS`
 - `WS_IDLE_TIMEOUT_MS`
 - `JWT_SECRET` (legacy/optional)
