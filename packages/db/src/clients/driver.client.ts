@@ -119,15 +119,6 @@ export const driverClient = {
       data,
     }),
 
-  // Called after RIDE_COMPLETED — increments counters atomically.
-  recordCompletedRide: (driverId: string, earningsUsdt: number) =>
-    prisma.driver.update({
-      where: { id: driverId },
-      data: {
-        totalRides:         { increment: 1 },
-        totalEarningsUsdt:  { increment: earningsUsdt },
-      },
-    }),
 
   updateRating: async (driverId: string) => {
     // Recalculate average from all feedback for this driver.

@@ -204,7 +204,6 @@ export const rideClient = {
 
   complete: (rideId: string, data: {
     fareFinalUsdt:   number;
-    platformFeeUsdt: number;
     distanceKm:      number;
     durationSeconds: number;
     recordingCid?:   string;

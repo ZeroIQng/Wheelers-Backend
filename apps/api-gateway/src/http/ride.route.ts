@@ -267,7 +267,6 @@ export async function handleRiderRideHistoryRoute(
         distanceKm: ride.distanceKm ?? null,
         durationSeconds: ride.durationSeconds ?? null,
         cancelReason: ride.cancelReason ?? null,
-        cancelStage: ride.cancelStage ?? null,
         matchedAt: ride.matchedAt?.toISOString() ?? null,
         startedAt: ride.startedAt?.toISOString() ?? null,
         completedAt: ride.completedAt?.toISOString() ?? null,

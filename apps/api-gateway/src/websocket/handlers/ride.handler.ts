@@ -89,13 +89,6 @@ function normalizePaymentMethod(value: unknown): 'wallet_balance' | 'smart_accou
   return value === 'smart_account' ? 'smart_account' : 'wallet_balance';
 }
 
-function normalizeCancelStage(value: unknown): 'before_match' | 'after_match' | 'driver_en_route' | 'active_trip' {
-  if (value === 'after_match' || value === 'driver_en_route' || value === 'active_trip') {
-    return value;
-  }
-  return 'before_match';
-}
-
 function normalizeEndedBy(value: unknown): 'both_confirmed' | 'auto_gps' | 'admin' {
   if (value === 'auto_gps' || value === 'admin') return value;
   return 'both_confirmed';
@@ -237,8 +230,6 @@ export async function handleRideMessage(
       driverId: getString(payload, 'driverId'),
       riderWallet: requireAuthWalletAddress(payload, auth, 'riderWallet'),
       driverWallet: getString(payload, 'driverWallet')?.toLowerCase(),
-      cancelStage: normalizeCancelStage(payload['cancelStage']),
-      penaltyUsdt: getNumber(payload, 'penaltyUsdt') ?? 0,
       reason: getString(payload, 'reason'),
       timestamp,
     });

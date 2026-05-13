@@ -339,20 +339,6 @@ function round3(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-function stageToDb(stage: string): CancelStage {
-  switch (stage) {
-    case 'before_match':
-      return 'BEFORE_MATCH';
-    case 'after_match':
-      return 'AFTER_MATCH';
-    case 'driver_en_route':
-      return 'DRIVER_EN_ROUTE';
-    case 'active_trip':
-      return 'ACTIVE_TRIP';
-    default:
-      return 'BEFORE_MATCH';
-  }
-}
 
 function resolveCompletedAt(completedAt: string | undefined, fallbackTimestamp: string): Date {
   const source = completedAt ?? fallbackTimestamp;

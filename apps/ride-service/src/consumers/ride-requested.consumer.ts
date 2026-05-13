@@ -250,8 +250,6 @@ export function createRideRequestedConsumer(params: {
       rideId: event.rideId,
       riderId: event.riderId,
       riderWallet: event.riderWallet,
-      cancelStage: 'before_match',
-      penaltyUsdt: 0,
       reason: 'no_drivers_available',
       timestamp: new Date().toISOString(),
     });
