@@ -33,6 +33,9 @@ import {
   handlePouchStatusRoute,
 } from "./http/pouch.route";
 import {
+  handleCreateWalletWithdrawalRoute,
+  handleGetWalletWithdrawalRoute,
+  handleListWalletWithdrawalsRoute,
   handleWalletOverviewRoute,
   handleWalletTransactionsRoute,
 } from "./http/wallet.route";
@@ -510,6 +513,19 @@ async function bootstrap(): Promise<void> {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         ridePricingDisplayProvider,
+        pouchClient,
+        publisher,
+        defaults: {
+          providerId: gatewayEnv.POUCH_PROVIDER_ID,
+          countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
+          currency: gatewayEnv.POUCH_FIAT_CURRENCY,
+          cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
+          cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
+          chain: gatewayEnv.POUCH_CHAIN,
+          masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
+          testEmail: gatewayEnv.POUCH_TEST_EMAIL,
+          userKycDefaults: pouchUserKycDefaults,
+        },
       });
 
       return;
@@ -528,10 +544,111 @@ async function bootstrap(): Promise<void> {
           privyAppId: gatewayEnv.PRIVY_APP_ID,
           privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
           ridePricingDisplayProvider,
+          pouchClient,
+          publisher,
+          defaults: {
+            providerId: gatewayEnv.POUCH_PROVIDER_ID,
+            countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
+            currency: gatewayEnv.POUCH_FIAT_CURRENCY,
+            cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
+            cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
+            chain: gatewayEnv.POUCH_CHAIN,
+            masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
+            testEmail: gatewayEnv.POUCH_TEST_EMAIL,
+            userKycDefaults: pouchUserKycDefaults,
+          },
         },
         url,
       );
 
+      return;
+    }
+
+    if (url.pathname === "/wallet/withdrawals") {
+      if (req.method === "GET") {
+        await handleListWalletWithdrawalsRoute(
+          req,
+          res,
+          {
+            privyAppId: gatewayEnv.PRIVY_APP_ID,
+            privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+            ridePricingDisplayProvider,
+            pouchClient,
+            publisher,
+            defaults: {
+              providerId: gatewayEnv.POUCH_PROVIDER_ID,
+              countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
+              currency: gatewayEnv.POUCH_FIAT_CURRENCY,
+              cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
+              cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
+              chain: gatewayEnv.POUCH_CHAIN,
+              masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
+              testEmail: gatewayEnv.POUCH_TEST_EMAIL,
+              userKycDefaults: pouchUserKycDefaults,
+            },
+          },
+          url,
+        );
+        return;
+      }
+
+      if (req.method === "POST") {
+        await handleCreateWalletWithdrawalRoute(req, res, {
+          privyAppId: gatewayEnv.PRIVY_APP_ID,
+          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+          ridePricingDisplayProvider,
+          pouchClient,
+          publisher,
+          defaults: {
+            providerId: gatewayEnv.POUCH_PROVIDER_ID,
+            countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
+            currency: gatewayEnv.POUCH_FIAT_CURRENCY,
+            cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
+            cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
+            chain: gatewayEnv.POUCH_CHAIN,
+            masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
+            testEmail: gatewayEnv.POUCH_TEST_EMAIL,
+            userKycDefaults: pouchUserKycDefaults,
+          },
+        });
+        return;
+      }
+
+      sendMethodNotAllowed(res);
+      return;
+    }
+
+    if (url.pathname.startsWith("/wallet/withdrawals/")) {
+      const withdrawalMatch = url.pathname.match(/^\/wallet\/withdrawals\/([^/]+)$/);
+
+      if (!withdrawalMatch) {
+        sendJson(res, 404, { error: "Not found" });
+        return;
+      }
+
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleGetWalletWithdrawalRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        ridePricingDisplayProvider,
+        pouchClient,
+        publisher,
+        defaults: {
+          providerId: gatewayEnv.POUCH_PROVIDER_ID,
+          countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
+          currency: gatewayEnv.POUCH_FIAT_CURRENCY,
+          cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
+          cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
+          chain: gatewayEnv.POUCH_CHAIN,
+          masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
+          testEmail: gatewayEnv.POUCH_TEST_EMAIL,
+          userKycDefaults: pouchUserKycDefaults,
+        },
+      }, decodeURIComponent(withdrawalMatch[1]));
       return;
     }
 

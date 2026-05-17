@@ -1,6 +1,6 @@
 import { randomInt } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'http';
-import { paymentClient, userClient } from '@wheleers/db';
+import { paymentClient, userClient, withdrawalClient } from '@wheleers/db';
 import type { PaymentSessionType } from '@prisma/client';
 import type { RidePricingDisplayProvider } from '../pricing/display';
 import { verifyPrivyAccessToken } from '../auth/privy';
@@ -9,6 +9,7 @@ import type { GatewayPublisher } from '../websocket/publisher';
 import {
   buildPaymentIntentUpsertFromEvent,
   buildPouchMetadata,
+  deriveLifecycleStatus,
   normalizePouchTransactionCreated,
   normalizePouchTransactionStatus,
 } from './pouch.helpers';
@@ -268,6 +269,9 @@ export async function handlePouchStatusRoute(
       await paymentClient.upsertPaymentIntent(
         buildPaymentIntentUpsertFromEvent(syncedEvent, statusResponse),
       );
+      if (intent.sessionType === 'OFFRAMP') {
+        await syncWithdrawalLifecycleFromStatus(providerRef, statusResponse);
+      }
       await deps.publisher.publishPaymentEvent(syncedEvent);
 
       console.log('[api-gateway][pouch] status synced', {
@@ -287,6 +291,39 @@ export async function handlePouchStatusRoute(
   } catch (error) {
     sendPouchError(res, error, 'Failed to load Pouch transaction status');
   }
+}
+
+async function syncWithdrawalLifecycleFromStatus(
+  providerReference: string,
+  statusResponse: Record<string, unknown>,
+): Promise<void> {
+  const lifecycleStatus = deriveLifecycleStatus(
+    pickString(statusResponse, ['status']) ?? '',
+  );
+  const failureReason =
+    pickString(statusResponse, ['failureReason', 'status']) ?? 'Withdrawal failed';
+
+  if (lifecycleStatus === 'SETTLED') {
+    await withdrawalClient.settle(providerReference).catch(() => null);
+    return;
+  }
+
+  if (
+    lifecycleStatus === 'FAILED' ||
+    lifecycleStatus === 'EXPIRED' ||
+    lifecycleStatus === 'CANCELLED'
+  ) {
+    await withdrawalClient
+      .releaseFailedRequest({
+        providerReference,
+        failureReason,
+        status: lifecycleStatus,
+      })
+      .catch(() => null);
+    return;
+  }
+
+  await withdrawalClient.markProcessing(providerReference).catch(() => null);
 }
 
 async function authenticateHttpUser(

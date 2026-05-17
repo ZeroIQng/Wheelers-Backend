@@ -3,7 +3,7 @@ import { Prisma }   from '@prisma/client';
 import type { TransactionType, PrismaClient } from '@prisma/client';
 
 // The type of the transactional client Prisma passes into $transaction callbacks
-type TxClient = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;
+type TxClient = Prisma.TransactionClient;
 
 interface WalletMutationResult {
   wallet: Awaited<ReturnType<typeof prisma.wallet.update>>;

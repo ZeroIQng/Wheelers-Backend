@@ -22,6 +22,8 @@ model User {
   notifications Notification[]
   consents      UserConsent[]
   wallet        Wallet?
+  walletReservations WalletReservation[]
+  withdrawalRequests WithdrawalRequest[]
 
   @@index([privyDid])
   @@index([walletAddress])
@@ -95,6 +97,8 @@ model Wallet {
   rideHolds      RideHold[]
   transactions   Transaction[]
   virtualAccount VirtualAccount?
+  reservations   WalletReservation[]
+  withdrawals    WithdrawalRequest[]
   user           User            @relation(fields: [userId], references: [id])
 
   @@index([address])
@@ -196,6 +200,64 @@ model Transaction {
   @@unique([walletId, type, direction, referenceId])
   @@index([walletId, createdAt])
   @@index([referenceId])
+}
+
+model WalletReservation {
+  id         String                  @id @default(uuid())
+  walletId    String
+  userId      String
+  kind        WalletReservationKind
+  status      WalletReservationStatus @default(ACTIVE)
+  amountUsdt  Decimal                 @db.Decimal(18, 6)
+  referenceId String                  @unique
+  metadata    Json?
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+  releasedAt  DateTime?
+  consumedAt  DateTime?
+  user        User                    @relation(fields: [userId], references: [id])
+  wallet      Wallet                  @relation(fields: [walletId], references: [id])
+  withdrawal  WithdrawalRequest?
+
+  @@index([walletId, status])
+  @@index([userId, status])
+}
+
+model WithdrawalRequest {
+  id                 String                  @id @default(uuid())
+  userId             String
+  walletId           String
+  reservationId      String                  @unique
+  paymentId          String?                 @unique
+  providerReference  String?                 @unique
+  status             WithdrawalRequestStatus @default(PENDING)
+  requestedAmountNgn Decimal                 @db.Decimal(18, 2)
+  quotedAmountNgn    Decimal?                @db.Decimal(18, 2)
+  reservedAmountUsdt Decimal                 @db.Decimal(18, 6)
+  quotedAmountUsd    Decimal?                @db.Decimal(18, 6)
+  quotedCryptoAmount Decimal?                @db.Decimal(18, 6)
+  displayCurrency    String                  @default("NGN")
+  displayExchangeRate Decimal                @db.Decimal(18, 6)
+  payoutCurrency     String                  @default("NGN")
+  cryptoCurrency     String
+  cryptoNetwork      String
+  bankAccountNumber  String
+  bankAccountName    String
+  bankNetworkId      String
+  failureReason      String?
+  providerPayload    Json?
+  expiresAt          DateTime?
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  settledAt          DateTime?
+  failedAt           DateTime?
+  releasedAt         DateTime?
+  user               User                    @relation(fields: [userId], references: [id])
+  wallet             Wallet                  @relation(fields: [walletId], references: [id])
+  reservation        WalletReservation       @relation(fields: [reservationId], references: [id])
+
+  @@index([userId, status, createdAt])
+  @@index([walletId, status, createdAt])
 }
 
 model Ride {
@@ -463,6 +525,28 @@ enum TransactionType {
   WITHDRAWAL
   DEFI_STAKE
   DEFI_UNSTAKE
+}
+
+enum WalletReservationKind {
+  WITHDRAWAL
+}
+
+enum WalletReservationStatus {
+  ACTIVE
+  RELEASED
+  CONSUMED
+  EXPIRED
+}
+
+enum WithdrawalRequestStatus {
+  PENDING
+  FUNDS_RESERVED
+  OFFRAMP_CREATED
+  PROCESSING
+  SETTLED
+  FAILED
+  EXPIRED
+  CANCELLED
 }
 
 enum DefiTier {

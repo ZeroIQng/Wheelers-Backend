@@ -9,6 +9,7 @@ export { scheduledRideClient } from './clients/scheduled-ride.client';
 export { outboxClient }     from './clients/outbox.client';
 export { paymentClient }    from './clients/payment.client';
 export { walletClient }     from './clients/wallet.client';
+export { withdrawalClient } from './clients/withdrawal.client';
 export { complianceClient } from './clients/compliance.client';
 export { defiClient }       from './clients/defi.client';
 
@@ -32,6 +33,8 @@ export type {
   YieldHarvest,
   UserConsent,
   Notification,
+  WalletReservation,
+  WithdrawalRequest,
   Prisma,
 } from '@prisma/client';
 
@@ -52,6 +55,9 @@ export {
   NotificationCategory,
   PaymentIntentStatus,
   PaymentSessionType,
+  WalletReservationKind,
+  WalletReservationStatus,
+  WithdrawalRequestStatus,
   RideHoldStatus,
   RideStopStatus,
   RideStopType,
