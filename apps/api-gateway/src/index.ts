@@ -84,13 +84,13 @@ function buildPouchUserKycDefaults(env: {
   POUCH_TEST_EMAIL?: string;
 }): Record<string, string> | undefined {
   const entries = Object.entries({
-    fullName: env.POUCH_FULL_NAME,
-    phone: env.POUCH_PHONE,
-    address: env.POUCH_ADDRESS,
-    dob: env.POUCH_DOB,
-    nin: env.POUCH_NIN,
-    bvn: env.POUCH_BVN,
-    email: env.POUCH_TEST_EMAIL,
+    FULL_NAME: env.POUCH_FULL_NAME,
+    PHONE: env.POUCH_PHONE,
+    ADDRESS: env.POUCH_ADDRESS,
+    DOB: normalizePouchDob(env.POUCH_DOB),
+    NIN: env.POUCH_NIN,
+    BVN: env.POUCH_BVN,
+    EMAIL: env.POUCH_TEST_EMAIL,
   }).filter(([, value]) => typeof value === "string" && value.trim().length > 0);
 
   if (entries.length === 0) {
@@ -98,6 +98,25 @@ function buildPouchUserKycDefaults(env: {
   }
 
   return Object.fromEntries(entries) as Record<string, string>;
+}
+
+function normalizePouchDob(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  const slashMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (slashMatch) {
+    const [, month, day, year] = slashMatch;
+    return `${year}-${month}-${day}`;
+  }
+
+  return trimmed;
 }
 
 async function bootstrap(): Promise<void> {
@@ -382,6 +401,7 @@ async function bootstrap(): Promise<void> {
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         pouchClient,
         publisher,
+        ridePricingDisplayProvider,
         defaults: {
           providerId: gatewayEnv.POUCH_PROVIDER_ID,
           countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
@@ -410,6 +430,7 @@ async function bootstrap(): Promise<void> {
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         pouchClient,
         publisher,
+        ridePricingDisplayProvider,
         defaults: {
           providerId: gatewayEnv.POUCH_PROVIDER_ID,
           countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
@@ -454,6 +475,7 @@ async function bootstrap(): Promise<void> {
           privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
           pouchClient,
           publisher,
+          ridePricingDisplayProvider,
           defaults: {
             providerId: gatewayEnv.POUCH_PROVIDER_ID,
             countryCode: gatewayEnv.POUCH_COUNTRY_CODE,

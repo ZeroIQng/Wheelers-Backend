@@ -103,11 +103,17 @@ export class PouchClient {
   }
 
   createSharedKycOnramp(payload: PouchOnrampPayload): Promise<PouchOnrampResponse> {
-    return this.request('POST', '/shared-kyc/ramp/onramp', { body: payload });
+    return this.request('POST', '/shared-kyc/ramp/onramp', {
+      body: payload,
+      auth: !payload.userKyc,
+    });
   }
 
   createSharedKycOfframp(payload: PouchOfframpPayload): Promise<PouchOfframpResponse> {
-    return this.request('POST', '/shared-kyc/ramp/offramp', { body: payload });
+    return this.request('POST', '/shared-kyc/ramp/offramp', {
+      body: payload,
+      auth: !payload.userKyc,
+    });
   }
 
   getRampStatus(

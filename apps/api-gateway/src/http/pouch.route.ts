@@ -2,6 +2,7 @@ import { randomInt } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { paymentClient, userClient } from '@wheleers/db';
 import type { PaymentSessionType } from '@prisma/client';
+import type { RidePricingDisplayProvider } from '../pricing/display';
 import { verifyPrivyAccessToken } from '../auth/privy';
 import { isRecord, pickNumber, pickString } from '../utils/object';
 import type { GatewayPublisher } from '../websocket/publisher';
@@ -24,6 +25,7 @@ interface PouchRouteDeps {
   privyVerificationKey: string;
   pouchClient: PouchClient;
   publisher: GatewayPublisher;
+  ridePricingDisplayProvider: RidePricingDisplayProvider;
   defaults: {
     providerId: string;
     countryCode: string;
@@ -76,7 +78,11 @@ export async function handlePouchOnrampRoute(
       return;
     }
 
-    const payload = buildOnrampPayload(rawBody, deps.defaults);
+    const payload = await buildOnrampPayload(
+      rawBody,
+      deps.defaults,
+      deps.ridePricingDisplayProvider,
+    );
     const customerEmail = resolveCustomerEmail(rawBody, auth.verifiedToken, deps.defaults.testEmail);
     const walletTag = payload.walletTag;
 
@@ -317,19 +323,26 @@ async function authenticateHttpUser(
   return { user, verifiedToken };
 }
 
-function buildOnrampPayload(
+async function buildOnrampPayload(
   body: Record<string, unknown>,
   defaults: PouchRouteDeps['defaults'],
-): PouchOnrampPayload {
-  const amount = pickNumber(body, ['amount', 'amountLocal', 'localAmount', 'ngnAmount']);
-  if (!amount || amount <= 0) {
-    throw new Error('amount must be a positive number');
+  ridePricingDisplayProvider: RidePricingDisplayProvider,
+): Promise<PouchOnrampPayload> {
+  const amountLocal = pickNumber(body, ['amount', 'amountLocal', 'localAmount', 'ngnAmount']);
+  if (!amountLocal || amountLocal <= 0) {
+    throw new Error('amount must be a positive number in local currency');
   }
 
   const userKyc = readUserKyc(body['userKyc'], defaults.userKycDefaults);
+  const pricing = await ridePricingDisplayProvider.getPricingDisplay();
+  const amountUsd = amountLocal / pricing.displayExchangeRate;
+
+  if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+    throw new Error('Could not convert local amount into a valid USD amount for Pouch');
+  }
 
   return {
-    amount: roundAmount(amount),
+    amount: roundAmount(amountUsd),
     cryptoCurrency:
       pickString(body, ['cryptoCurrency'])?.toUpperCase() ?? defaults.cryptoCurrency,
     cryptoNetwork:
@@ -392,12 +405,13 @@ function readUserKyc(
   const mergedDefaults = defaults && Object.keys(defaults).length > 0 ? defaults : undefined;
 
   if (isRecord(value)) {
+    const normalizedInput = normalizePouchUserKyc(value);
     return mergedDefaults
       ? {
           ...mergedDefaults,
-          ...value,
+          ...normalizedInput,
         }
-      : value;
+      : normalizedInput;
   }
 
   return mergedDefaults ?? null;
@@ -471,6 +485,7 @@ function summarizeOnrampPayload(payload: PouchOnrampPayload) {
     walletAddress: maskIdentifier(payload.walletAddress),
     walletTag: payload.walletTag ?? null,
     userKycFields: payload.userKyc ? Object.keys(payload.userKyc) : [],
+    userKyc: maskSensitiveRecord(payload.userKyc),
   };
 }
 
@@ -488,6 +503,7 @@ function summarizeOfframpPayload(payload: PouchOfframpPayload) {
       networkId: payload.bankAccount.networkId,
     },
     userKycFields: payload.userKyc ? Object.keys(payload.userKyc) : [],
+    userKyc: maskSensitiveRecord(payload.userKyc),
   };
 }
 
@@ -540,8 +556,93 @@ function maskIdentifier(value: string | undefined): string | null {
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
+function maskSensitiveRecord(
+  value: Record<string, unknown> | undefined,
+): Record<string, unknown> | null {
+  if (!value) {
+    return null;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entryValue]) => [key, maskSensitiveValue(key, entryValue)]),
+  );
+}
+
+function maskSensitiveValue(key: string, value: unknown): unknown {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  const normalizedKey = key.toLowerCase();
+  if (normalizedKey.includes('email')) {
+    return maskEmail(value);
+  }
+
+  if (
+    normalizedKey.includes('phone') ||
+    normalizedKey.includes('address') ||
+    normalizedKey.includes('name') ||
+    normalizedKey.includes('nin') ||
+    normalizedKey.includes('bvn') ||
+    normalizedKey.includes('dob')
+  ) {
+    return maskIdentifier(value);
+  }
+
+  return value;
+}
+
+function maskEmail(value: string): string {
+  const atIndex = value.indexOf('@');
+  if (atIndex <= 1) {
+    return maskIdentifier(value) ?? value;
+  }
+
+  return `${value.slice(0, 2)}***${value.slice(atIndex)}`;
+}
+
 function buildPouchWalletTag(): string {
   const timestamp = Date.now().toString();
   const suffix = randomInt(100_000, 1_000_000).toString();
   return `${timestamp}${suffix}`;
+}
+
+function normalizePouchUserKyc(value: Record<string, unknown>): Record<string, unknown> {
+  const normalizedEntries = Object.entries(value).map(([key, entryValue]) => {
+    const normalizedKey = normalizePouchUserKycKey(key);
+    const normalizedValue =
+      normalizedKey === 'DOB' && typeof entryValue === 'string'
+        ? normalizePouchDob(entryValue)
+        : entryValue;
+
+    return [normalizedKey, normalizedValue];
+  });
+
+  return Object.fromEntries(normalizedEntries);
+}
+
+function normalizePouchUserKycKey(key: string): string {
+  const compact = key.replace(/[\s-]+/g, '_');
+  const upper = compact.toUpperCase();
+
+  if (upper === 'FULLNAME') {
+    return 'FULL_NAME';
+  }
+
+  return upper;
+}
+
+function normalizePouchDob(value: string): string {
+  const trimmed = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  const slashMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (slashMatch) {
+    const [, month, day, year] = slashMatch;
+    return `${year}-${month}-${day}`;
+  }
+
+  return trimmed;
 }
