@@ -253,8 +253,7 @@ function buildOnrampPayload(
       pickString(body, ['cryptoCurrency'])?.toUpperCase() ?? defaults.cryptoCurrency,
     cryptoNetwork:
       pickString(body, ['cryptoNetwork'])?.toUpperCase() ?? defaults.cryptoNetwork,
-    walletAddress:
-      pickString(body, ['walletAddress'])?.trim() || defaults.masterWalletAddress,
+    walletAddress: defaults.masterWalletAddress,
     walletTag: pickString(body, ['walletTag']) ?? undefined,
     countryCode: pickString(body, ['countryCode'])?.toUpperCase() ?? defaults.countryCode,
     currency: pickString(body, ['currency'])?.toUpperCase() ?? defaults.currency,

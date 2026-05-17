@@ -86,7 +86,7 @@ export function normalizePouchTransactionCreated(input: {
     cryptoNetwork,
     chain: input.chain,
     customerEmail: input.customerEmail,
-    userWallet: input.metadata.walletAddress,
+    userWallet: input.metadata.walletAddress.toLowerCase(),
     walletTag: input.walletTag,
     timestamp: asIsoTimestamp(
       pickString(normalizedPayload, ['expiresAt']) ?? new Date().toISOString(),
