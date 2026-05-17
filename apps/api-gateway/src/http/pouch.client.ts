@@ -140,18 +140,28 @@ export class PouchClient {
     };
 
     if (auth) {
-      headers.authorization = this.apiKey.startsWith('Bearer ')
-        ? this.apiKey
-        : `Bearer ${this.apiKey}`;
-      headers['x-api-key'] = this.apiKey;
+      const apiKey = this.apiKey.replace(/^Bearer\s+/i, '').trim();
+      headers.authorization = `Bearer ${apiKey}`;
+      headers['x-api-key'] = apiKey;
+      headers['x-pouch-api-key'] = apiKey;
     }
 
     if (options?.body !== undefined) {
       headers['content-type'] = 'application/json';
     }
 
+    const requestUrl = path instanceof URL ? path : new URL(path, this.baseUrl);
+
+    console.log('[api-gateway][pouch-client] request', {
+      method,
+      url: requestUrl.toString(),
+      auth,
+      apiKeyFingerprint: auth ? fingerprintApiKey(this.apiKey) : null,
+      bodyKeys: options?.body ? Object.keys(options.body) : [],
+    });
+
     const response = await fetch(
-      path instanceof URL ? path : new URL(path, this.baseUrl),
+      requestUrl,
       {
         method,
         headers,
@@ -164,10 +174,27 @@ export class PouchClient {
       ? await response.json()
       : await response.text();
 
+    console.log('[api-gateway][pouch-client] response', {
+      method,
+      url: requestUrl.toString(),
+      status: response.status,
+      ok: response.ok,
+      contentType,
+    });
+
     if (!response.ok) {
       throw new PouchApiError('Pouch request failed', response.status, payload);
     }
 
     return payload as T;
   }
+}
+
+function fingerprintApiKey(value: string): string {
+  const normalized = value.replace(/^Bearer\s+/i, '').trim();
+  if (normalized.length <= 8) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 4)}...${normalized.slice(-4)}`;
 }

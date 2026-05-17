@@ -74,6 +74,32 @@ function sendMethodNotAllowed(res: ServerResponse): void {
   sendJson(res, 405, { error: "Method not allowed" });
 }
 
+function buildPouchUserKycDefaults(env: {
+  POUCH_FULL_NAME?: string;
+  POUCH_PHONE?: string;
+  POUCH_ADDRESS?: string;
+  POUCH_DOB?: string;
+  POUCH_NIN?: string;
+  POUCH_BVN?: string;
+  POUCH_TEST_EMAIL?: string;
+}): Record<string, string> | undefined {
+  const entries = Object.entries({
+    fullName: env.POUCH_FULL_NAME,
+    phone: env.POUCH_PHONE,
+    address: env.POUCH_ADDRESS,
+    dob: env.POUCH_DOB,
+    nin: env.POUCH_NIN,
+    bvn: env.POUCH_BVN,
+    email: env.POUCH_TEST_EMAIL,
+  }).filter(([, value]) => typeof value === "string" && value.trim().length > 0);
+
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
 async function bootstrap(): Promise<void> {
   loadWorkspaceEnv();
 
@@ -173,6 +199,7 @@ async function bootstrap(): Promise<void> {
   await registry.start();
 
   const allowedOrigins = parseAllowedOrigins(gatewayEnv.CORS_ORIGINS);
+  const pouchUserKycDefaults = buildPouchUserKycDefaults(gatewayEnv);
 
   const scheduledRideDeps = {
     privyAppId: gatewayEnv.PRIVY_APP_ID,
@@ -363,6 +390,9 @@ async function bootstrap(): Promise<void> {
           cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
           chain: gatewayEnv.POUCH_CHAIN,
           masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
+          walletTag: gatewayEnv.POUCH_WALLET_TAG,
+          testEmail: gatewayEnv.POUCH_TEST_EMAIL,
+          userKycDefaults: pouchUserKycDefaults,
         },
       });
 
@@ -388,6 +418,9 @@ async function bootstrap(): Promise<void> {
           cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
           chain: gatewayEnv.POUCH_CHAIN,
           masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
+          walletTag: gatewayEnv.POUCH_WALLET_TAG,
+          testEmail: gatewayEnv.POUCH_TEST_EMAIL,
+          userKycDefaults: pouchUserKycDefaults,
         },
       });
 
@@ -429,6 +462,9 @@ async function bootstrap(): Promise<void> {
             cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
             chain: gatewayEnv.POUCH_CHAIN,
             masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
+            walletTag: gatewayEnv.POUCH_WALLET_TAG,
+            testEmail: gatewayEnv.POUCH_TEST_EMAIL,
+            userKycDefaults: pouchUserKycDefaults,
           },
         },
         decodeURIComponent(statusMatch[1]),

@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { paymentClient, userClient } from '@wheleers/db';
 import type { PaymentSessionType } from '@prisma/client';
@@ -31,6 +32,9 @@ interface PouchRouteDeps {
     cryptoNetwork: string;
     chain?: string;
     masterWalletAddress: string;
+    walletTag?: string;
+    testEmail?: string;
+    userKycDefaults?: Record<string, string>;
   };
 }
 
@@ -44,6 +48,7 @@ export async function handlePouchHealthRoute(
   deps: PouchHealthRouteDeps,
 ): Promise<void> {
   try {
+    console.log('[api-gateway][pouch] health check requested');
     const health = await deps.pouchClient.health();
     sendJson(res, 200, { provider: 'pouch', health });
   } catch (error) {
@@ -71,9 +76,17 @@ export async function handlePouchOnrampRoute(
       return;
     }
 
-    const customerEmail = resolveCustomerEmail(rawBody, auth.verifiedToken);
-    const walletTag = pickString(rawBody, ['walletTag']);
     const payload = buildOnrampPayload(rawBody, deps.defaults);
+    const customerEmail = resolveCustomerEmail(rawBody, auth.verifiedToken, deps.defaults.testEmail);
+    const walletTag = payload.walletTag;
+
+    console.log('[api-gateway][pouch] creating onramp', {
+      userId: auth.user.id,
+      userWallet: paymentWallet,
+      email: customerEmail,
+      summary: summarizeOnrampPayload(payload),
+    });
+
     const response = await deps.pouchClient.createSharedKycOnramp(payload);
     const createdEvent = normalizePouchTransactionCreated({
       type: 'ONRAMP',
@@ -88,6 +101,10 @@ export async function handlePouchOnrampRoute(
     });
 
     if (!createdEvent) {
+      console.error('[api-gateway][pouch] onramp response normalization failed', {
+        userId: auth.user.id,
+        response: summarizeCreateResponse(response),
+      });
       throw new Error('Pouch onramp response could not be normalized');
     }
 
@@ -95,6 +112,16 @@ export async function handlePouchOnrampRoute(
       buildPaymentIntentUpsertFromEvent(createdEvent, response),
     );
     await deps.publisher.publishPaymentEvent(createdEvent);
+
+    console.log('[api-gateway][pouch] onramp created', {
+      userId: auth.user.id,
+      providerRef: createdEvent.providerReference,
+      paymentId: createdEvent.paymentId,
+      amountLocal: createdEvent.amountLocal,
+      amountUsd: createdEvent.amountUsd,
+      cryptoCurrency: createdEvent.cryptoCurrency,
+      cryptoNetwork: createdEvent.cryptoNetwork,
+    });
 
     sendJson(res, 200, {
       provider: 'pouch',
@@ -130,8 +157,16 @@ export async function handlePouchOfframpRoute(
       return;
     }
 
-    const customerEmail = resolveCustomerEmail(rawBody, auth.verifiedToken);
     const payload = buildOfframpPayload(rawBody, deps.defaults);
+    const customerEmail = resolveCustomerEmail(rawBody, auth.verifiedToken, deps.defaults.testEmail);
+
+    console.log('[api-gateway][pouch] creating offramp', {
+      userId: auth.user.id,
+      userWallet: paymentWallet,
+      email: customerEmail,
+      summary: summarizeOfframpPayload(payload),
+    });
+
     const response = await deps.pouchClient.createSharedKycOfframp(payload);
     const createdEvent = normalizePouchTransactionCreated({
       type: 'OFFRAMP',
@@ -145,6 +180,10 @@ export async function handlePouchOfframpRoute(
     });
 
     if (!createdEvent) {
+      console.error('[api-gateway][pouch] offramp response normalization failed', {
+        userId: auth.user.id,
+        response: summarizeCreateResponse(response),
+      });
       throw new Error('Pouch offramp response could not be normalized');
     }
 
@@ -152,6 +191,16 @@ export async function handlePouchOfframpRoute(
       buildPaymentIntentUpsertFromEvent(createdEvent, response),
     );
     await deps.publisher.publishPaymentEvent(createdEvent);
+
+    console.log('[api-gateway][pouch] offramp created', {
+      userId: auth.user.id,
+      providerRef: createdEvent.providerReference,
+      paymentId: createdEvent.paymentId,
+      amountLocal: createdEvent.amountLocal,
+      amountUsd: createdEvent.amountUsd,
+      cryptoCurrency: createdEvent.cryptoCurrency,
+      cryptoNetwork: createdEvent.cryptoNetwork,
+    });
 
     sendJson(res, 200, {
       provider: 'pouch',
@@ -173,9 +222,21 @@ export async function handlePouchStatusRoute(
 ): Promise<void> {
   try {
     const auth = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
+    console.log('[api-gateway][pouch] status requested', {
+      userId: auth.user.id,
+      providerRef,
+      requestedType: requestedType ?? null,
+    });
+
     const intent = await paymentClient.findPaymentIntentByProviderReference(providerRef);
 
     if (!intent || intent.userId !== auth.user.id) {
+      console.warn('[api-gateway][pouch] status lookup miss', {
+        providerRef,
+        requestedByUserId: auth.user.id,
+        intentFound: Boolean(intent),
+        ownerUserId: intent?.userId ?? null,
+      });
       sendJson(res, 404, { error: 'Pouch transaction not found' });
       return;
     }
@@ -189,11 +250,27 @@ export async function handlePouchStatusRoute(
       intent,
     });
 
+    console.log('[api-gateway][pouch] status received', {
+      userId: auth.user.id,
+      providerRef,
+      sessionType: intent.sessionType,
+      providerStatus: summarizeStatusResponse(statusResponse),
+      normalized: Boolean(syncedEvent),
+    });
+
     if (syncedEvent) {
       await paymentClient.upsertPaymentIntent(
         buildPaymentIntentUpsertFromEvent(syncedEvent, statusResponse),
       );
       await deps.publisher.publishPaymentEvent(syncedEvent);
+
+      console.log('[api-gateway][pouch] status synced', {
+        userId: auth.user.id,
+        providerRef: syncedEvent.providerReference,
+        paymentId: syncedEvent.paymentId,
+        status: syncedEvent.status,
+        settlementReference: syncedEvent.settlementReference ?? null,
+      });
     }
 
     sendJson(res, 200, {
@@ -219,6 +296,7 @@ async function authenticateHttpUser(
   const token = extractBearerToken(authorization);
 
   if (!token) {
+    console.warn('[api-gateway][pouch] missing bearer token');
     throw new Error('Authorization bearer token is required');
   }
 
@@ -230,6 +308,9 @@ async function authenticateHttpUser(
 
   const user = await userClient.findByPrivyDid(verifiedToken.privyDid);
   if (!user) {
+    console.warn('[api-gateway][pouch] privy user not registered', {
+      privyDid: verifiedToken.privyDid,
+    });
     throw new Error('User not registered. Call POST /auth/privy first.');
   }
 
@@ -245,7 +326,7 @@ function buildOnrampPayload(
     throw new Error('amount must be a positive number');
   }
 
-  const userKyc = readUserKyc(body['userKyc']);
+  const userKyc = readUserKyc(body['userKyc'], defaults.userKycDefaults);
 
   return {
     amount: roundAmount(amount),
@@ -254,7 +335,7 @@ function buildOnrampPayload(
     cryptoNetwork:
       pickString(body, ['cryptoNetwork'])?.toUpperCase() ?? defaults.cryptoNetwork,
     walletAddress: defaults.masterWalletAddress,
-    walletTag: pickString(body, ['walletTag']) ?? undefined,
+    walletTag: pickString(body, ['walletTag']) ?? buildPouchWalletTag(),
     countryCode: pickString(body, ['countryCode'])?.toUpperCase() ?? defaults.countryCode,
     currency: pickString(body, ['currency'])?.toUpperCase() ?? defaults.currency,
     providerId: pickString(body, ['providerId']) ?? defaults.providerId,
@@ -284,7 +365,7 @@ function buildOfframpPayload(
     throw new Error('bankAccount.accountNumber, accountName, and networkId are required');
   }
 
-  const userKyc = readUserKyc(body['userKyc']);
+  const userKyc = readUserKyc(body['userKyc'], defaults.userKycDefaults);
 
   return {
     cryptoAmount: roundAmount(cryptoAmount),
@@ -304,19 +385,35 @@ function buildOfframpPayload(
   };
 }
 
-function readUserKyc(value: unknown): Record<string, unknown> | null {
-  return isRecord(value) ? value : null;
+function readUserKyc(
+  value: unknown,
+  defaults?: Record<string, string>,
+): Record<string, unknown> | null {
+  const mergedDefaults = defaults && Object.keys(defaults).length > 0 ? defaults : undefined;
+
+  if (isRecord(value)) {
+    return mergedDefaults
+      ? {
+          ...mergedDefaults,
+          ...value,
+        }
+      : value;
+  }
+
+  return mergedDefaults ?? null;
 }
 
 function resolveCustomerEmail(
   body: Record<string, unknown>,
   verifiedToken: ReturnType<typeof verifyPrivyAccessToken>,
+  fallbackEmail?: string,
 ): string | undefined {
   return (
     pickString(body, ['email']) ??
     (typeof verifiedToken.claims['email'] === 'string'
       ? verifiedToken.claims['email']
-      : undefined)
+      : undefined) ??
+    fallbackEmail
   );
 }
 
@@ -341,6 +438,11 @@ function sendPouchError(
   fallbackMessage: string,
 ): void {
   if (error instanceof PouchApiError) {
+    console.error('[api-gateway][pouch] provider api error', {
+      fallbackMessage,
+      statusCode: error.statusCode,
+      responseBody: error.responseBody,
+    });
     sendJson(res, error.statusCode, {
       error: fallbackMessage,
       details: error.responseBody,
@@ -348,7 +450,98 @@ function sendPouchError(
     return;
   }
 
+  console.error('[api-gateway][pouch] route error', {
+    fallbackMessage,
+    error: error instanceof Error ? error.message : String(error),
+  });
+
   sendJson(res, 400, {
     error: error instanceof Error ? error.message : fallbackMessage,
   });
+}
+
+function summarizeOnrampPayload(payload: PouchOnrampPayload) {
+  return {
+    amount: payload.amount,
+    countryCode: payload.countryCode,
+    currency: payload.currency,
+    cryptoCurrency: payload.cryptoCurrency,
+    cryptoNetwork: payload.cryptoNetwork,
+    providerId: payload.providerId,
+    walletAddress: maskIdentifier(payload.walletAddress),
+    walletTag: payload.walletTag ?? null,
+    userKycFields: payload.userKyc ? Object.keys(payload.userKyc) : [],
+  };
+}
+
+function summarizeOfframpPayload(payload: PouchOfframpPayload) {
+  return {
+    cryptoAmount: payload.cryptoAmount,
+    countryCode: payload.countryCode,
+    currency: payload.currency,
+    cryptoCurrency: payload.cryptoCurrency,
+    cryptoNetwork: payload.cryptoNetwork,
+    providerId: payload.providerId,
+    bankAccount: {
+      accountNumber: maskIdentifier(payload.bankAccount.accountNumber),
+      accountName: payload.bankAccount.accountName,
+      networkId: payload.bankAccount.networkId,
+    },
+    userKycFields: payload.userKyc ? Object.keys(payload.userKyc) : [],
+  };
+}
+
+function summarizeCreateResponse(response: Record<string, unknown>) {
+  return {
+    providerRef: pickString(response, ['providerRef']) ?? null,
+    reference:
+      pickString(response, ['paymentInstruction.reference', 'cryptoInstruction.reference']) ??
+      null,
+    amountLocal:
+      pickNumber(response, ['paymentInstruction.amountLocal', 'cryptoInstruction.amountLocal']) ??
+      null,
+    amountUsd:
+      pickNumber(response, ['paymentInstruction.amountUsd', 'cryptoInstruction.amountUsd']) ??
+      null,
+    accountNumber: maskIdentifier(
+      pickString(response, ['paymentInstruction.accountNumber']) ?? undefined,
+    ),
+    walletAddress: maskIdentifier(
+      pickString(response, ['cryptoInstruction.walletAddress']) ?? undefined,
+    ),
+  };
+}
+
+function summarizeStatusResponse(response: Record<string, unknown>) {
+  return {
+    providerRef: pickString(response, ['providerRef']) ?? null,
+    status: pickString(response, ['status']) ?? null,
+    type: pickString(response, ['type']) ?? null,
+    transactionHash: maskIdentifier(pickString(response, ['transactionHash']) ?? undefined),
+    settlementTransactionHash: maskIdentifier(
+      pickString(response, ['settlementInfo.transactionHash']) ?? undefined,
+    ),
+    cryptoAmount: pickNumber(response, ['settlementInfo.cryptoAmount']) ?? null,
+    cryptoCurrency: pickString(response, ['settlementInfo.cryptoCurrency']) ?? null,
+    cryptoNetwork: pickString(response, ['settlementInfo.cryptoNetwork']) ?? null,
+    failureReason: pickString(response, ['failureReason']) ?? null,
+  };
+}
+
+function maskIdentifier(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  if (value.length <= 10) {
+    return value;
+  }
+
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function buildPouchWalletTag(): string {
+  const timestamp = Date.now().toString();
+  const suffix = randomInt(100_000, 1_000_000).toString();
+  return `${timestamp}${suffix}`;
 }
