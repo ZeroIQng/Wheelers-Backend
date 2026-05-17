@@ -27,15 +27,10 @@ import {
   handleRiderRideHistoryRoute,
 } from "./http/ride.route";
 import {
-  handlePouchChannelsRoute,
-  handlePouchCreateSessionRoute,
-  handlePouchGetSessionRoute,
   handlePouchHealthRoute,
-  handlePouchIdentifyRoute,
-  handlePouchKycRequirementsRoute,
-  handlePouchQuoteRoute,
-  handlePouchSubmitKycRoute,
-  handlePouchVerifyOtpRoute,
+  handlePouchOfframpRoute,
+  handlePouchOnrampRoute,
+  handlePouchStatusRoute,
 } from "./http/pouch.route";
 import {
   handleSendPhoneOtpRoute,
@@ -349,174 +344,98 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname === "/payments/pouch/channels") {
-      if (req.method !== "GET") {
-        sendMethodNotAllowed(res);
-        return;
-      }
-
-      await handlePouchChannelsRoute(req, res, {
-        pouchClient,
-      });
-
-      return;
-    }
-
-    if (url.pathname === "/payments/pouch/sessions") {
+    if (url.pathname === "/payments/pouch/onramp") {
       if (req.method !== "POST") {
         sendMethodNotAllowed(res);
         return;
       }
 
-      await handlePouchCreateSessionRoute(req, res, {
+      await handlePouchOnrampRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         pouchClient,
         publisher,
-        ridePricingDisplayProvider,
+        defaults: {
+          providerId: gatewayEnv.POUCH_PROVIDER_ID,
+          countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
+          currency: gatewayEnv.POUCH_FIAT_CURRENCY,
+          cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
+          cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
+          chain: gatewayEnv.POUCH_CHAIN,
+          masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
+        },
       });
 
       return;
     }
 
-    if (url.pathname.startsWith("/payments/pouch/sessions/")) {
-      const sessionMatch = url.pathname.match(
-        /^\/payments\/pouch\/sessions\/([^/]+)(?:\/(quote|identify|verify-otp|kyc-requirements|kyc))?$/,
-      );
+    if (url.pathname === "/payments/pouch/offramp") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
 
-      if (!sessionMatch) {
+      await handlePouchOfframpRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        pouchClient,
+        publisher,
+        defaults: {
+          providerId: gatewayEnv.POUCH_PROVIDER_ID,
+          countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
+          currency: gatewayEnv.POUCH_FIAT_CURRENCY,
+          cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
+          cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
+          chain: gatewayEnv.POUCH_CHAIN,
+          masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
+        },
+      });
+
+      return;
+    }
+
+    if (url.pathname.startsWith("/payments/pouch/status/")) {
+      const statusMatch = url.pathname.match(/^\/payments\/pouch\/status\/([^/]+)$/);
+
+      if (!statusMatch) {
         sendJson(res, 404, { error: "Not found" });
         return;
       }
 
-      const sessionId = decodeURIComponent(sessionMatch[1]);
-      const action = sessionMatch[2];
-
-      if (!action) {
-        if (req.method !== "GET") {
-          sendMethodNotAllowed(res);
-          return;
-        }
-
-        await handlePouchGetSessionRoute(
-          req,
-          res,
-          {
-            privyAppId: gatewayEnv.PRIVY_APP_ID,
-            privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-            pouchClient,
-            publisher,
-          },
-          sessionId,
-        );
-
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
         return;
       }
 
-      if (action === "quote") {
-        if (req.method !== "GET") {
-          sendMethodNotAllowed(res);
-          return;
-        }
+      const requestedType =
+        url.searchParams.get("type")?.toUpperCase() === "ONRAMP" ||
+        url.searchParams.get("type")?.toUpperCase() === "OFFRAMP"
+          ? (url.searchParams.get("type")?.toUpperCase() as "ONRAMP" | "OFFRAMP")
+          : undefined;
 
-        await handlePouchQuoteRoute(
-          req,
-          res,
-          {
-            privyAppId: gatewayEnv.PRIVY_APP_ID,
-            privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-            pouchClient,
-            publisher,
+      await handlePouchStatusRoute(
+        req,
+        res,
+        {
+          privyAppId: gatewayEnv.PRIVY_APP_ID,
+          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+          pouchClient,
+          publisher,
+          defaults: {
+            providerId: gatewayEnv.POUCH_PROVIDER_ID,
+            countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
+            currency: gatewayEnv.POUCH_FIAT_CURRENCY,
+            cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
+            cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
+            chain: gatewayEnv.POUCH_CHAIN,
+            masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
           },
-          sessionId,
-        );
+        },
+        decodeURIComponent(statusMatch[1]),
+        requestedType,
+      );
 
-        return;
-      }
-
-      if (action === "identify") {
-        if (req.method !== "POST") {
-          sendMethodNotAllowed(res);
-          return;
-        }
-
-        await handlePouchIdentifyRoute(
-          req,
-          res,
-          {
-            privyAppId: gatewayEnv.PRIVY_APP_ID,
-            privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-            pouchClient,
-            publisher,
-          },
-          sessionId,
-        );
-
-        return;
-      }
-
-      if (action === "verify-otp") {
-        if (req.method !== "POST") {
-          sendMethodNotAllowed(res);
-          return;
-        }
-
-        await handlePouchVerifyOtpRoute(
-          req,
-          res,
-          {
-            privyAppId: gatewayEnv.PRIVY_APP_ID,
-            privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-            pouchClient,
-            publisher,
-          },
-          sessionId,
-        );
-
-        return;
-      }
-
-      if (action === "kyc-requirements") {
-        if (req.method !== "GET") {
-          sendMethodNotAllowed(res);
-          return;
-        }
-
-        await handlePouchKycRequirementsRoute(
-          req,
-          res,
-          {
-            privyAppId: gatewayEnv.PRIVY_APP_ID,
-            privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-            pouchClient,
-            publisher,
-          },
-          sessionId,
-        );
-
-        return;
-      }
-
-      if (action === "kyc") {
-        if (req.method !== "POST") {
-          sendMethodNotAllowed(res);
-          return;
-        }
-
-        await handlePouchSubmitKycRoute(
-          req,
-          res,
-          {
-            privyAppId: gatewayEnv.PRIVY_APP_ID,
-            privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-            pouchClient,
-            publisher,
-          },
-          sessionId,
-        );
-
-        return;
-      }
+      return;
     }
 
     sendJson(res, 404, {

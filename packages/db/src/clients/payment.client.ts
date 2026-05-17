@@ -2,6 +2,11 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 
 export const paymentClient = {
+  findPaymentIntentByProviderReference: (providerReference: string) =>
+    prisma.paymentIntent.findUnique({
+      where: { providerReference },
+    }),
+
   upsertPaymentIntent: (data: {
     paymentId: string;
     userId: string;

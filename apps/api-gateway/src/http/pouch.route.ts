@@ -1,19 +1,20 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { userClient } from '@wheleers/db';
-import type { RidePricingDisplayProvider } from '../pricing/display';
+import { paymentClient, userClient } from '@wheleers/db';
+import type { PaymentSessionType } from '@prisma/client';
 import { verifyPrivyAccessToken } from '../auth/privy';
-import { getString, isRecord, pickNumber, pickString } from '../utils/object';
+import { isRecord, pickNumber, pickString } from '../utils/object';
 import type { GatewayPublisher } from '../websocket/publisher';
 import {
+  buildPaymentIntentUpsertFromEvent,
   buildPouchMetadata,
-  normalizePouchSessionCreated,
-  normalizePouchSessionSynced,
-  pouchSessionBelongsToUser,
+  normalizePouchTransactionCreated,
+  normalizePouchTransactionStatus,
 } from './pouch.helpers';
 import {
   PouchApiError,
   PouchClient,
-  type PouchSessionPayload,
+  type PouchOfframpPayload,
+  type PouchOnrampPayload,
 } from './pouch.client';
 import { readJsonBody, sendJson } from './utils';
 
@@ -22,10 +23,15 @@ interface PouchRouteDeps {
   privyVerificationKey: string;
   pouchClient: PouchClient;
   publisher: GatewayPublisher;
-}
-
-interface PouchCreateSessionRouteDeps extends PouchRouteDeps {
-  ridePricingDisplayProvider: RidePricingDisplayProvider;
+  defaults: {
+    providerId: string;
+    countryCode: string;
+    currency: string;
+    cryptoCurrency: string;
+    cryptoNetwork: string;
+    chain?: string;
+    masterWalletAddress: string;
+  };
 }
 
 interface PouchHealthRouteDeps {
@@ -45,23 +51,10 @@ export async function handlePouchHealthRoute(
   }
 }
 
-export async function handlePouchChannelsRoute(
-  _req: IncomingMessage,
-  res: ServerResponse,
-  deps: PouchHealthRouteDeps,
-): Promise<void> {
-  try {
-    const channels = await deps.pouchClient.getCryptoChannels();
-    sendJson(res, 200, channels);
-  } catch (error) {
-    sendPouchError(res, error, 'Failed to load Pouch channels');
-  }
-}
-
-export async function handlePouchCreateSessionRoute(
+export async function handlePouchOnrampRoute(
   req: IncomingMessage,
   res: ServerResponse,
-  deps: PouchCreateSessionRouteDeps,
+  deps: PouchRouteDeps,
 ): Promise<void> {
   try {
     const rawBody = await readJsonBody(req);
@@ -71,192 +64,145 @@ export async function handlePouchCreateSessionRoute(
     }
 
     const auth = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
-    const payload = await buildCreateSessionPayload(
-      rawBody,
-      auth,
-      deps.ridePricingDisplayProvider,
-    );
-    const session = await deps.pouchClient.createSession(payload);
-    const createdEvent = normalizePouchSessionCreated(session);
+    const paymentWallet = auth.user.walletAddress?.toLowerCase();
 
-    if (createdEvent) {
-      await deps.publisher.publishPaymentEvent(createdEvent);
-    }
-
-    sendJson(res, 200, {
-      provider: 'pouch',
-      session,
-      walletCreditable:
-        payload.type === 'ONRAMP' &&
-        ['USDT', 'USDC'].includes(payload.cryptoCurrency.toUpperCase()),
-    });
-  } catch (error) {
-    sendPouchError(res, error, 'Failed to create Pouch session');
-  }
-}
-
-export async function handlePouchGetSessionRoute(
-  req: IncomingMessage,
-  res: ServerResponse,
-  deps: PouchRouteDeps,
-  sessionId: string,
-): Promise<void> {
-  try {
-    const auth = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
-    const session = await deps.pouchClient.getSession(sessionId);
-
-    if (!pouchSessionBelongsToUser(session, auth.user.id)) {
-      sendJson(res, 403, { error: 'This session does not belong to the authenticated user' });
+    if (!paymentWallet) {
+      sendJson(res, 400, { error: 'Authenticated user does not have a wallet address' });
       return;
     }
 
-    const syncedEvent = normalizePouchSessionSynced(session);
+    const customerEmail = resolveCustomerEmail(rawBody, auth.verifiedToken);
+    const walletTag = pickString(rawBody, ['walletTag']);
+    const payload = buildOnrampPayload(rawBody, deps.defaults);
+    const response = await deps.pouchClient.createSharedKycOnramp(payload);
+    const createdEvent = normalizePouchTransactionCreated({
+      type: 'ONRAMP',
+      payload: response,
+      metadata: buildPouchMetadata({
+        userId: auth.user.id,
+        walletAddress: paymentWallet,
+      }),
+      customerEmail,
+      chain: deps.defaults.chain,
+      walletTag,
+    });
+
+    if (!createdEvent) {
+      throw new Error('Pouch onramp response could not be normalized');
+    }
+
+    await paymentClient.upsertPaymentIntent(
+      buildPaymentIntentUpsertFromEvent(createdEvent, response),
+    );
+    await deps.publisher.publishPaymentEvent(createdEvent);
+
+    sendJson(res, 200, {
+      provider: 'pouch',
+      type: 'ONRAMP',
+      providerRef: response.providerRef,
+      destinationWalletAddress: payload.walletAddress,
+      paymentInstruction: response.paymentInstruction,
+      walletCreditable:
+        createdEvent.cryptoCurrency === 'USDT' || createdEvent.cryptoCurrency === 'USDC',
+    });
+  } catch (error) {
+    sendPouchError(res, error, 'Failed to create Pouch onramp transaction');
+  }
+}
+
+export async function handlePouchOfframpRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: PouchRouteDeps,
+): Promise<void> {
+  try {
+    const rawBody = await readJsonBody(req);
+    if (!isRecord(rawBody)) {
+      sendJson(res, 400, { error: 'Body must be a JSON object' });
+      return;
+    }
+
+    const auth = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
+    const paymentWallet = auth.user.walletAddress?.toLowerCase();
+
+    if (!paymentWallet) {
+      sendJson(res, 400, { error: 'Authenticated user does not have a wallet address' });
+      return;
+    }
+
+    const customerEmail = resolveCustomerEmail(rawBody, auth.verifiedToken);
+    const payload = buildOfframpPayload(rawBody, deps.defaults);
+    const response = await deps.pouchClient.createSharedKycOfframp(payload);
+    const createdEvent = normalizePouchTransactionCreated({
+      type: 'OFFRAMP',
+      payload: response,
+      metadata: buildPouchMetadata({
+        userId: auth.user.id,
+        walletAddress: paymentWallet,
+      }),
+      customerEmail,
+      chain: deps.defaults.chain,
+    });
+
+    if (!createdEvent) {
+      throw new Error('Pouch offramp response could not be normalized');
+    }
+
+    await paymentClient.upsertPaymentIntent(
+      buildPaymentIntentUpsertFromEvent(createdEvent, response),
+    );
+    await deps.publisher.publishPaymentEvent(createdEvent);
+
+    sendJson(res, 200, {
+      provider: 'pouch',
+      type: 'OFFRAMP',
+      providerRef: response.providerRef,
+      cryptoInstruction: response.cryptoInstruction,
+    });
+  } catch (error) {
+    sendPouchError(res, error, 'Failed to create Pouch offramp transaction');
+  }
+}
+
+export async function handlePouchStatusRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: PouchRouteDeps,
+  providerRef: string,
+  requestedType?: PaymentSessionType,
+): Promise<void> {
+  try {
+    const auth = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
+    const intent = await paymentClient.findPaymentIntentByProviderReference(providerRef);
+
+    if (!intent || intent.userId !== auth.user.id) {
+      sendJson(res, 404, { error: 'Pouch transaction not found' });
+      return;
+    }
+
+    const statusResponse = await deps.pouchClient.getRampStatus(
+      providerRef,
+      requestedType ?? intent.sessionType,
+    );
+    const syncedEvent = normalizePouchTransactionStatus({
+      payload: statusResponse,
+      intent,
+    });
+
     if (syncedEvent) {
+      await paymentClient.upsertPaymentIntent(
+        buildPaymentIntentUpsertFromEvent(syncedEvent, statusResponse),
+      );
       await deps.publisher.publishPaymentEvent(syncedEvent);
     }
 
     sendJson(res, 200, {
       provider: 'pouch',
-      session,
+      status: statusResponse,
       sessionSynced: Boolean(syncedEvent),
     });
   } catch (error) {
-    sendPouchError(res, error, 'Failed to load Pouch session');
-  }
-}
-
-export async function handlePouchQuoteRoute(
-  req: IncomingMessage,
-  res: ServerResponse,
-  deps: PouchRouteDeps,
-  sessionId: string,
-): Promise<void> {
-  try {
-    const auth = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
-    await assertSessionOwnership(auth.user.id, sessionId, deps.pouchClient);
-    const quote = await deps.pouchClient.getSessionQuote(sessionId);
-    sendJson(res, 200, { provider: 'pouch', sessionId, quote });
-  } catch (error) {
-    sendPouchError(res, error, 'Failed to load Pouch quote');
-  }
-}
-
-export async function handlePouchIdentifyRoute(
-  req: IncomingMessage,
-  res: ServerResponse,
-  deps: PouchRouteDeps,
-  sessionId: string,
-): Promise<void> {
-  try {
-    const rawBody = await readJsonBody(req);
-    if (!isRecord(rawBody)) {
-      sendJson(res, 400, { error: 'Body must be a JSON object' });
-      return;
-    }
-
-    const auth = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
-    await assertSessionOwnership(auth.user.id, sessionId, deps.pouchClient);
-
-    const email =
-      pickString(rawBody, ['email']) ??
-      (typeof auth.verifiedToken.claims['email'] === 'string'
-        ? auth.verifiedToken.claims['email']
-        : undefined);
-
-    if (!email) {
-      sendJson(res, 400, { error: 'email is required to identify a Pouch session' });
-      return;
-    }
-
-    const response = await deps.pouchClient.identifySession(sessionId, email);
-    sendJson(res, 200, { provider: 'pouch', sessionId, response });
-  } catch (error) {
-    sendPouchError(res, error, 'Failed to identify Pouch session');
-  }
-}
-
-export async function handlePouchVerifyOtpRoute(
-  req: IncomingMessage,
-  res: ServerResponse,
-  deps: PouchRouteDeps,
-  sessionId: string,
-): Promise<void> {
-  try {
-    const rawBody = await readJsonBody(req);
-    if (!isRecord(rawBody)) {
-      sendJson(res, 400, { error: 'Body must be a JSON object' });
-      return;
-    }
-
-    const auth = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
-    await assertSessionOwnership(auth.user.id, sessionId, deps.pouchClient);
-
-    const code = pickString(rawBody, ['code', 'otp']);
-    if (!code) {
-      sendJson(res, 400, { error: 'code is required to verify OTP' });
-      return;
-    }
-
-    const response = await deps.pouchClient.verifyOtp(sessionId, code);
-    sendJson(res, 200, { provider: 'pouch', sessionId, response });
-  } catch (error) {
-    sendPouchError(res, error, 'Failed to verify Pouch OTP');
-  }
-}
-
-export async function handlePouchKycRequirementsRoute(
-  req: IncomingMessage,
-  res: ServerResponse,
-  deps: PouchRouteDeps,
-  sessionId: string,
-): Promise<void> {
-  try {
-    const auth = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
-    await assertSessionOwnership(auth.user.id, sessionId, deps.pouchClient);
-    const requirements = await deps.pouchClient.getKycRequirements(sessionId);
-    sendJson(res, 200, { provider: 'pouch', sessionId, requirements });
-  } catch (error) {
-    sendPouchError(res, error, 'Failed to load Pouch KYC requirements');
-  }
-}
-
-export async function handlePouchSubmitKycRoute(
-  req: IncomingMessage,
-  res: ServerResponse,
-  deps: PouchRouteDeps,
-  sessionId: string,
-): Promise<void> {
-  try {
-    const rawBody = await readJsonBody(req);
-    if (!isRecord(rawBody)) {
-      sendJson(res, 400, { error: 'Body must be a JSON object' });
-      return;
-    }
-
-    const auth = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
-    await assertSessionOwnership(auth.user.id, sessionId, deps.pouchClient);
-
-    const documents = rawBody['documents'];
-    if (!isRecord(documents)) {
-      sendJson(res, 400, { error: 'documents must be a JSON object' });
-      return;
-    }
-
-    const response = await deps.pouchClient.submitKyc(sessionId, documents);
-    sendJson(res, 200, { provider: 'pouch', sessionId, response });
-  } catch (error) {
-    sendPouchError(res, error, 'Failed to submit Pouch KYC');
-  }
-}
-
-async function assertSessionOwnership(
-  userId: string,
-  sessionId: string,
-  pouchClient: PouchClient,
-): Promise<void> {
-  const session = await pouchClient.getSession(sessionId);
-  if (!pouchSessionBelongsToUser(session, userId)) {
-    throw new Error('This session does not belong to the authenticated user');
+    sendPouchError(res, error, 'Failed to load Pouch transaction status');
   }
 }
 
@@ -290,121 +236,92 @@ async function authenticateHttpUser(
   return { user, verifiedToken };
 }
 
-async function buildCreateSessionPayload(
+function buildOnrampPayload(
   body: Record<string, unknown>,
-  auth: {
-    user: NonNullable<Awaited<ReturnType<typeof userClient.findByPrivyDid>>>;
-    verifiedToken: ReturnType<typeof verifyPrivyAccessToken>;
-  },
-  ridePricingDisplayProvider: RidePricingDisplayProvider,
-): Promise<PouchSessionPayload> {
-  const type = pickString(body, ['type'])?.toUpperCase();
-  const amountUsd = pickNumber(body, ['amount', 'amountUsd', 'amountUSD']);
-  const amountLocal = pickNumber(body, ['amountLocal', 'localAmount', 'ngnAmount']);
-  const countryCode = pickString(body, ['countryCode'])?.toUpperCase();
-  const currency = pickString(body, ['currency', 'localCurrency'])?.toUpperCase();
-  const cryptoCurrency = pickString(body, ['cryptoCurrency'])?.toUpperCase();
-  const cryptoNetwork = pickString(body, ['cryptoNetwork'])?.toUpperCase();
-  const walletAddress =
-    pickString(body, ['walletAddress'])?.toLowerCase() ?? auth.user.walletAddress?.toLowerCase();
-
-  if (type !== 'ONRAMP' && type !== 'OFFRAMP') {
-    throw new Error('type must be ONRAMP or OFFRAMP');
+  defaults: PouchRouteDeps['defaults'],
+): PouchOnrampPayload {
+  const amount = pickNumber(body, ['amount', 'amountLocal', 'localAmount', 'ngnAmount']);
+  if (!amount || amount <= 0) {
+    throw new Error('amount must be a positive number');
   }
 
-  if (!countryCode || !currency || !cryptoCurrency || !cryptoNetwork) {
-    throw new Error(
-      'countryCode, currency, cryptoCurrency, and cryptoNetwork are required for a Pouch session',
-    );
-  }
+  const userKyc = readUserKyc(body['userKyc']);
 
-  if (!walletAddress) {
-    throw new Error('walletAddress is required to create a Pouch session');
-  }
-
-  const metadata = isRecord(body['metadata']) ? body['metadata'] : {};
-  const email =
-    pickString(body, ['email']) ??
-    (typeof auth.verifiedToken.claims['email'] === 'string'
-      ? auth.verifiedToken.claims['email']
-      : undefined);
-  const amount = await resolveSessionAmountUsd({
-    amountUsd,
-    amountLocal,
-    currency,
-    ridePricingDisplayProvider,
-  });
-
-  const payload: PouchSessionPayload = {
-    ...(body as PouchSessionPayload),
-    type,
-    amount,
-    countryCode,
-    currency,
-    cryptoCurrency,
-    cryptoNetwork,
-    walletAddress,
-    metadata: {
-      ...metadata,
-      ...buildPouchMetadata({
-        userId: auth.user.id,
-        walletAddress,
-      }),
-    },
+  return {
+    amount: roundAmount(amount),
+    cryptoCurrency:
+      pickString(body, ['cryptoCurrency'])?.toUpperCase() ?? defaults.cryptoCurrency,
+    cryptoNetwork:
+      pickString(body, ['cryptoNetwork'])?.toUpperCase() ?? defaults.cryptoNetwork,
+    walletAddress:
+      pickString(body, ['walletAddress'])?.trim() || defaults.masterWalletAddress,
+    walletTag: pickString(body, ['walletTag']) ?? undefined,
+    countryCode: pickString(body, ['countryCode'])?.toUpperCase() ?? defaults.countryCode,
+    currency: pickString(body, ['currency'])?.toUpperCase() ?? defaults.currency,
+    providerId: pickString(body, ['providerId']) ?? defaults.providerId,
+    userKyc: userKyc ?? undefined,
   };
-
-  delete payload['amountLocal'];
-  delete payload['localAmount'];
-  delete payload['ngnAmount'];
-  delete payload['amountUsd'];
-  delete payload['amountUSD'];
-
-  const chain = pickString(body, ['chain'])?.toUpperCase();
-  if (chain) {
-    payload['chain'] = chain;
-  }
-
-  const walletTag = pickString(body, ['walletTag', 'memo', 'tag']);
-  if (walletTag) {
-    payload['walletTag'] = walletTag;
-  }
-
-  if (email) {
-    payload['email'] = email;
-  }
-
-  return payload;
 }
 
-async function resolveSessionAmountUsd(input: {
-  amountUsd: number | undefined;
-  amountLocal: number | undefined;
-  currency: string | undefined;
-  ridePricingDisplayProvider: RidePricingDisplayProvider;
-}): Promise<number> {
-  if (input.amountUsd && input.amountUsd > 0) {
-    return roundPouchAmount(input.amountUsd);
+function buildOfframpPayload(
+  body: Record<string, unknown>,
+  defaults: PouchRouteDeps['defaults'],
+): PouchOfframpPayload {
+  const cryptoAmount = pickNumber(body, ['cryptoAmount', 'amount']);
+  if (!cryptoAmount || cryptoAmount <= 0) {
+    throw new Error('cryptoAmount must be a positive number');
   }
 
-  if (!input.amountLocal || input.amountLocal <= 0) {
-    throw new Error('amount or amountLocal must be a positive number');
+  const bankAccount = isRecord(body['bankAccount']) ? body['bankAccount'] : null;
+  if (!bankAccount) {
+    throw new Error('bankAccount is required');
   }
 
-  if (input.currency !== 'NGN') {
-    throw new Error('amountLocal is currently supported only for NGN Pouch sessions');
+  const accountNumber = pickString(bankAccount, ['accountNumber']);
+  const accountName = pickString(bankAccount, ['accountName']);
+  const networkId = pickString(bankAccount, ['networkId']);
+
+  if (!accountNumber || !accountName || !networkId) {
+    throw new Error('bankAccount.accountNumber, accountName, and networkId are required');
   }
 
-  const pricing = await input.ridePricingDisplayProvider.getPricingDisplay();
-  const amountUsd = input.amountLocal / pricing.displayExchangeRate;
+  const userKyc = readUserKyc(body['userKyc']);
 
-  if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
-    throw new Error('Could not convert amountLocal into a valid Pouch session amount');
-  }
-
-  return roundPouchAmount(amountUsd);
+  return {
+    cryptoAmount: roundAmount(cryptoAmount),
+    cryptoCurrency:
+      pickString(body, ['cryptoCurrency'])?.toUpperCase() ?? defaults.cryptoCurrency,
+    cryptoNetwork:
+      pickString(body, ['cryptoNetwork'])?.toUpperCase() ?? defaults.cryptoNetwork,
+    countryCode: pickString(body, ['countryCode'])?.toUpperCase() ?? defaults.countryCode,
+    currency: pickString(body, ['currency'])?.toUpperCase() ?? defaults.currency,
+    providerId: pickString(body, ['providerId']) ?? defaults.providerId,
+    bankAccount: {
+      accountNumber,
+      accountName,
+      networkId,
+    },
+    userKyc: userKyc ?? undefined,
+  };
 }
 
-function roundPouchAmount(value: number): number {
+function readUserKyc(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
+}
+
+function resolveCustomerEmail(
+  body: Record<string, unknown>,
+  verifiedToken: ReturnType<typeof verifyPrivyAccessToken>,
+): string | undefined {
+  return (
+    pickString(body, ['email']) ??
+    (typeof verifiedToken.claims['email'] === 'string'
+      ? verifiedToken.claims['email']
+      : undefined)
+  );
+}
+
+function roundAmount(value: number): number {
   return Math.round(value * 100) / 100;
 }
 

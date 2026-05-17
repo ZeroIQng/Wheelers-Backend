@@ -93,7 +93,7 @@ Services never call each other's APIs. When a significant domain event happens �
 This is what makes the system scale: when a ride completes, `ride-service` emits one `RIDE_COMPLETED` event. `payment-service`, `wallet-service`, `compliance-worker`, and `notification-worker` all pick it up simultaneously. No service waits on another.
 
 **HTTP control plane**
-The gateway exposes a small authenticated REST surface for auth and Pouch session orchestration:
+The gateway exposes a small authenticated REST surface for auth and direct Pouch ramp orchestration:
 - `POST /auth/privy` — Privy auth callback
 - `POST /rides/estimate` — rider-facing route and fare estimate
 - `GET /rides/history` — completed and cancelled rider ride history
@@ -101,14 +101,9 @@ The gateway exposes a small authenticated REST surface for auth and Pouch sessio
 - `POST /scheduled-rides` — create a scheduled ride and enqueue dispatch
 - `POST /scheduled-rides/:id/cancel` — cancel a scheduled ride before dispatch completes
 - `GET /payments/pouch/health` — provider health proxy
-- `GET /payments/pouch/channels` — supported Pouch chains/networks
-- `POST /payments/pouch/sessions` — authenticated onramp/offramp session creation
-- `GET /payments/pouch/sessions/:id` — authenticated session fetch + settlement detection
-- `GET /payments/pouch/sessions/:id/quote` — quote lookup
-- `POST /payments/pouch/sessions/:id/identify` — OTP email initiation
-- `POST /payments/pouch/sessions/:id/verify-otp` — OTP verification
-- `GET /payments/pouch/sessions/:id/kyc-requirements` — KYC schema fetch
-- `POST /payments/pouch/sessions/:id/kyc` — KYC document submission
+- `POST /payments/pouch/onramp` — authenticated shared-KYC fiat onramp creation
+- `POST /payments/pouch/offramp` — authenticated shared-KYC crypto offramp creation
+- `GET /payments/pouch/status/:providerRef` — authenticated transaction status fetch + settlement detection
 
 Everything else is WebSocket or Kafka.
 
@@ -356,7 +351,7 @@ apps/api-gateway/src/
 │   └── publisher.ts       # Kafka producer — sends events from client actions
 ├── http/
 │   ├── auth.route.ts       # POST /auth/privy
-│   └── pouch.route.ts      # Pouch session + KYC routes
+│   └── pouch.route.ts      # Pouch onramp/offramp/status routes
 └── kafka/
     └── consumer.ts         # Consumes events meant for clients, pushes to socket
 ```
@@ -416,10 +411,10 @@ apps/ride-service/src/
 **Pouch funding flow:**
 
 ```
-Authenticated client → POST /payments/pouch/sessions
-  → Pouch session is created with user-linked metadata
-  → client completes OTP + KYC through gateway-backed Pouch routes
-  → client polls GET /payments/pouch/sessions/:id
+Authenticated client → POST /payments/pouch/onramp
+  → Pouch direct ramp is created with inline shared KYC when required
+  → gateway stores providerRef ownership against the authenticated user
+  → client polls GET /payments/pouch/status/:providerRef
   → api-gateway detects a settled onramp and emits ONRAMP_SETTLED
   → payment-service records the settlement idempotently
   → wallet-service credits the balance
@@ -566,15 +561,14 @@ DRIVER_PAYOUT consumed by:
 ### 6.3 Fiat onramp (Pouch)
 
 ```
-User opens an authenticated Pouch onramp session from the frontend
+User opens an authenticated Pouch onramp from the frontend
 
-api-gateway proxies the Pouch session lifecycle:
-  → session creation
-  → quote lookup
-  → identify / verify-otp
-  → kyc-requirements / kyc submission
+api-gateway proxies the direct shared-KYC lifecycle:
+  → onramp creation
+  → offramp creation
+  → status polling by providerRef
 
-Once Pouch marks the session settled and the client fetches session state:
+Once Pouch marks the onramp settled and the client fetches status:
   → api-gateway produces ONRAMP_SETTLED to payment.events
 
 ONRAMP_SETTLED consumed by:
@@ -768,6 +762,15 @@ Every service validates its own env vars at startup using `@wheleers/config`. Be
 | `PRIVY_VERIFICATION_KEY` | Privy public verification key (PEM) used for access-token signature validation |
 | `JWT_SECRET` | Legacy local JWT secret (optional; no longer used for Privy access tokens) |
 | `PRIVY_APP_ID` | Privy application ID |
+| `POUCH_API_KEY` | Pouch API key used for shared-KYC ramp calls |
+| `POUCH_BASE_URL` | Pouch API base URL |
+| `POUCH_PROVIDER_ID` | Default ramp provider (default: `yellowcard`) |
+| `POUCH_COUNTRY_CODE` | Default country for ramp requests (default: `NG`) |
+| `POUCH_FIAT_CURRENCY` | Default fiat currency for ramp requests (default: `NGN`) |
+| `POUCH_CRYPTO_CURRENCY` | Default crypto asset for ramp requests (default: `USDC`) |
+| `POUCH_CRYPTO_NETWORK` | Default crypto network for ramp requests (default: `XLM`) |
+| `POUCH_CHAIN` | Optional internal chain label stored with payment intents |
+| `POUCH_MASTER_WALLET_ADDRESS` | Master wallet destination for Pouch onramps |
 | `CORS_ORIGINS` | Allowed origins (comma-separated) |
 
 **payment-service**

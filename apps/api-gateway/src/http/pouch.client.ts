@@ -1,25 +1,84 @@
-export interface PouchSessionPayload extends Record<string, unknown> {
-  type: 'ONRAMP' | 'OFFRAMP';
+import type { PaymentSessionType } from '@prisma/client';
+
+export interface PouchOnrampPayload extends Record<string, unknown> {
   amount: number;
-  countryCode: string;
-  currency: string;
   cryptoCurrency: string;
   cryptoNetwork: string;
   walletAddress: string;
+  walletTag?: string;
+  countryCode: string;
+  currency: string;
+  providerId: string;
+  userKyc?: Record<string, unknown>;
 }
 
-export interface PouchSessionResponse extends Record<string, unknown> {
-  id?: string;
-  type?: string;
+export interface PouchOfframpPayload extends Record<string, unknown> {
+  cryptoAmount: number;
+  cryptoCurrency: string;
+  cryptoNetwork: string;
+  countryCode: string;
+  currency: string;
+  providerId: string;
+  bankAccount: {
+    accountNumber: string;
+    accountName: string;
+    networkId: string;
+  };
+  userKyc?: Record<string, unknown>;
+}
+
+export interface PouchOnrampResponse extends Record<string, unknown> {
+  paymentInstruction?: {
+    accountNumber?: string;
+    accountName?: string;
+    bankName?: string;
+    amountUsd?: number;
+    amountLocal?: number;
+    localCurrency?: string;
+    fxRate?: number;
+    cryptoAmount?: number;
+    cryptoCurrency?: string;
+    cryptoNetwork?: string;
+    fees?: {
+      networkFee?: number;
+      serviceFee?: number;
+      totalFees?: number;
+    };
+    reference?: string;
+    expiresAt?: string;
+  };
+  providerRef?: string;
+}
+
+export interface PouchOfframpResponse extends Record<string, unknown> {
+  cryptoInstruction?: {
+    walletAddress?: string;
+    cryptoNetwork?: string;
+    cryptoCurrency?: string;
+    cryptoAmount?: number;
+    amountUsd?: number;
+    amountLocal?: number;
+    localCurrency?: string;
+    fxRate?: number;
+    fees?: {
+      networkFee?: number;
+      serviceFee?: number;
+      totalFees?: number;
+    };
+    reference?: string;
+    expiresAt?: string;
+  };
+  providerRef?: string;
+}
+
+export interface PouchRampStatusResponse extends Record<string, unknown> {
+  providerRef?: string;
   status?: string;
-  amount?: number;
-  currency?: string;
-  cryptoCurrency?: string;
-  cryptoNetwork?: string;
-  chain?: string;
-  walletAddress?: string;
-  walletTag?: string;
-  metadata?: unknown;
+  type?: PaymentSessionType;
+  transactionHash?: string;
+  settlementInfo?: Record<string, unknown>;
+  details?: Record<string, unknown>;
+  failureReason?: string;
 }
 
 export class PouchApiError extends Error {
@@ -43,50 +102,33 @@ export class PouchClient {
     return this.request('GET', '/health', { auth: false });
   }
 
-  getCryptoChannels(): Promise<Record<string, unknown>> {
-    return this.request('GET', '/crypto/channels');
+  createSharedKycOnramp(payload: PouchOnrampPayload): Promise<PouchOnrampResponse> {
+    return this.request('POST', '/shared-kyc/ramp/onramp', { body: payload });
   }
 
-  createSession(payload: PouchSessionPayload): Promise<PouchSessionResponse> {
-    return this.request('POST', '/v2/sessions', { body: payload });
+  createSharedKycOfframp(payload: PouchOfframpPayload): Promise<PouchOfframpResponse> {
+    return this.request('POST', '/shared-kyc/ramp/offramp', { body: payload });
   }
 
-  getSession(sessionId: string): Promise<PouchSessionResponse> {
-    return this.request('GET', `/v2/sessions/${encodeURIComponent(sessionId)}`);
-  }
+  getRampStatus(
+    providerRef: string,
+    type?: PaymentSessionType,
+  ): Promise<PouchRampStatusResponse> {
+    const path = new URL(
+      `/shared-kyc/ramp/status/${encodeURIComponent(providerRef)}`,
+      this.baseUrl,
+    );
 
-  getSessionQuote(sessionId: string): Promise<Record<string, unknown>> {
-    return this.request('GET', `/v2/sessions/${encodeURIComponent(sessionId)}/quote`);
-  }
+    if (type) {
+      path.searchParams.set('type', type);
+    }
 
-  identifySession(sessionId: string, email: string): Promise<Record<string, unknown>> {
-    return this.request('POST', `/v2/sessions/${encodeURIComponent(sessionId)}/identify`, {
-      body: { email },
-    });
-  }
-
-  verifyOtp(sessionId: string, code: string): Promise<Record<string, unknown>> {
-    return this.request('POST', `/v2/sessions/${encodeURIComponent(sessionId)}/verify-otp`, {
-      body: { code },
-    });
-  }
-
-  getKycRequirements(sessionId: string): Promise<Record<string, unknown>> {
-    return this.request('GET', `/v2/sessions/${encodeURIComponent(sessionId)}/kyc-requirements`);
-  }
-
-  submitKyc(
-    sessionId: string,
-    documents: Record<string, unknown>,
-  ): Promise<Record<string, unknown>> {
-    return this.request('POST', `/v2/sessions/${encodeURIComponent(sessionId)}/kyc`, {
-      body: { documents },
-    });
+    return this.request('GET', path);
   }
 
   private async request<T>(
     method: 'GET' | 'POST',
-    path: string,
+    path: string | URL,
     options?: {
       body?: Record<string, unknown>;
       auth?: boolean;
@@ -98,6 +140,9 @@ export class PouchClient {
     };
 
     if (auth) {
+      headers.authorization = this.apiKey.startsWith('Bearer ')
+        ? this.apiKey
+        : `Bearer ${this.apiKey}`;
       headers['x-api-key'] = this.apiKey;
     }
 
@@ -105,11 +150,14 @@ export class PouchClient {
       headers['content-type'] = 'application/json';
     }
 
-    const response = await fetch(new URL(path, this.baseUrl), {
-      method,
-      headers,
-      body: options?.body === undefined ? undefined : JSON.stringify(options.body),
-    });
+    const response = await fetch(
+      path instanceof URL ? path : new URL(path, this.baseUrl),
+      {
+        method,
+        headers,
+        body: options?.body === undefined ? undefined : JSON.stringify(options.body),
+      },
+    );
 
     const contentType = response.headers.get('content-type') ?? '';
     const payload = contentType.includes('application/json')
@@ -117,11 +165,7 @@ export class PouchClient {
       : await response.text();
 
     if (!response.ok) {
-      throw new PouchApiError(
-        'Pouch request failed',
-        response.status,
-        payload,
-      );
+      throw new PouchApiError('Pouch request failed', response.status, payload);
     }
 
     return payload as T;

@@ -5,30 +5,26 @@ This repo now uses Pouch as the single provider for fiat onramp and offramp orch
 ## What changed
 
 - `api-gateway` owns the authenticated Pouch HTTP surface.
-- `payment-service` no longer converts NGN with Coinbase.
+- Pouch shared-KYC direct ramp endpoints replaced the old session / OTP / KYC flow.
+- Onramp settlement goes to a single env-configured master wallet.
 - `wallet-service` credits rider balances from `ONRAMP_SETTLED`.
-- Paystack, Yellow Card, and Coinbase-specific funding code paths were removed.
+- `payment-service` and `wallet-service` keep the same event-driven settlement flow.
 
 ## Gateway routes
 
 - `GET /payments/pouch/health`
-- `GET /payments/pouch/channels`
-- `POST /payments/pouch/sessions`
-- `GET /payments/pouch/sessions/:id`
-- `GET /payments/pouch/sessions/:id/quote`
-- `POST /payments/pouch/sessions/:id/identify`
-- `POST /payments/pouch/sessions/:id/verify-otp`
-- `GET /payments/pouch/sessions/:id/kyc-requirements`
-- `POST /payments/pouch/sessions/:id/kyc`
+- `POST /payments/pouch/onramp`
+- `POST /payments/pouch/offramp`
+- `GET /payments/pouch/status/:providerRef`
 
 ## Event flow
 
-1. Client creates a Pouch session through `api-gateway`.
-2. Gateway attaches metadata containing the internal `userId` and `walletAddress`.
-3. Client completes OTP and KYC via the Pouch session routes.
-4. Client polls `GET /payments/pouch/sessions/:id`.
-5. When the session reaches a settled state and the asset is wallet-creditable (`USDT` or `USDC`), the gateway emits `ONRAMP_SETTLED`.
-6. `payment-service` records the settlement idempotently.
+1. Client creates an onramp or offramp through `api-gateway`.
+2. Gateway forces onramp settlement to `POUCH_MASTER_WALLET_ADDRESS` and stores internal ownership by `providerRef`.
+3. Shared KYC is sent inline in the create request when required.
+4. Client polls `GET /payments/pouch/status/:providerRef`.
+5. Gateway emits `PAYMENT_SESSION_SYNCED` from the latest provider status.
+6. When an onramp is settled into a wallet-creditable stablecoin (`USDT` or `USDC`), `payment-service` emits `ONRAMP_SETTLED`.
 7. `wallet-service` credits the internal balance and emits `WALLET_CREDITED`.
 
 ## Why this scales better
@@ -36,8 +32,8 @@ This repo now uses Pouch as the single provider for fiat onramp and offramp orch
 - Provider orchestration stays at the edge in `api-gateway`.
 - Internal services continue to react over Kafka instead of calling each other.
 - Settlement idempotency remains in the payment persistence layer.
-- New Pouch-supported rails and networks do not require a new internal event shape.
+- New Pouch-supported rails and networks still map into the same internal event shape.
 
 ## Current wallet-credit rule
 
-Internal wallet balances are still denominated in stablecoin. Automatic wallet credit currently happens only when Pouch settles into `USDT` or `USDC`. Other Pouch-supported assets can still be created as sessions, but they are not auto-credited into the existing single-asset wallet ledger without a broader wallet model change.
+Internal wallet balances are still denominated in stablecoin. Automatic wallet credit currently happens only when Pouch settles into `USDT` or `USDC`. Other Pouch-supported assets can still be created as direct ramp transactions, but they are not auto-credited into the existing single-asset wallet ledger without a broader wallet model change.
