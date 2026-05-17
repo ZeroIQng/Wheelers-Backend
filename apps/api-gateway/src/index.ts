@@ -33,6 +33,10 @@ import {
   handlePouchStatusRoute,
 } from "./http/pouch.route";
 import {
+  handleWalletOverviewRoute,
+  handleWalletTransactionsRoute,
+} from "./http/wallet.route";
+import {
   handleSendPhoneOtpRoute,
   handleVerifyPhoneOtpRoute,
 } from "./http/phone.route";
@@ -491,6 +495,41 @@ async function bootstrap(): Promise<void> {
         },
         decodeURIComponent(statusMatch[1]),
         requestedType,
+      );
+
+      return;
+    }
+
+    if (url.pathname === "/wallet/overview") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleWalletOverviewRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        ridePricingDisplayProvider,
+      });
+
+      return;
+    }
+
+    if (url.pathname === "/wallet/transactions") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleWalletTransactionsRoute(
+        req,
+        res,
+        {
+          privyAppId: gatewayEnv.PRIVY_APP_ID,
+          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+          ridePricingDisplayProvider,
+        },
+        url,
       );
 
       return;
