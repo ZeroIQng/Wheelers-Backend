@@ -29,14 +29,9 @@ It also exposes these HTTP endpoints:
 - `POST /scheduled-rides`
 - `POST /scheduled-rides/:id/cancel`
 - `GET /payments/pouch/health`
-- `GET /payments/pouch/channels`
-- `POST /payments/pouch/sessions`
-- `GET /payments/pouch/sessions/:id`
-- `GET /payments/pouch/sessions/:id/quote`
-- `POST /payments/pouch/sessions/:id/identify`
-- `POST /payments/pouch/sessions/:id/verify-otp`
-- `GET /payments/pouch/sessions/:id/kyc-requirements`
-- `POST /payments/pouch/sessions/:id/kyc`
+- `POST /payments/pouch/onramp`
+- `POST /payments/pouch/offramp`
+- `GET /payments/pouch/status/:providerRef`
 - `GET /health`
 
 ---
@@ -146,13 +141,14 @@ Result: full async flow without direct service-to-service REST calls.
 
 Result: user gets live balance updates.
 
-## Flow E: Pouch payment sessions
+## Flow E: Pouch payment ramps
 
-1. The mobile client creates an authenticated Pouch session through `POST /payments/pouch/sessions`.
-2. The gateway injects user-linked metadata so later session fetches can be tied back to the authenticated user.
-3. The client completes quote, OTP, and KYC steps through the remaining `/payments/pouch/sessions/:id/*` routes.
-4. When the client fetches session state and the onramp is settled, the gateway emits `ONRAMP_SETTLED` to `payment.events`.
-5. `payment-service` records the settlement and `wallet-service` credits the user balance.
+1. The mobile client creates an authenticated Pouch onramp through `POST /payments/pouch/onramp` or offramp through `POST /payments/pouch/offramp`.
+2. The gateway stores provider ownership against the authenticated user and forces onramp settlement to the configured master wallet.
+3. Shared KYC is sent inline in the create request when required by the provider.
+4. The client polls `GET /payments/pouch/status/:providerRef`.
+5. When the onramp is settled, the gateway emits `ONRAMP_SETTLED` to `payment.events`.
+6. `payment-service` records the settlement and `wallet-service` credits the user balance.
 
 Result: the external payment provider stays isolated behind gateway routes and Kafka events.
 
