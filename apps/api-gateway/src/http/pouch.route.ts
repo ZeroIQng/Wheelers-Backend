@@ -90,7 +90,7 @@ export async function handlePouchOnrampRoute(
       userId: auth.user.id,
       userWallet: paymentWallet,
       email: customerEmail,
-      summary: summarizeOnrampPayload(payload),
+      summary: summarizeOnrampPayload(payload, rawBody),
     });
 
     const response = await deps.pouchClient.createSharedKycOnramp(payload);
@@ -328,9 +328,9 @@ async function buildOnrampPayload(
   defaults: PouchRouteDeps['defaults'],
   ridePricingDisplayProvider: RidePricingDisplayProvider,
 ): Promise<PouchOnrampPayload> {
-  const amountLocal = pickNumber(body, ['amount', 'amountLocal', 'localAmount', 'ngnAmount']);
+  const amountLocal = pickNumber(body, ['amountLocal', 'localAmount', 'ngnAmount']);
   if (!amountLocal || amountLocal <= 0) {
-    throw new Error('amount must be a positive number in local currency');
+    throw new Error('amountLocal must be a positive number in local currency');
   }
 
   const userKyc = readUserKyc(body['userKyc'], defaults.userKycDefaults);
@@ -474,9 +474,14 @@ function sendPouchError(
   });
 }
 
-function summarizeOnrampPayload(payload: PouchOnrampPayload) {
+function summarizeOnrampPayload(
+  payload: PouchOnrampPayload,
+  input: Record<string, unknown>,
+) {
   return {
-    amount: payload.amount,
+    amountLocalInput:
+      pickNumber(input, ['amountLocal', 'localAmount', 'ngnAmount']) ?? null,
+    amountUsdSent: payload.amount,
     countryCode: payload.countryCode,
     currency: payload.currency,
     cryptoCurrency: payload.cryptoCurrency,
