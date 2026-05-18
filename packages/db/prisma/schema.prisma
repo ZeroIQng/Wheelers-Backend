@@ -11,6 +11,7 @@ model User {
   id            String         @id @default(uuid())
   privyDid      String         @unique
   walletAddress String?        @unique
+  username      String?        @unique
   role          UserRole       @default(RIDER)
   name          String?
   phone         String?
@@ -27,6 +28,7 @@ model User {
 
   @@index([privyDid])
   @@index([walletAddress])
+  @@index([username])
   @@index([email])
 }
 

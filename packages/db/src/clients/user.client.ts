@@ -28,6 +28,7 @@ export const userClient = {
   create: (data: {
     privyDid:      string;
     walletAddress?: string;
+    username?:     string;
     email?:        string;
     role:          UserRole;
     name?:         string;
@@ -37,6 +38,7 @@ export const userClient = {
       data: {
         privyDid: data.privyDid,
         walletAddress: data.walletAddress?.toLowerCase(),
+        username: data.username,
         email: data.email,
         role: data.role,
         name: data.name,
@@ -46,6 +48,7 @@ export const userClient = {
 
   updateAuthIdentity: (userId: string, data: {
     walletAddress?: string;
+    username?:     string;
     email?:        string;
     name?:         string;
     phone?:        string;
@@ -54,6 +57,7 @@ export const userClient = {
       where: { id: userId },
       data: {
         walletAddress: data.walletAddress?.toLowerCase(),
+        username: data.username,
         email: data.email,
         name: data.name,
         phone: data.phone,
@@ -62,6 +66,7 @@ export const userClient = {
     }),
 
   updateProfile: (userId: string, data: {
+    username?: string;
     name?:     string;
     phone?:    string;
     photoUrl?: string;
@@ -69,6 +74,7 @@ export const userClient = {
     prisma.user.update({
       where: { id: userId },
       data,
+      include: { wallet: true },
     }),
 
   updateRole: (userId: string, role: UserRole) =>

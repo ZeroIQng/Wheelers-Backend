@@ -1,0 +1,143 @@
+import type { IncomingMessage, ServerResponse } from "http";
+import { userClient } from "@wheleers/db";
+import { authenticateHttpUser } from "./authenticate";
+import { readJsonBody, sendJson } from "./utils";
+import { getString, isRecord } from "../utils/object";
+import type { GatewayPublisher } from "../websocket/publisher";
+
+interface ProfileRouteDeps {
+  privyAppId: string;
+  privyVerificationKey: string;
+  publisher: GatewayPublisher;
+}
+
+function serializeUser(user: {
+  id: string;
+  privyDid: string;
+  walletAddress: string | null;
+  username?: string | null;
+  email: string | null;
+  role: string;
+  name: string | null;
+  phone: string | null;
+}) {
+  return {
+    id: user.id,
+    privyDid: user.privyDid,
+    walletAddress: user.walletAddress,
+    username: user.username ?? null,
+    email: user.email,
+    role: user.role,
+    name: user.name,
+    phone: user.phone,
+  };
+}
+
+function normalizeUsername(value: string | undefined): string | undefined {
+  const trimmed = value?.trim().toLowerCase();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (!/^[a-z0-9_]{3,24}$/.test(trimmed)) {
+    throw new Error(
+      "username must be 3-24 characters and use only lowercase letters, numbers, or underscores.",
+    );
+  }
+
+  return trimmed;
+}
+
+function normalizeName(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (trimmed.length < 2 || trimmed.length > 80) {
+    throw new Error("fullName must be between 2 and 80 characters.");
+  }
+
+  return trimmed;
+}
+
+export async function handleGetCurrentProfileRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: ProfileRouteDeps,
+): Promise<void> {
+  try {
+    const user = await authenticateHttpUser(
+      req,
+      deps.privyAppId,
+      deps.privyVerificationKey,
+    );
+
+    sendJson(res, 200, {
+      user: serializeUser(user),
+    });
+  } catch (error) {
+    sendJson(res, 401, {
+      error:
+        error instanceof Error ? error.message : "Could not load your profile.",
+    });
+  }
+}
+
+export async function handleUpdateCurrentProfileRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: ProfileRouteDeps,
+): Promise<void> {
+  try {
+    const user = await authenticateHttpUser(
+      req,
+      deps.privyAppId,
+      deps.privyVerificationKey,
+    );
+    const rawBody = await readJsonBody(req);
+
+    if (!isRecord(rawBody)) {
+      sendJson(res, 400, { error: "Body must be a JSON object" });
+      return;
+    }
+
+    const username = normalizeUsername(getString(rawBody, "username"));
+    const name = normalizeName(
+      getString(rawBody, "fullName") ?? getString(rawBody, "name"),
+    );
+
+    if (!username && !name) {
+      sendJson(res, 400, {
+        error: "username or fullName is required.",
+      });
+      return;
+    }
+
+    const updated = await userClient.updateProfile(user.id, {
+      username,
+      name,
+    });
+
+    sendJson(res, 200, {
+      user: serializeUser(updated),
+    });
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "P2002"
+    ) {
+      sendJson(res, 409, {
+        error: "That username is already taken.",
+      });
+      return;
+    }
+
+    sendJson(res, 400, {
+      error:
+        error instanceof Error ? error.message : "Could not update your profile.",
+    });
+  }
+}

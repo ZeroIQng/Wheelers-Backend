@@ -20,6 +20,10 @@ import IORedis from "ioredis";
 
 import { handlePrivyAuthRoute } from "./http/auth.route";
 import {
+  handleGetCurrentProfileRoute,
+  handleUpdateCurrentProfileRoute,
+} from "./http/profile.route";
+import {
   handleCancelScheduledRideRoute,
   handleCreateScheduledRideRoute,
   handleListScheduledRidesRoute,
@@ -270,6 +274,34 @@ async function bootstrap(): Promise<void> {
         publisher,
       });
 
+      return;
+    }
+
+    if (url.pathname === "/auth/me") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleGetCurrentProfileRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        publisher,
+      });
+      return;
+    }
+
+    if (url.pathname === "/auth/profile") {
+      if (req.method !== "PUT") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleUpdateCurrentProfileRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        publisher,
+      });
       return;
     }
 
