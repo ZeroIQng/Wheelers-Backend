@@ -30,7 +30,7 @@ export const withdrawalClient = {
 
       const availableUsdt = Number(wallet.balanceUsdt);
       if (availableUsdt < input.reservedAmountUsdt) {
-        throw new Error('Insufficient wallet balance for this withdrawal.');
+        throw new Error('You have insufficient balance for this withdrawal.');
       }
 
       const withdrawalId = randomUUID();
