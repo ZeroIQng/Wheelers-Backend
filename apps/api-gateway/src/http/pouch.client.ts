@@ -71,6 +71,34 @@ export interface PouchOfframpResponse extends Record<string, unknown> {
   providerRef?: string;
 }
 
+export interface PouchSessionResponse extends Record<string, unknown> {
+  id?: string;
+  type?: "ONRAMP" | "OFFRAMP";
+  status?: string;
+  nextStep?: string | null;
+  expiresAt?: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface PouchBankNetwork {
+  id?: string;
+  name?: string;
+  code?: string;
+  country?: string;
+  accountNumberType?: string;
+  type?: string;
+}
+
+export interface PouchBankNetworksResponse extends Record<string, unknown> {
+  networks?: PouchBankNetwork[];
+}
+
+export interface PouchVerifiedBankAccount extends Record<string, unknown> {
+  accountName?: string;
+  bankName?: string;
+  accountNumber?: string;
+}
+
 export interface PouchRampStatusResponse extends Record<string, unknown> {
   providerRef?: string;
   status?: string;
@@ -99,20 +127,48 @@ export class PouchClient {
   ) {}
 
   health(): Promise<Record<string, unknown>> {
-    return this.request('GET', '/health', { auth: false });
+    return this.request('GET', '/health', { authKind: 'none' });
   }
 
   createSharedKycOnramp(payload: PouchOnrampPayload): Promise<PouchOnrampResponse> {
     return this.request('POST', '/shared-kyc/ramp/onramp', {
       body: payload,
-      auth: !payload.userKyc,
+      authKind: payload.userKyc ? 'none' : 'legacy',
     });
   }
 
   createSharedKycOfframp(payload: PouchOfframpPayload): Promise<PouchOfframpResponse> {
     return this.request('POST', '/shared-kyc/ramp/offramp', {
       body: payload,
-      auth: !payload.userKyc,
+      authKind: payload.userKyc ? 'none' : 'legacy',
+    });
+  }
+
+  createSession(payload: Record<string, unknown>): Promise<PouchSessionResponse> {
+    return this.request('POST', '/v2/sessions', {
+      body: payload,
+      authKind: 'api-key',
+    });
+  }
+
+  getCryptoBankNetworks(country = 'NG'): Promise<PouchBankNetworksResponse> {
+    const path = new URL('/crypto/bank-networks', this.baseUrl);
+    path.searchParams.set('country', country);
+    return this.request('GET', path, {
+      authKind: 'none',
+    });
+  }
+
+  verifySessionBankAccount(
+    sessionId: string,
+    payload: {
+      accountNumber: string;
+      networkId: string;
+    },
+  ): Promise<PouchVerifiedBankAccount> {
+    return this.request('POST', `/v2/sessions/${encodeURIComponent(sessionId)}/bank-account`, {
+      body: payload,
+      authKind: 'api-key',
     });
   }
 
@@ -137,19 +193,20 @@ export class PouchClient {
     path: string | URL,
     options?: {
       body?: Record<string, unknown>;
-      auth?: boolean;
+      authKind?: 'legacy' | 'api-key' | 'none';
     },
   ): Promise<T> {
-    const auth = options?.auth ?? true;
+    const authKind = options?.authKind ?? 'legacy';
     const headers: Record<string, string> = {
       accept: 'application/json',
     };
 
-    if (auth) {
+    if (authKind !== 'none') {
       const apiKey = this.apiKey.replace(/^Bearer\s+/i, '').trim();
-      headers.authorization = `Bearer ${apiKey}`;
       headers['x-api-key'] = apiKey;
       headers['x-pouch-api-key'] = apiKey;
+      headers.authorization =
+        authKind === 'api-key' ? `ApiKey ${apiKey}` : `Bearer ${apiKey}`;
     }
 
     if (options?.body !== undefined) {
@@ -161,8 +218,9 @@ export class PouchClient {
     console.log('[api-gateway][pouch-client] request', {
       method,
       url: requestUrl.toString(),
-      auth,
-      apiKeyFingerprint: auth ? fingerprintApiKey(this.apiKey) : null,
+      auth: authKind !== 'none',
+      authKind,
+      apiKeyFingerprint: authKind !== 'none' ? fingerprintApiKey(this.apiKey) : null,
       bodyKeys: options?.body ? Object.keys(options.body) : [],
     });
 

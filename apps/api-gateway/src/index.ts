@@ -35,7 +35,9 @@ import {
 import {
   handleCreateWalletWithdrawalRoute,
   handleGetWalletWithdrawalRoute,
+  handleListWithdrawalBankNetworksRoute,
   handleListWalletWithdrawalsRoute,
+  handleVerifyWithdrawalBankAccountRoute,
   handleWalletOverviewRoute,
   handleWalletTransactionsRoute,
 } from "./http/wallet.route";
@@ -566,6 +568,67 @@ async function bootstrap(): Promise<void> {
         url,
       );
 
+      return;
+    }
+
+    if (url.pathname === "/wallet/withdrawals/bank-networks") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleListWithdrawalBankNetworksRoute(
+        req,
+        res,
+        {
+          privyAppId: gatewayEnv.PRIVY_APP_ID,
+          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+          ridePricingDisplayProvider,
+          pouchClient,
+          publisher,
+          defaults: {
+            providerId: gatewayEnv.POUCH_PROVIDER_ID,
+            countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
+            currency: gatewayEnv.POUCH_FIAT_CURRENCY,
+            cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
+            cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
+            chain: gatewayEnv.POUCH_CHAIN,
+            masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
+            stellarNetwork: gatewayEnv.STELLAR_NETWORK,
+            testEmail: gatewayEnv.POUCH_TEST_EMAIL,
+            userKycDefaults: pouchUserKycDefaults,
+          },
+        },
+        url,
+      );
+      return;
+    }
+
+    if (url.pathname === "/wallet/withdrawals/verify-bank-account") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleVerifyWithdrawalBankAccountRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        ridePricingDisplayProvider,
+        pouchClient,
+        publisher,
+        defaults: {
+          providerId: gatewayEnv.POUCH_PROVIDER_ID,
+          countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
+          currency: gatewayEnv.POUCH_FIAT_CURRENCY,
+          cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
+          cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
+          chain: gatewayEnv.POUCH_CHAIN,
+          masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
+          stellarNetwork: gatewayEnv.STELLAR_NETWORK,
+          testEmail: gatewayEnv.POUCH_TEST_EMAIL,
+          userKycDefaults: pouchUserKycDefaults,
+        },
+      });
       return;
     }
 

@@ -18,6 +18,7 @@ import {
 } from "./pouch.helpers";
 import {
   PouchApiError,
+  type PouchBankNetwork,
   PouchClient,
   type PouchOfframpPayload,
   type PouchRampStatusResponse,
@@ -54,6 +55,11 @@ function parseLimit(value: string | null): number {
   }
 
   return Math.min(parsed, 50);
+}
+
+function parseCountryCode(value: string | null | undefined, fallback: string): string {
+  const normalized = value?.trim().toUpperCase();
+  return normalized && normalized.length >= 2 ? normalized : fallback;
 }
 
 function decimalToNumber(value: unknown): number | null {
@@ -142,6 +148,20 @@ function mapWithdrawalRequest(
     settledAt: request.settledAt?.toISOString() ?? null,
     failedAt: request.failedAt?.toISOString() ?? null,
     releasedAt: request.releasedAt?.toISOString() ?? null,
+  };
+}
+
+function mapBankNetwork(network: PouchBankNetwork) {
+  return {
+    id: typeof network.id === "string" ? network.id : "",
+    name: typeof network.name === "string" ? network.name : "",
+    code: typeof network.code === "string" ? network.code : null,
+    country: typeof network.country === "string" ? network.country : null,
+    accountNumberType:
+      typeof network.accountNumberType === "string"
+        ? network.accountNumberType
+        : null,
+    type: typeof network.type === "string" ? network.type : null,
   };
 }
 
@@ -248,6 +268,25 @@ function buildWalletWithdrawalOfframpPayload(
   };
 }
 
+function buildBankVerificationSessionPayload(
+  deps: WalletRouteDeps["defaults"],
+): Record<string, unknown> {
+  return {
+    type: "OFFRAMP",
+    walletAddress: deps.masterWalletAddress,
+    chain: deps.chain ?? deps.cryptoNetwork,
+    countryCode: deps.countryCode,
+    currency: deps.currency,
+    cryptoCurrency: deps.cryptoCurrency,
+    cryptoNetwork: deps.cryptoNetwork,
+    cryptoAmount: 1,
+    metadata: {
+      source: "wheelers-withdrawal-bank-verification",
+      timestamp: new Date().toISOString(),
+    },
+  };
+}
+
 async function syncWithdrawalLifecycle(
   providerReference: string,
   statusResponse: PouchRampStatusResponse,
@@ -332,6 +371,127 @@ export async function handleWalletOverviewRoute(
     sendJson(res, 401, {
       error:
         error instanceof Error ? error.message : "Could not load wallet overview",
+    });
+  }
+}
+
+export async function handleListWithdrawalBankNetworksRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: WalletRouteDeps,
+  url: URL,
+): Promise<void> {
+  try {
+    await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
+    const country = parseCountryCode(
+      url.searchParams.get("country"),
+      deps.defaults.countryCode,
+    );
+    const query = url.searchParams.get("query")?.trim().toLowerCase() ?? "";
+    const response = await deps.pouchClient.getCryptoBankNetworks(country);
+    const networks = Array.isArray(response.networks) ? response.networks : [];
+    const filtered = query
+      ? networks.filter((network) => {
+          const name = typeof network.name === "string" ? network.name.toLowerCase() : "";
+          const code = typeof network.code === "string" ? network.code.toLowerCase() : "";
+          return name.includes(query) || code.includes(query);
+        })
+      : networks;
+
+    sendJson(res, 200, {
+      country,
+      items: filtered.map(mapBankNetwork).filter((item) => item.id && item.name),
+    });
+  } catch (error) {
+    if (error instanceof PouchApiError) {
+      sendJson(res, error.statusCode, {
+        error: "Could not load Pouch bank networks.",
+        details: error.responseBody,
+      });
+      return;
+    }
+
+    sendJson(res, 401, {
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not load withdrawal bank networks.",
+    });
+  }
+}
+
+export async function handleVerifyWithdrawalBankAccountRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: WalletRouteDeps,
+): Promise<void> {
+  try {
+    await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
+    const rawBody = await readJsonBody(req);
+    if (!isRecord(rawBody)) {
+      sendJson(res, 400, { error: "Body must be a JSON object" });
+      return;
+    }
+
+    const accountNumber = pickString(rawBody, ["accountNumber"])?.replace(/\D/g, "");
+    const networkId = pickString(rawBody, ["networkId"]);
+
+    if (!accountNumber || !networkId) {
+      sendJson(res, 400, {
+        error: "accountNumber and networkId are required.",
+      });
+      return;
+    }
+
+    const session = await deps.pouchClient.createSession(
+      buildBankVerificationSessionPayload({
+        ...deps.defaults,
+        countryCode:
+          pickString(rawBody, ["countryCode"])?.toUpperCase() ?? deps.defaults.countryCode,
+        currency: pickString(rawBody, ["currency"])?.toUpperCase() ?? deps.defaults.currency,
+        cryptoCurrency:
+          pickString(rawBody, ["cryptoCurrency"])?.toUpperCase() ??
+          deps.defaults.cryptoCurrency,
+        cryptoNetwork:
+          pickString(rawBody, ["cryptoNetwork"])?.toUpperCase() ??
+          deps.defaults.cryptoNetwork,
+      }),
+    );
+
+    if (typeof session.id !== "string" || session.id.trim().length === 0) {
+      throw new Error("Pouch did not return a verification session id.");
+    }
+
+    const verified = await deps.pouchClient.verifySessionBankAccount(session.id, {
+      accountNumber,
+      networkId,
+    });
+
+    sendJson(res, 200, {
+      bankAccount: {
+        accountNumber:
+          typeof verified.accountNumber === "string" ? verified.accountNumber : accountNumber,
+        accountName:
+          typeof verified.accountName === "string" ? verified.accountName : null,
+        bankName: typeof verified.bankName === "string" ? verified.bankName : null,
+        networkId,
+      },
+      verificationSessionId: session.id,
+    });
+  } catch (error) {
+    if (error instanceof PouchApiError) {
+      sendJson(res, error.statusCode, {
+        error: "Could not verify the bank account.",
+        details: error.responseBody,
+      });
+      return;
+    }
+
+    sendJson(res, 400, {
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not verify withdrawal bank account.",
     });
   }
 }
