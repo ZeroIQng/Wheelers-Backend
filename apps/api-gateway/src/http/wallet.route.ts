@@ -24,6 +24,7 @@ import {
   type PouchOfframpPayload,
   type PouchRampStatusResponse,
 } from "./pouch.client";
+import type { RedisClient } from "../redis/client";
 
 interface WalletRouteDeps {
   privyAppId: string;
@@ -31,6 +32,7 @@ interface WalletRouteDeps {
   ridePricingDisplayProvider: RidePricingDisplayProvider;
   pouchClient: PouchClient;
   publisher: GatewayPublisher;
+  redisClient?: RedisClient;
   defaults: {
     providerId: string;
     countryCode: string;
@@ -43,6 +45,62 @@ interface WalletRouteDeps {
     testEmail?: string;
     userKycDefaults?: Record<string, string>;
   };
+}
+
+const POUCH_BANK_NETWORKS_CACHE_TTL_SECONDS = 6 * 60 * 60;
+const PREFERRED_BANK_TERMS = [
+  "opay",
+  "palmpay",
+  "moniepoint",
+  "access bank",
+  "guaranty trust bank",
+  "gtbank",
+  "gt bank",
+  "first bank of nigeria",
+  "first city monument bank",
+  "fcmb",
+  "united bank for africa",
+  "uba",
+  "zenith bank",
+  "wema bank",
+  "sterling bank",
+  "fidelity bank",
+  "union bank of nigeria",
+  "ecobank nigeria",
+  "stanbic ibtc bank",
+  "providus bank",
+  "keystone bank",
+  "polaris bank",
+  "premiumtrust bank",
+  "premium trust bank",
+  "kuda",
+  "paga",
+  "jaiz bank",
+  "taj bank",
+];
+const BANK_SEARCH_ALIASES: Record<string, string[]> = {
+  opay: ["opay"],
+  palmpay: ["palmpay"],
+  moniepoint: ["moniepoint"],
+  access: ["access bank", "access bank diamond", "access money", "accessmobile"],
+  gtbank: ["gtbank", "gt bank", "guaranty trust bank", "gtmobile"],
+  gt: ["gtbank", "gt bank", "guaranty trust bank", "gtmobile"],
+  uba: ["uba", "united bank for africa"],
+  firstbank: ["first bank", "first bank of nigeria", "fbnmobile"],
+  first: ["first bank", "first bank of nigeria", "fbnmobile"],
+  fcmb: ["fcmb", "first city monument bank", "fcmb easy account"],
+  zenith: ["zenith bank", "zenithmobile"],
+  sterling: ["sterling bank", "sterling mobile"],
+  stanbic: ["stanbic ibtc bank", "stanbic ibtc ease wallet", "stanbic mobile money"],
+  ecobank: ["ecobank nigeria", "ecobank xpress account", "ecomobile"],
+  fidelity: ["fidelity bank", "fidelity mobile"],
+  union: ["union bank of nigeria"],
+  kuda: ["kuda microfinance bank", "kuda"],
+  paga: ["paga"],
+};
+
+function getPouchBankNetworksCacheKey(country: string): string {
+  return `pouch:bank-networks:${country.toUpperCase()}`;
 }
 
 function parseLimit(value: string | null): number {
@@ -61,6 +119,136 @@ function parseLimit(value: string | null): number {
 function parseCountryCode(value: string | null | undefined, fallback: string): string {
   const normalized = value?.trim().toUpperCase();
   return normalized && normalized.length >= 2 ? normalized : fallback;
+}
+
+function normalizeBankTerm(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function getBankSearchNeedles(query: string): string[] {
+  const normalized = normalizeBankTerm(query);
+  if (!normalized) {
+    return [];
+  }
+
+  const compact = normalized.replace(/\s+/g, "");
+  const aliases = new Set<string>([normalized, compact]);
+
+  for (const [key, values] of Object.entries(BANK_SEARCH_ALIASES)) {
+    if (normalized === key || compact === key.replace(/\s+/g, "")) {
+      for (const value of values) {
+        aliases.add(normalizeBankTerm(value));
+      }
+    }
+  }
+
+  return [...aliases];
+}
+
+function dedupeBankNetworks(networks: PouchBankNetwork[]): PouchBankNetwork[] {
+  const seen = new Set<string>();
+  const deduped: PouchBankNetwork[] = [];
+
+  for (const network of networks) {
+    const name = typeof network.name === "string" ? normalizeBankTerm(network.name) : "";
+    const code = typeof network.code === "string" ? normalizeBankTerm(network.code) : "";
+    const key = `${name}|${code}`;
+    if (!key || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    deduped.push(network);
+  }
+
+  return deduped;
+}
+
+function getPreferredBankPriority(network: PouchBankNetwork): number {
+  const name = typeof network.name === "string" ? normalizeBankTerm(network.name) : "";
+  if (!name) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  const index = PREFERRED_BANK_TERMS.findIndex((term) => name.includes(term));
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+}
+
+function scoreBankMatch(network: PouchBankNetwork, query: string): number {
+  const name = typeof network.name === "string" ? normalizeBankTerm(network.name) : "";
+  const code = typeof network.code === "string" ? normalizeBankTerm(network.code) : "";
+  const needles = getBankSearchNeedles(query);
+
+  if (!needles.length) {
+    return 0;
+  }
+
+  let best = Number.MAX_SAFE_INTEGER;
+
+  for (const needle of needles) {
+    if (!needle) {
+      continue;
+    }
+
+    if (name === needle || code === needle) {
+      best = Math.min(best, 0);
+      continue;
+    }
+
+    if (name.startsWith(needle) || code.startsWith(needle)) {
+      best = Math.min(best, 1);
+      continue;
+    }
+
+    if (name.includes(needle) || code.includes(needle)) {
+      best = Math.min(best, 2);
+    }
+  }
+
+  return best;
+}
+
+function sortBankNetworks(networks: PouchBankNetwork[], query: string): PouchBankNetwork[] {
+  const normalizedQuery = query.trim();
+
+  return [...networks].sort((left, right) => {
+    const leftName = typeof left.name === "string" ? left.name : "";
+    const rightName = typeof right.name === "string" ? right.name : "";
+
+    if (normalizedQuery) {
+      const leftScore = scoreBankMatch(left, normalizedQuery);
+      const rightScore = scoreBankMatch(right, normalizedQuery);
+      if (leftScore !== rightScore) {
+        return leftScore - rightScore;
+      }
+    } else {
+      const leftPriority = getPreferredBankPriority(left);
+      const rightPriority = getPreferredBankPriority(right);
+      if (leftPriority !== rightPriority) {
+        return leftPriority - rightPriority;
+      }
+    }
+
+    return leftName.localeCompare(rightName);
+  });
+}
+
+async function ensureUserWallet(
+  user: Awaited<ReturnType<typeof authenticateHttpUser>>,
+) {
+  if (user.wallet) {
+    return user.wallet;
+  }
+
+  if (!user.walletAddress) {
+    throw new Error("No linked wallet address found for this user.");
+  }
+
+  try {
+    return await walletClient.create(user.id, user.walletAddress);
+  } catch {
+    return walletClient.findByUserId(user.id);
+  }
 }
 
 function decimalToNumber(value: unknown): number | null {
@@ -166,6 +354,65 @@ function mapBankNetwork(network: PouchBankNetwork) {
   };
 }
 
+async function getBankNetworksFromCacheOrProvider(
+  deps: WalletRouteDeps,
+  country: string,
+): Promise<PouchBankNetwork[]> {
+  const cacheKey = getPouchBankNetworksCacheKey(country);
+
+  if (deps.redisClient) {
+    const cached = await deps.redisClient.get(cacheKey).catch(() => null);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached) as { networks?: PouchBankNetwork[] };
+        if (Array.isArray(parsed.networks)) {
+          console.log("[api-gateway][wallet-withdrawal] bank cache hit", {
+            country,
+            cacheKey,
+            count: parsed.networks.length,
+            hasOpay: parsed.networks.some(
+              (network) =>
+                typeof network.name === "string" &&
+                network.name.toLowerCase() === "opay",
+            ),
+          });
+          return parsed.networks;
+        }
+      } catch {
+        // ignore bad cache payload and fall through to provider
+      }
+    }
+  }
+
+  const response = await deps.pouchClient.getCryptoBankNetworks(country);
+  const networks = dedupeBankNetworks(
+    Array.isArray(response.networks) ? response.networks : [],
+  );
+
+  console.log("[api-gateway][wallet-withdrawal] bank cache miss", {
+    country,
+    cacheKey,
+    count: networks.length,
+    hasOpay: networks.some(
+      (network) =>
+        typeof network.name === "string" &&
+        network.name.toLowerCase() === "opay",
+    ),
+  });
+
+  if (deps.redisClient) {
+    await deps.redisClient
+      .set(
+        cacheKey,
+        JSON.stringify({ networks }),
+        POUCH_BANK_NETWORKS_CACHE_TTL_SECONDS,
+      )
+      .catch(() => undefined);
+  }
+
+  return networks;
+}
+
 function readUserKyc(
   value: unknown,
   defaults?: Record<string, string>,
@@ -269,25 +516,6 @@ function buildWalletWithdrawalOfframpPayload(
   };
 }
 
-function buildBankVerificationSessionPayload(
-  deps: WalletRouteDeps["defaults"],
-): Record<string, unknown> {
-  return {
-    type: "OFFRAMP",
-    walletAddress: deps.masterWalletAddress,
-    chain: deps.chain ?? deps.cryptoNetwork,
-    countryCode: deps.countryCode,
-    currency: deps.currency,
-    cryptoCurrency: deps.cryptoCurrency,
-    cryptoNetwork: deps.cryptoNetwork,
-    cryptoAmount: 1,
-    metadata: {
-      source: "wheelers-withdrawal-bank-verification",
-      timestamp: new Date().toISOString(),
-    },
-  };
-}
-
 async function syncWithdrawalLifecycle(
   providerReference: string,
   statusResponse: PouchRampStatusResponse,
@@ -347,7 +575,7 @@ export async function handleWalletOverviewRoute(
       deps.privyAppId,
       deps.privyVerificationKey,
     );
-    const wallet = await walletClient.findByUserId(user.id);
+    const wallet = await ensureUserWallet(user);
     const pricing = await deps.ridePricingDisplayProvider.getPricingDisplay();
 
     const balanceUsdt = decimalToNumber(wallet.balanceUsdt) ?? 0;
@@ -389,19 +617,35 @@ export async function handleListWithdrawalBankNetworksRoute(
       deps.defaults.countryCode,
     );
     const query = url.searchParams.get("query")?.trim().toLowerCase() ?? "";
-    const response = await deps.pouchClient.getCryptoBankNetworks(country);
-    const networks = Array.isArray(response.networks) ? response.networks : [];
+    const limit = parseLimit(url.searchParams.get("limit"));
+    const networks = await getBankNetworksFromCacheOrProvider(deps, country);
+    const needles = getBankSearchNeedles(query);
     const filtered = query
-      ? networks.filter((network) => {
-          const name = typeof network.name === "string" ? network.name.toLowerCase() : "";
-          const code = typeof network.code === "string" ? network.code.toLowerCase() : "";
-          return name.includes(query) || code.includes(query);
-        })
+      ? networks.filter((network) => scoreBankMatch(network, query) !== Number.MAX_SAFE_INTEGER)
       : networks;
+    const ranked = sortBankNetworks(filtered, query);
+
+    console.log("[api-gateway][wallet-withdrawal] bank search", {
+      country,
+      query,
+      total: networks.length,
+      matched: filtered.length,
+      limit,
+      needles,
+      includesOpay:
+        filtered.find(
+          (network) =>
+            typeof network.name === "string" &&
+            network.name.toLowerCase() === "opay",
+        ) != null,
+    });
 
     sendJson(res, 200, {
       country,
-      items: filtered.map(mapBankNetwork).filter((item) => item.id && item.name),
+      items: ranked
+        .slice(0, limit)
+        .map(mapBankNetwork)
+        .filter((item) => item.id && item.name),
     });
   } catch (error) {
     if (error instanceof PouchApiError) {
@@ -444,28 +688,15 @@ export async function handleVerifyWithdrawalBankAccountRoute(
       return;
     }
 
-    const session = await deps.pouchClient.createSession(
-      buildBankVerificationSessionPayload({
-        ...deps.defaults,
-        countryCode:
-          pickString(rawBody, ["countryCode"])?.toUpperCase() ?? deps.defaults.countryCode,
-        currency: pickString(rawBody, ["currency"])?.toUpperCase() ?? deps.defaults.currency,
-        cryptoCurrency:
-          pickString(rawBody, ["cryptoCurrency"])?.toUpperCase() ??
-          deps.defaults.cryptoCurrency,
-        cryptoNetwork:
-          pickString(rawBody, ["cryptoNetwork"])?.toUpperCase() ??
-          deps.defaults.cryptoNetwork,
-      }),
-    );
+    const countryCode =
+      pickString(rawBody, ["countryCode"])?.toUpperCase() ?? deps.defaults.countryCode;
+    const providerId = pickString(rawBody, ["providerId"]) ?? deps.defaults.providerId;
 
-    if (typeof session.id !== "string" || session.id.trim().length === 0) {
-      throw new Error("Pouch did not return a verification session id.");
-    }
-
-    const verified = await deps.pouchClient.verifySessionBankAccount(session.id, {
+    const verified = await deps.pouchClient.verifySharedKycBankAccount({
       accountNumber,
       networkId,
+      countryCode,
+      providerId,
     });
 
     sendJson(res, 200, {
@@ -477,7 +708,7 @@ export async function handleVerifyWithdrawalBankAccountRoute(
         bankName: typeof verified.bankName === "string" ? verified.bankName : null,
         networkId,
       },
-      verificationSessionId: session.id,
+      verificationSessionId: null,
     });
   } catch (error) {
     if (error instanceof PouchApiError) {
@@ -517,7 +748,7 @@ export async function handleCreateWalletWithdrawalRoute(
       return;
     }
 
-    const wallet = await walletClient.findByUserId(user.id);
+    const wallet = await ensureUserWallet(user);
     const pricing = await deps.ridePricingDisplayProvider.getPricingDisplay();
     const requestedAmountNgn = parseRequestedWithdrawalAmount(rawBody);
     const availableBalanceUsdt = decimalToNumber(wallet.balanceUsdt) ?? 0;
@@ -814,7 +1045,7 @@ export async function handleWalletTransactionsRoute(
       deps.privyAppId,
       deps.privyVerificationKey,
     );
-    const wallet = await walletClient.findByUserId(user.id);
+    const wallet = await ensureUserWallet(user);
     const limit = parseLimit(url.searchParams.get("limit"));
     const cursor = url.searchParams.get("cursor") ?? undefined;
     const transactions = await walletClient.findTransactions(wallet.id, limit, cursor);

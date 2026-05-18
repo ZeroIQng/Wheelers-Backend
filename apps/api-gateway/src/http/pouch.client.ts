@@ -97,6 +97,7 @@ export interface PouchVerifiedBankAccount extends Record<string, unknown> {
   accountName?: string;
   bankName?: string;
   accountNumber?: string;
+  verified?: boolean;
 }
 
 export interface PouchRampStatusResponse extends Record<string, unknown> {
@@ -169,6 +170,18 @@ export class PouchClient {
     return this.request('POST', `/v2/sessions/${encodeURIComponent(sessionId)}/bank-account`, {
       body: payload,
       authKind: 'api-key',
+    });
+  }
+
+  verifySharedKycBankAccount(payload: {
+    accountNumber: string;
+    networkId: string;
+    countryCode: string;
+    providerId: string;
+  }): Promise<PouchVerifiedBankAccount> {
+    return this.request('POST', '/shared-kyc/ramp/verify-bank', {
+      body: payload,
+      authKind: 'none',
     });
   }
 
