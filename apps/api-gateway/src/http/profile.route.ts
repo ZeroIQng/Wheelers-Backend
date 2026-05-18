@@ -3,12 +3,10 @@ import { userClient } from "@wheleers/db";
 import { authenticateHttpUser } from "./authenticate";
 import { readJsonBody, sendJson } from "./utils";
 import { getString, isRecord } from "../utils/object";
-import type { GatewayPublisher } from "../websocket/publisher";
 
 interface ProfileRouteDeps {
   privyAppId: string;
   privyVerificationKey: string;
-  publisher: GatewayPublisher;
 }
 
 function serializeUser(user: {

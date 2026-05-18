@@ -286,7 +286,6 @@ async function bootstrap(): Promise<void> {
       await handleGetCurrentProfileRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-        publisher,
       });
       return;
     }
@@ -300,7 +299,6 @@ async function bootstrap(): Promise<void> {
       await handleUpdateCurrentProfileRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-        publisher,
       });
       return;
     }

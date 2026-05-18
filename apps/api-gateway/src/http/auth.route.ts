@@ -47,6 +47,7 @@ function serializeUser(user: {
   id: string;
   privyDid: string;
   walletAddress: string | null;
+  username?: string | null;
   email: string | null;
   role: UserRole;
   name: string | null;
@@ -56,6 +57,7 @@ function serializeUser(user: {
     id: user.id,
     privyDid: user.privyDid,
     walletAddress: user.walletAddress,
+    username: user.username ?? null,
     email: user.email,
     role: user.role,
     name: user.name,
