@@ -5,7 +5,7 @@ import {
   DEFAULT_EVM_CHAIN,
   getRpcUrl,
   type SupportedEvmChain,
-} from '../src/chains/evm.config';
+} from './chains/evm.config';
 
 // Read-only client — used for checking balances, reading contract state,
 // detecting incoming deposits. No private key needed.

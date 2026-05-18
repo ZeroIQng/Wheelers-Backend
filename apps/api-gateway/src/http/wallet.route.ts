@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import { sendTreasuryStellarUsdcPayment } from "@wheleers/blockchain";
 import { paymentClient, walletClient, withdrawalClient } from "@wheleers/db";
+import { hydrateProcessEnvWithStellarMasterWalletSecret } from "../treasury/master-wallet-secret";
 import { authenticateHttpUser } from "./authenticate";
 import { readJsonBody, sendJson } from "./utils";
 import {
@@ -627,6 +628,14 @@ export async function handleCreateWalletWithdrawalRoute(
       cryptoCurrency: payload.cryptoCurrency,
       cryptoNetwork: payload.cryptoNetwork,
       stellarNetwork: deps.defaults.stellarNetwork ?? "mainnet",
+    });
+
+    await hydrateProcessEnvWithStellarMasterWalletSecret({
+      AWS_REGION: process.env["AWS_REGION"],
+      STELLAR_MASTER_WALLET_SECRET_NAME:
+        process.env["STELLAR_MASTER_WALLET_SECRET_NAME"],
+      STELLAR_SECRET_KEY: process.env["STELLAR_SECRET_KEY"],
+      POUCH_MASTER_WALLET_ADDRESS: deps.defaults.masterWalletAddress,
     });
 
     const treasurySendResult = await sendTreasuryStellarUsdcPayment({

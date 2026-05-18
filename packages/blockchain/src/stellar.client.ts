@@ -1,5 +1,5 @@
 import { Horizon, Keypair } from '@stellar/stellar-sdk';
-import { getStellarConfig, type StellarNetwork } from '../src/chains/stellar.config';
+import { getStellarConfig, type StellarNetwork } from './chains/stellar.config';
 
 // Horizon is Stellar's REST API — used for submitting transactions
 // and querying account balances.

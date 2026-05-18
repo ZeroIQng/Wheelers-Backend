@@ -20,7 +20,7 @@ export {
 } from './chains/stellar.config';
 
 // EVM clients
-export { getPublicClient, getWalletClient, getPlatformAddress } from '../src/evm.client';
+export { getPublicClient, getWalletClient, getPlatformAddress } from './evm.client';
 
 // Solana client
 export { getSolanaConnection, getPlatformKeypair } from './solana.client';

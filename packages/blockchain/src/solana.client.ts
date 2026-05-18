@@ -1,5 +1,5 @@
 import { Connection, Keypair } from '@solana/web3.js';
-import { getSolanaRpcUrl }     from "../src/chains/solana.config";
+import { getSolanaRpcUrl }     from "./chains/solana.config";
 import bs58                    from 'bs58';
 
 let connection: Connection | null = null;

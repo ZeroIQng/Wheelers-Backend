@@ -54,7 +54,6 @@ import { asRawProducer, startOutboxPublisher } from "./outbox/outbox-publisher";
 import { GatewayPublisher } from "./websocket/publisher";
 import { SocketRegistry } from "./websocket/registry";
 import { createGatewayWebSocketServer } from "./websocket/server";
-import { hydrateProcessEnvWithStellarMasterWalletSecret } from "./treasury/master-wallet-secret";
 
 const SCHEDULED_RIDE_QUEUE = "wheleers-scheduled-rides";
 
@@ -141,8 +140,6 @@ async function bootstrap(): Promise<void> {
 
   const sharedEnv = validateSharedEnv();
   const gatewayEnv = validateGatewayEnv();
-
-  await hydrateProcessEnvWithStellarMasterWalletSecret(gatewayEnv);
 
   // BullMQ dispatcher queue.
   // Gateway only enqueues scheduled rides.
