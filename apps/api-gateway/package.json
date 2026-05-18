@@ -11,6 +11,8 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.1048.0",
+    "@wheleers/blockchain": "^0.0.1",
     "@wheleers/config": "0.0.1",
     "@wheleers/db": "0.0.1",
     "@wheleers/kafka-client": "0.0.1",

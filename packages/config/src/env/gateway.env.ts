@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 const GatewayEnvSchema = z.object({
   PORT:               z.string().default('3000'),
+  AWS_REGION:         z.string().min(1).optional(),
+  STELLAR_NETWORK:    z.enum(['mainnet', 'testnet']).default('mainnet'),
   JWT_SECRET:         z.string().min(32).optional(),
   PRIVY_APP_ID:       z.string().min(1),
   PRIVY_VERIFICATION_KEY: z.string().min(1),
@@ -18,6 +20,8 @@ const GatewayEnvSchema = z.object({
   POUCH_CRYPTO_NETWORK: z.string().min(1).default('XLM'),
   POUCH_CHAIN: z.string().min(1).default('XLM'),
   POUCH_MASTER_WALLET_ADDRESS: z.string().min(1),
+  STELLAR_MASTER_WALLET_SECRET_NAME: z.string().min(1).optional(),
+  STELLAR_SECRET_KEY: z.string().min(1).optional(),
   POUCH_WALLET_TAG: z.string().min(1).optional(),
   POUCH_TEST_EMAIL: z.string().email().optional(),
   POUCH_FULL_NAME: z.string().min(1).optional(),

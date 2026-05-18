@@ -27,6 +27,7 @@ export { getSolanaConnection, getPlatformKeypair } from './solana.client';
 
 // Stellar client
 export { getHorizonServer, getPlatformStellarKeypair } from './stellar.client';
+export { sendTreasuryStellarUsdcPayment } from './stellar-treasury';
 
 // Contracts
 export {

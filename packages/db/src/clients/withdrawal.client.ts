@@ -107,6 +107,49 @@ export const withdrawalClient = {
       },
     }),
 
+  recordTreasurySubmission: async (input: {
+    withdrawalRequestId: string;
+    transactionHash: string;
+    senderAddress: string;
+    destinationAddress: string;
+    amount: string;
+    assetCode: string;
+    assetIssuer: string;
+    network: string;
+  }) => {
+    const request = await prisma.withdrawalRequest.findUnique({
+      where: { id: input.withdrawalRequestId },
+      select: {
+        providerPayload: true,
+      },
+    });
+
+    const currentPayload =
+      request?.providerPayload && typeof request.providerPayload === 'object' && !Array.isArray(request.providerPayload)
+        ? (request.providerPayload as Record<string, unknown>)
+        : {};
+
+    return prisma.withdrawalRequest.update({
+      where: { id: input.withdrawalRequestId },
+      data: {
+        status: 'PROCESSING',
+        providerPayload: asJson({
+          ...currentPayload,
+          treasurySubmission: {
+            transactionHash: input.transactionHash,
+            senderAddress: input.senderAddress,
+            destinationAddress: input.destinationAddress,
+            amount: input.amount,
+            assetCode: input.assetCode,
+            assetIssuer: input.assetIssuer,
+            network: input.network,
+            submittedAt: new Date().toISOString(),
+          },
+        }),
+      },
+    });
+  },
+
   markProcessing: async (providerReference: string) =>
     prisma.withdrawalRequest.updateMany({
       where: {

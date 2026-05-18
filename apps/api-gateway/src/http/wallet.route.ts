@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "http";
+import { sendTreasuryStellarUsdcPayment } from "@wheleers/blockchain";
 import { paymentClient, walletClient, withdrawalClient } from "@wheleers/db";
 import { authenticateHttpUser } from "./authenticate";
 import { readJsonBody, sendJson } from "./utils";
@@ -36,6 +37,7 @@ interface WalletRouteDeps {
     cryptoNetwork: string;
     chain?: string;
     masterWalletAddress: string;
+    stellarNetwork?: "mainnet" | "testnet";
     testEmail?: string;
     userKycDefaults?: Record<string, string>;
   };
@@ -278,6 +280,22 @@ async function syncWithdrawalLifecycle(
   await withdrawalClient.markProcessing(providerReference);
 }
 
+function maskWalletAddress(value: string): string {
+  if (value.length <= 10) {
+    return value;
+  }
+
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function maskTransactionHash(value: string): string {
+  if (value.length <= 10) {
+    return value;
+  }
+
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
 export async function handleWalletOverviewRoute(
   req: IncomingMessage,
   res: ServerResponse,
@@ -324,6 +342,7 @@ export async function handleCreateWalletWithdrawalRoute(
   deps: WalletRouteDeps,
 ): Promise<void> {
   let reservedRequestId: string | undefined;
+  let treasurySubmitted = false;
 
   try {
     const user = await authenticateHttpUser(
@@ -422,6 +441,62 @@ export async function handleCreateWalletWithdrawalRoute(
     });
     await deps.publisher.publishPaymentEvent(createdEvent);
 
+    const treasuryDestinationAddress =
+      typeof response.cryptoInstruction?.walletAddress === "string"
+        ? response.cryptoInstruction.walletAddress.trim()
+        : "";
+    const treasuryCryptoAmount =
+      pickNumber(response, ["cryptoInstruction.cryptoAmount"]) ??
+      createdEvent.amountUsd;
+
+    if (!treasuryDestinationAddress) {
+      throw new Error("Pouch offramp did not return a Stellar destination address.");
+    }
+
+    if (payload.cryptoCurrency !== "USDC" || payload.cryptoNetwork !== "XLM") {
+      throw new Error(
+        `Automated treasury payout only supports USDC on XLM right now. Received ${payload.cryptoCurrency} on ${payload.cryptoNetwork}.`,
+      );
+    }
+
+    console.log("[api-gateway][wallet-withdrawal] sending treasury payout", {
+      withdrawalRequestId: reserveResult.request.id,
+      providerReference: createdEvent.providerReference,
+      destinationAddress: maskWalletAddress(treasuryDestinationAddress),
+      cryptoAmount: treasuryCryptoAmount,
+      cryptoCurrency: payload.cryptoCurrency,
+      cryptoNetwork: payload.cryptoNetwork,
+      stellarNetwork: deps.defaults.stellarNetwork ?? "mainnet",
+    });
+
+    const treasurySendResult = await sendTreasuryStellarUsdcPayment({
+      destinationAddress: treasuryDestinationAddress,
+      amount: treasuryCryptoAmount,
+      network: deps.defaults.stellarNetwork ?? "mainnet",
+    });
+    treasurySubmitted = true;
+
+    await withdrawalClient.recordTreasurySubmission({
+      withdrawalRequestId: reserveResult.request.id,
+      transactionHash: treasurySendResult.hash,
+      senderAddress: treasurySendResult.sourceAddress,
+      destinationAddress: treasurySendResult.destinationAddress,
+      amount: treasurySendResult.amount,
+      assetCode: treasurySendResult.assetCode,
+      assetIssuer: treasurySendResult.assetIssuer,
+      network: treasurySendResult.network,
+    });
+
+    console.log("[api-gateway][wallet-withdrawal] treasury payout submitted", {
+      withdrawalRequestId: reserveResult.request.id,
+      providerReference: createdEvent.providerReference,
+      transactionHash: maskTransactionHash(treasurySendResult.hash),
+      senderAddress: maskWalletAddress(treasurySendResult.sourceAddress),
+      destinationAddress: maskWalletAddress(treasurySendResult.destinationAddress),
+      amount: treasurySendResult.amount,
+      assetCode: treasurySendResult.assetCode,
+    });
+
     const createdRequest = await withdrawalClient.findById(reserveResult.request.id);
 
     sendJson(res, 200, {
@@ -431,7 +506,7 @@ export async function handleCreateWalletWithdrawalRoute(
       cryptoInstruction: response.cryptoInstruction,
     });
   } catch (error) {
-    if (reservedRequestId) {
+    if (reservedRequestId && !treasurySubmitted) {
       await withdrawalClient
         .releaseFailedRequest({
           withdrawalRequestId: reservedRequestId,
