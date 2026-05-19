@@ -35,6 +35,7 @@ import {
   handlePouchOfframpRoute,
   handlePouchOnrampRoute,
   handlePouchStatusRoute,
+  handlePouchWebhookRoute,
 } from "./http/pouch.route";
 import {
   handleCreateWalletWithdrawalRoute,
@@ -424,6 +425,20 @@ async function bootstrap(): Promise<void> {
 
       await handlePouchHealthRoute(req, res, {
         pouchClient,
+      });
+
+      return;
+    }
+
+    if (url.pathname === "/webhooks/pouchpay") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handlePouchWebhookRoute(req, res, {
+        publisher,
+        webhookSecret: gatewayEnv.POUCH_WEBHOOK_SECRET,
       });
 
       return;

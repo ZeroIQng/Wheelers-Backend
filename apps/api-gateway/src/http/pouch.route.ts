@@ -1,7 +1,13 @@
-import { randomInt } from 'node:crypto';
+import {
+  createHmac,
+  randomInt,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { paymentClient, userClient, withdrawalClient } from '@wheleers/db';
 import type { PaymentSessionType } from '@prisma/client';
+import type { InAppSendEvent } from '@wheleers/kafka-schemas';
 import type { RidePricingDisplayProvider } from '../pricing/display';
 import { verifyPrivyAccessToken } from '../auth/privy';
 import { isRecord, pickNumber, pickString } from '../utils/object';
@@ -19,7 +25,7 @@ import {
   type PouchOfframpPayload,
   type PouchOnrampPayload,
 } from './pouch.client';
-import { readJsonBody, sendJson } from './utils';
+import { parseJsonBuffer, readJsonBody, readRawBody, sendJson } from './utils';
 
 interface PouchRouteDeps {
   privyAppId: string;
@@ -45,6 +51,11 @@ interface PouchHealthRouteDeps {
   pouchClient: PouchClient;
 }
 
+interface PouchWebhookRouteDeps {
+  publisher: GatewayPublisher;
+  webhookSecret?: string;
+}
+
 export async function handlePouchHealthRoute(
   _req: IncomingMessage,
   res: ServerResponse,
@@ -56,6 +67,143 @@ export async function handlePouchHealthRoute(
     sendJson(res, 200, { provider: 'pouch', health });
   } catch (error) {
     sendPouchError(res, error, 'Failed to load Pouch health');
+  }
+}
+
+export async function handlePouchWebhookRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: PouchWebhookRouteDeps,
+): Promise<void> {
+  try {
+    if (!deps.webhookSecret) {
+      console.error('[api-gateway][pouch-webhook] secret not configured');
+      sendJson(res, 503, { error: 'POUCH_WEBHOOK_SECRET is not configured' });
+      return;
+    }
+
+    const rawBody = await readRawBody(req);
+    const signature = getWebhookSignature(req);
+
+    if (!signature) {
+      console.warn('[api-gateway][pouch-webhook] missing signature header');
+      sendJson(res, 401, { error: 'Missing webhook signature' });
+      return;
+    }
+
+    if (!isValidWebhookSignature(rawBody, signature, deps.webhookSecret)) {
+      console.warn('[api-gateway][pouch-webhook] invalid signature');
+      sendJson(res, 401, { error: 'Invalid webhook signature' });
+      return;
+    }
+
+    const parsedBody = parseJsonBuffer(rawBody);
+    if (!isRecord(parsedBody)) {
+      sendJson(res, 400, { error: 'Webhook body must be a JSON object' });
+      return;
+    }
+
+    const eventName = extractWebhookEventName(parsedBody);
+    const payload = unwrapWebhookPayload(parsedBody);
+    const providerReference = pickString(payload, [
+      'providerRef',
+      'reference',
+      'details.reference',
+      'paymentInstruction.reference',
+      'cryptoInstruction.reference',
+      'transaction.reference',
+      'data.providerRef',
+      'data.reference',
+    ]);
+
+    console.log('[api-gateway][pouch-webhook] received', {
+      eventName: eventName ?? null,
+      providerReference: providerReference ?? null,
+    });
+
+    if (!eventName) {
+      sendJson(res, 202, {
+        received: true,
+        processed: false,
+        ignored: 'Missing event name',
+      });
+      return;
+    }
+
+    if (!providerReference) {
+      sendJson(res, 202, {
+        received: true,
+        processed: false,
+        ignored: 'Missing provider reference',
+        eventName,
+      });
+      return;
+    }
+
+    const intent = await paymentClient.findPaymentIntentByProviderReference(providerReference);
+    if (!intent) {
+      console.warn('[api-gateway][pouch-webhook] payment intent not found', {
+        eventName,
+        providerReference,
+      });
+      sendJson(res, 202, {
+        received: true,
+        processed: false,
+        ignored: 'Payment intent not found',
+        eventName,
+        providerReference,
+      });
+      return;
+    }
+
+    const enrichedPayload = enrichWebhookPayloadForIntent(payload, eventName, intent.sessionType);
+
+    let paymentEventPublished = false;
+    let notificationPublished = false;
+
+    if (shouldSyncPaymentIntentFromWebhook(eventName)) {
+      const syncedEvent = normalizePouchTransactionStatus({
+        payload: enrichedPayload,
+        intent,
+      });
+
+      if (syncedEvent) {
+        const isDuplicate =
+          intent.providerStatus.trim().toUpperCase() === syncedEvent.status.trim().toUpperCase() &&
+          (intent.settlementReference ?? null) === (syncedEvent.settlementReference ?? null);
+
+        if (!isDuplicate) {
+          await paymentClient.upsertPaymentIntent(
+            buildPaymentIntentUpsertFromEvent(syncedEvent, payload),
+          );
+          if (intent.sessionType === 'OFFRAMP') {
+            await syncWithdrawalLifecycleFromStatus(providerReference, enrichedPayload);
+          }
+          await deps.publisher.publishPaymentEvent(syncedEvent);
+          paymentEventPublished = true;
+        }
+      }
+    }
+
+    const notification = buildWebhookNotification(intent, eventName, providerReference);
+    if (notification) {
+      await deps.publisher.publishNotificationEvent(notification);
+      notificationPublished = true;
+    }
+
+    sendJson(res, 200, {
+      received: true,
+      processed: paymentEventPublished || notificationPublished,
+      eventName,
+      providerReference,
+      paymentEventPublished,
+      notificationPublished,
+    });
+  } catch (error) {
+    console.error('[api-gateway][pouch-webhook] route error', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    sendJson(res, 500, { error: 'Failed to process Pouch webhook' });
   }
 }
 
@@ -324,6 +472,210 @@ async function syncWithdrawalLifecycleFromStatus(
   }
 
   await withdrawalClient.markProcessing(providerReference).catch(() => null);
+}
+
+function getWebhookSignature(req: IncomingMessage): string | null {
+  const header = req.headers['x-webhook-signature'];
+  if (typeof header === 'string' && header.trim().length > 0) {
+    return header.trim();
+  }
+
+  if (Array.isArray(header)) {
+    const first = header.find((value) => typeof value === 'string' && value.trim().length > 0);
+    return first?.trim() ?? null;
+  }
+
+  return null;
+}
+
+function isValidWebhookSignature(
+  rawBody: Buffer,
+  signatureHeader: string,
+  secret: string,
+): boolean {
+  const expectedHex = createHmac('sha256', secret).update(rawBody).digest('hex');
+  const normalizedSignature = signatureHeader.startsWith('sha256=')
+    ? signatureHeader.slice('sha256='.length)
+    : signatureHeader;
+
+  try {
+    const provided = Buffer.from(normalizedSignature, 'hex');
+    const expected = Buffer.from(expectedHex, 'hex');
+
+    if (provided.length !== expected.length) {
+      return false;
+    }
+
+    return timingSafeEqual(provided, expected);
+  } catch {
+    return false;
+  }
+}
+
+function extractWebhookEventName(payload: Record<string, unknown>): string | null {
+  return (
+    pickString(payload, ['event', 'eventType', 'name']) ??
+    pickString(payload, ['data.event', 'data.eventType', 'payload.event', 'payload.eventType']) ??
+    null
+  );
+}
+
+function unwrapWebhookPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const nested =
+    (isRecord(payload['data']) && payload['data']) ||
+    (isRecord(payload['payload']) && payload['payload']) ||
+    (isRecord(payload['session']) && payload['session']) ||
+    (isRecord(payload['transaction']) && payload['transaction']) ||
+    (isRecord(payload['details']) && payload['details']);
+
+  if (!nested) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    ...nested,
+  };
+}
+
+function shouldSyncPaymentIntentFromWebhook(eventName: string): boolean {
+  const normalized = eventName.trim().toLowerCase();
+  return (
+    normalized === 'session.created' ||
+    normalized === 'session.completed' ||
+    normalized === 'session.failed' ||
+    normalized === 'session.expired' ||
+    normalized === 'transaction.pending' ||
+    normalized === 'transaction.completed' ||
+    normalized === 'transaction.failed'
+  );
+}
+
+function inferWebhookStatus(eventName: string): string | undefined {
+  const normalized = eventName.trim().toLowerCase();
+
+  switch (normalized) {
+    case 'session.created':
+      return 'CREATED';
+    case 'session.completed':
+    case 'transaction.completed':
+      return 'COMPLETED';
+    case 'session.failed':
+    case 'transaction.failed':
+      return 'FAILED';
+    case 'session.expired':
+      return 'EXPIRED';
+    case 'transaction.pending':
+      return 'PENDING';
+    case 'kyc.completed':
+      return 'KYC_COMPLETED';
+    case 'kyc.failed':
+      return 'KYC_FAILED';
+    default:
+      return undefined;
+  }
+}
+
+function inferWebhookSessionType(
+  payload: Record<string, unknown>,
+  fallback: PaymentSessionType,
+): PaymentSessionType {
+  const sessionType = pickString(payload, ['type', 'sessionType'])?.trim().toUpperCase();
+  return sessionType === 'OFFRAMP' ? 'OFFRAMP' : sessionType === 'ONRAMP' ? 'ONRAMP' : fallback;
+}
+
+function enrichWebhookPayloadForIntent(
+  payload: Record<string, unknown>,
+  eventName: string,
+  fallbackType: PaymentSessionType,
+): Record<string, unknown> {
+  const inferredStatus = inferWebhookStatus(eventName);
+  const normalizedType = inferWebhookSessionType(payload, fallbackType);
+
+  return {
+    ...payload,
+    status: pickString(payload, ['status', 'transaction.status']) ?? inferredStatus,
+    type: normalizedType,
+    providerRef:
+      pickString(payload, [
+        'providerRef',
+        'reference',
+        'paymentInstruction.reference',
+        'cryptoInstruction.reference',
+        'transaction.reference',
+      ]) ?? undefined,
+  };
+}
+
+function buildWebhookNotification(
+  intent: NonNullable<Awaited<ReturnType<typeof paymentClient.findPaymentIntentByProviderReference>>>,
+  eventName: string,
+  _providerReference: string,
+): InAppSendEvent | null {
+  const normalized = eventName.trim().toLowerCase();
+  const isOnramp = intent.sessionType === 'ONRAMP';
+
+  let title: string | null = null;
+  let body: string | null = null;
+  let category: InAppSendEvent['category'] = 'payment';
+
+  switch (normalized) {
+    case 'transaction.pending':
+      title = isOnramp ? 'Deposit processing' : 'Withdrawal processing';
+      body = isOnramp
+        ? 'Your deposit is being processed by Pouch.'
+        : 'Your withdrawal is being processed by Pouch.';
+      category = isOnramp ? 'payment' : 'wallet';
+      break;
+    case 'transaction.completed':
+    case 'session.completed':
+      title = isOnramp ? 'Deposit completed' : 'Withdrawal completed';
+      body = isOnramp
+        ? 'Your deposit has completed successfully.'
+        : 'Your withdrawal has completed successfully.';
+      category = isOnramp ? 'payment' : 'wallet';
+      break;
+    case 'transaction.failed':
+    case 'session.failed':
+      title = isOnramp ? 'Deposit failed' : 'Withdrawal failed';
+      body = isOnramp
+        ? 'Your deposit failed. Please try again.'
+        : 'Your withdrawal failed. Please try again.';
+      category = isOnramp ? 'payment' : 'wallet';
+      break;
+    case 'session.expired':
+      title = isOnramp ? 'Deposit expired' : 'Withdrawal expired';
+      body = isOnramp
+        ? 'Your deposit session expired before completion.'
+        : 'Your withdrawal session expired before completion.';
+      category = isOnramp ? 'payment' : 'wallet';
+      break;
+    case 'kyc.completed':
+      title = 'KYC completed';
+      body = 'Your Pouch KYC verification completed successfully.';
+      category = 'kyc';
+      break;
+    case 'kyc.failed':
+      title = 'KYC failed';
+      body = 'Your Pouch KYC verification failed. Please review your details.';
+      category = 'kyc';
+      break;
+    default:
+      return null;
+  }
+
+  return {
+    eventType: 'IN_APP_SEND',
+    notificationId: randomUUID(),
+    userId: intent.userId,
+    title,
+    body,
+    category,
+    referenceId: intent.paymentId,
+    referenceType: 'payment',
+    read: false,
+    timestamp: new Date().toISOString(),
+  };
 }
 
 async function authenticateHttpUser(

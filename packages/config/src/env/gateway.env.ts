@@ -13,6 +13,7 @@ const GatewayEnvSchema = z.object({
   TWILIO_OTP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   POUCH_API_KEY:      z.string().min(1),
   POUCH_BASE_URL:     z.string().url().default('https://api.pouch.finance'),
+  POUCH_WEBHOOK_SECRET: z.string().min(1).optional(),
   POUCH_PROVIDER_ID:  z.string().min(1).default('yellowcard'),
   POUCH_COUNTRY_CODE: z.string().length(2).default('NG'),
   POUCH_FIAT_CURRENCY: z.string().min(3).default('NGN'),

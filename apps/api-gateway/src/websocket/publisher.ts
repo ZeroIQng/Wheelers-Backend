@@ -4,6 +4,7 @@ import {
   type ComplianceEvent,
   type DriverEvent,
   type GpsUpdateEvent,
+  type NotificationEvent,
   type PaymentEvent,
   type RideEvent,
   type UserEvent,
@@ -26,6 +27,10 @@ export class GatewayPublisher {
 
   async publishPaymentEvent(event: PaymentEvent): Promise<void> {
     await this.producer.send(TOPICS.PAYMENT_EVENTS, event, { key: event.userId });
+  }
+
+  async publishNotificationEvent(event: NotificationEvent): Promise<void> {
+    await this.producer.send(TOPICS.NOTIFICATION_EVENTS, event, { key: event.userId });
   }
 
   async publishGpsEvent(event: GpsUpdateEvent): Promise<void> {
