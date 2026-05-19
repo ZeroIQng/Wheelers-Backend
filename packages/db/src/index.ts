@@ -10,6 +10,7 @@ export { outboxClient }     from './clients/outbox.client';
 export { paymentClient }    from './clients/payment.client';
 export { walletClient }     from './clients/wallet.client';
 export { withdrawalClient } from './clients/withdrawal.client';
+export { groupRideClient }  from './clients/group-ride.client';
 export { complianceClient } from './clients/compliance.client';
 export { defiClient }       from './clients/defi.client';
 
@@ -35,6 +36,8 @@ export type {
   Notification,
   WalletReservation,
   WithdrawalRequest,
+  GroupRideMatchRequest,
+  GroupRideFaceVerification,
   Prisma,
 } from '@prisma/client';
 
@@ -58,6 +61,8 @@ export {
   WalletReservationKind,
   WalletReservationStatus,
   WithdrawalRequestStatus,
+  GroupRideMatchRequestStatus,
+  GroupRideFaceVerificationStatus,
   RideHoldStatus,
   RideStopStatus,
   RideStopType,

@@ -34,6 +34,9 @@ const GatewayEnvSchema = z.object({
   COINGECKO_BASE_URL: z.string().url().default('https://api.coingecko.com/api/v3'),
   GOOGLE_MAPS_API_KEY: z.string().min(1),
   GOOGLE_MAPS_BASE_URL: z.string().url().default('https://routes.googleapis.com'),
+  GROUP_RIDE_FACE_S3_BUCKET: z.string().min(1).optional(),
+  GROUP_RIDE_FACE_S3_PREFIX: z.string().min(1).default('group-rides/face-verification'),
+  GROUP_RIDE_FACE_UPLOAD_URL_TTL_S: z.coerce.number().int().positive().default(900),
   // Rider-facing fare display only. Internal ride settlement remains in USDT.
   RIDE_DISPLAY_NGN_PER_USDT_FALLBACK: z.coerce.number().positive().default(1600),
   RIDE_DISPLAY_RATE_TTL_MS: z.coerce.number().int().positive().default(60000),

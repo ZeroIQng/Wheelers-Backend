@@ -25,6 +25,8 @@ model User {
   wallet        Wallet?
   walletReservations WalletReservation[]
   withdrawalRequests WithdrawalRequest[]
+  groupRideMatchRequests GroupRideMatchRequest[]
+  groupRideFaceVerifications GroupRideFaceVerification[]
 
   @@index([privyDid])
   @@index([walletAddress])
@@ -260,6 +262,60 @@ model WithdrawalRequest {
 
   @@index([userId, status, createdAt])
   @@index([walletId, status, createdAt])
+}
+
+model GroupRideMatchRequest {
+  id                     String                      @id @default(uuid())
+  userId                 String
+  status                 GroupRideMatchRequestStatus @default(PENDING_FACE_UPLOAD)
+  pickupLat              Float
+  pickupLng              Float
+  pickupAddress          String
+  destLat                Float
+  destLng                Float
+  destAddress            String
+  stops                  Json?
+  plannedDistanceKm      Float?
+  plannedDurationSeconds Int?
+  fareEstimateUsdt       Decimal?                    @db.Decimal(18, 6)
+  paymentMethod          ScheduledRidePaymentMethod  @default(WALLET_BALANCE)
+  readyForMatchAt        DateTime?
+  matchingStartedAt      DateTime?
+  groupedAt              DateTime?
+  bookedAt               DateTime?
+  expiredAt              DateTime?
+  cancelledAt            DateTime?
+  cancelReason           String?
+  createdAt              DateTime                    @default(now())
+  updatedAt              DateTime                    @updatedAt
+  user                   User                        @relation(fields: [userId], references: [id])
+  faceVerification       GroupRideFaceVerification?
+
+  @@index([userId, status, createdAt])
+  @@index([status, updatedAt])
+}
+
+model GroupRideFaceVerification {
+  id             String                           @id @default(uuid())
+  matchRequestId String                           @unique
+  userId         String
+  bucket         String
+  objectKey      String
+  mimeType       String
+  sizeBytes      Int?
+  etag           String?
+  uploadStatus   GroupRideFaceVerificationStatus  @default(UPLOADING)
+  capturedAt     DateTime?
+  storedAt       DateTime?
+  failedAt       DateTime?
+  failureReason  String?
+  createdAt      DateTime                         @default(now())
+  updatedAt      DateTime                         @updatedAt
+  matchRequest   GroupRideMatchRequest            @relation(fields: [matchRequestId], references: [id], onDelete: Cascade)
+  user           User                             @relation(fields: [userId], references: [id])
+
+  @@unique([bucket, objectKey])
+  @@index([userId, uploadStatus, createdAt])
 }
 
 model Ride {
@@ -549,6 +605,22 @@ enum WithdrawalRequestStatus {
   FAILED
   EXPIRED
   CANCELLED
+}
+
+enum GroupRideMatchRequestStatus {
+  PENDING_FACE_UPLOAD
+  READY_FOR_MATCH
+  MATCHING
+  GROUPED
+  BOOKED
+  EXPIRED
+  CANCELLED
+}
+
+enum GroupRideFaceVerificationStatus {
+  UPLOADING
+  STORED
+  FAILED
 }
 
 enum DefiTier {
