@@ -1,7 +1,7 @@
 import type {
   GroupRideCandidatesIdentifiedEvent,
+  GroupRideReadyForMatchEvent,
   GroupRidePlannedEvent,
-  RideRequestedEvent,
 } from '@wheleers/kafka-schemas';
 
 export type LatLng = {
@@ -21,7 +21,7 @@ export type GroupRideRequest = {
   headingDeg: number;
   fareEstimateUsdt: number;
   requestedAt: string;
-  sourceEvent: RideRequestedEvent;
+  sourceEvent: GroupRideReadyForMatchEvent;
 };
 
 export type CompatibleRideCandidate = {

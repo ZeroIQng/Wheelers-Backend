@@ -1,3 +1,4 @@
+import { groupRideClient } from '@wheleers/db';
 import {
   buildTopicList,
   createConsumer,
@@ -58,17 +59,58 @@ async function bootstrap(): Promise<void> {
     state: createGroupRideState(),
   });
 
+  const readyRequests = await groupRideClient.findReadyRequests().catch(() => []);
+  for (const request of readyRequests) {
+    await planner.seedRequest({
+      rideId: request.id,
+      riderId: request.userId,
+      pickup: {
+        lat: request.pickupLat,
+        lng: request.pickupLng,
+        address: request.pickupAddress,
+      },
+      destination: {
+        lat: request.destLat,
+        lng: request.destLng,
+        address: request.destAddress,
+      },
+      headingDeg: 0,
+      fareEstimateUsdt: Number(request.fareEstimateUsdt ?? 0),
+      requestedAt: (request.readyForMatchAt ?? request.createdAt).toISOString(),
+      sourceEvent: {
+        eventType: 'GROUP_RIDE_READY_FOR_MATCH',
+        rideId: request.id,
+        riderId: request.userId,
+        faceVerificationId: request.faceVerification?.id ?? '',
+        pickup: {
+          lat: request.pickupLat,
+          lng: request.pickupLng,
+          address: request.pickupAddress,
+        },
+        destination: {
+          lat: request.destLat,
+          lng: request.destLng,
+          address: request.destAddress,
+        },
+        stops: Array.isArray(request.stops) ? (request.stops as any) : [],
+        plannedDistanceKm: request.plannedDistanceKm ?? undefined,
+        plannedDurationSeconds: request.plannedDurationSeconds ?? undefined,
+        fareEstimateUsdt: Number(request.fareEstimateUsdt ?? 0),
+        paymentMethod:
+          request.paymentMethod === 'SMART_ACCOUNT'
+            ? 'smart_account'
+            : 'wallet_balance',
+        timestamp: (request.readyForMatchAt ?? request.createdAt).toISOString(),
+      },
+    });
+  }
+
   await consumer.subscribe(
     [TOPICS.RIDE_EVENTS, TOPICS.GROUP_RIDE_EVENTS],
     async (value, ctx) => {
       if (ctx.topic === TOPICS.RIDE_EVENTS) {
         const event = safeParseKafkaEvent(TOPICS.RIDE_EVENTS, value);
         if (!event) {
-          return;
-        }
-
-        if (event.eventType === 'RIDE_REQUESTED') {
-          await planner.handleRideRequested(event);
           return;
         }
 
@@ -84,6 +126,11 @@ async function bootstrap(): Promise<void> {
 
       const event = safeParseKafkaEvent(TOPICS.GROUP_RIDE_EVENTS, value);
       if (!event) {
+        return;
+      }
+
+      if (event.eventType === 'GROUP_RIDE_READY_FOR_MATCH') {
+        await planner.handleRideReadyForMatch(event);
         return;
       }
 

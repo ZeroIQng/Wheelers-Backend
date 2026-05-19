@@ -26,6 +26,21 @@ const BaseGroupRideEvent = z.object({
   timestamp: z.string().datetime(),
 });
 
+export const GroupRideReadyForMatchEvent = z.object({
+  eventType: z.literal('GROUP_RIDE_READY_FOR_MATCH'),
+  rideId: z.string().uuid(),
+  riderId: z.string().uuid(),
+  faceVerificationId: z.string().uuid(),
+  pickup: LatLng,
+  destination: LatLng,
+  stops: z.array(LatLng).max(5).default([]),
+  plannedDistanceKm: z.number().optional(),
+  plannedDurationSeconds: z.number().int().optional(),
+  fareEstimateUsdt: z.number().optional(),
+  paymentMethod: z.enum(['wallet_balance', 'smart_account']),
+  timestamp: z.string().datetime(),
+});
+
 const GroupRideMember = z.object({
   rideId: z.string().uuid(),
   riderId: z.string().uuid(),
@@ -83,11 +98,13 @@ export const GroupRideRouteBuiltEvent = BaseGroupRideEvent.extend({
 });
 
 export const GroupRideEvent = z.discriminatedUnion('eventType', [
+  GroupRideReadyForMatchEvent,
   GroupRideCandidatesIdentifiedEvent,
   GroupRidePlannedEvent,
   GroupRideRouteBuiltEvent,
 ]);
 
+export type GroupRideReadyForMatchEvent = z.infer<typeof GroupRideReadyForMatchEvent>;
 export type GroupRideCandidatesIdentifiedEvent = z.infer<typeof GroupRideCandidatesIdentifiedEvent>;
 export type GroupRidePlannedEvent = z.infer<typeof GroupRidePlannedEvent>;
 export type GroupRideRouteBuiltEvent = z.infer<typeof GroupRideRouteBuiltEvent>;

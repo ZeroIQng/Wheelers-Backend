@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { groupRideClient } from '@wheleers/db';
 import type { GoogleMapsRoutePlanner, GroupRideEnv } from '@wheleers/config';
 import type {
   GroupRideCandidatesIdentifiedEvent,
   GroupRideEvent,
-  RideRequestedEvent,
+  GroupRideReadyForMatchEvent,
 } from '@wheleers/kafka-schemas';
 
 import { bearingDegrees } from '../algorithms/geo';
@@ -21,74 +22,39 @@ export function createGroupRidePlanner(params: {
   groupRideEventsProducer: GroupRideEventsProducer;
   state: GroupRideState;
 }): {
-  handleRideRequested(event: RideRequestedEvent): Promise<void>;
+  handleRideReadyForMatch(event: GroupRideReadyForMatchEvent): Promise<void>;
   handleGroupRideEvent(event: GroupRideEvent): Promise<void>;
+  seedRequest(request: GroupRideRequest): Promise<void>;
   releaseRide(rideId: string): void;
 } {
   return {
-    async handleRideRequested(event) {
+    async handleRideReadyForMatch(event) {
       pruneExpiredRequests(params.state, params.env);
 
       if (params.state.assignedRideIds.has(event.rideId)) {
         return;
       }
 
-      const request = mapRideRequestedEvent(event);
-      params.state.pendingRequestsByRideId.set(request.rideId, request);
+      const request = mapReadyForMatchEvent(event);
+      await enqueueReadyRequest(request);
+    },
 
-      const candidates = findNearestRouteCandidates(
-        request,
-        params.state.pendingRequestsByRideId.values(),
-        params.env,
-      );
-      const group = buildNearestRouteGroup({
-        anchor: request,
-        candidates,
-        env: params.env,
-      });
+    async seedRequest(request) {
+      pruneExpiredRequests(params.state, params.env);
 
-      if (group.length < 2) {
+      if (params.state.assignedRideIds.has(request.rideId)) {
         return;
       }
 
-      const fingerprint = buildGroupFingerprint(group.map((member) => member.rideId));
-      if (params.state.emittedCandidateFingerprints.has(fingerprint)) {
-        return;
-      }
-
-      params.state.emittedCandidateFingerprints.add(fingerprint);
-
-      const candidateEvent: GroupRideCandidatesIdentifiedEvent = {
-        eventType: 'GROUP_RIDE_CANDIDATES_IDENTIFIED',
-        groupId: randomUUID(),
-        anchorRideId: request.rideId,
-        rideIds: group.map((member) => member.rideId),
-        members: group.map((member) => ({
-          rideId: member.rideId,
-          riderId: member.riderId,
-          pickup: member.pickup,
-          destination: member.destination,
-          headingDeg: member.headingDeg,
-          compatibilityScore:
-            member.rideId === request.rideId
-              ? 1
-              : candidates.find((candidate) => candidate.request.rideId === member.rideId)
-                  ?.score ?? 0.5,
-        })),
-        searchRadiusKm: params.env.GROUP_RIDE_PICKUP_RADIUS_KM,
-        maxBearingDeltaDeg: params.env.GROUP_RIDE_BEARING_THRESHOLD_DEG,
-        timestamp: new Date().toISOString(),
-      };
-
-      try {
-        await params.groupRideEventsProducer.candidatesIdentified(candidateEvent);
-      } catch (error) {
-        params.state.emittedCandidateFingerprints.delete(fingerprint);
-        throw error;
-      }
+      await enqueueReadyRequest(request);
     },
 
     async handleGroupRideEvent(event) {
+      if (event.eventType === 'GROUP_RIDE_READY_FOR_MATCH') {
+        await this.handleRideReadyForMatch(event);
+        return;
+      }
+
       if (event.eventType === 'GROUP_RIDE_CANDIDATES_IDENTIFIED') {
         const members = event.members
           .map((member) => params.state.pendingRequestsByRideId.get(member.rideId))
@@ -115,6 +81,12 @@ export function createGroupRidePlanner(params: {
           sequenceAlgorithm: sequence.algorithm,
           timestamp: new Date().toISOString(),
         });
+
+        await Promise.all(
+          members.map((member) =>
+            groupRideClient.updateMatchRequestStatus(member.rideId, 'GROUPED').catch(() => null),
+          ),
+        );
 
         for (const member of members) {
           params.state.assignedRideIds.add(member.rideId);
@@ -143,6 +115,12 @@ export function createGroupRidePlanner(params: {
           routeAlgorithm: 'google_routes_segments',
           timestamp: new Date().toISOString(),
         });
+
+        await Promise.all(
+          event.rideIds.map((rideId) =>
+            groupRideClient.updateMatchRequestStatus(rideId, 'BOOKED').catch(() => null),
+          ),
+        );
         return;
       }
 
@@ -160,16 +138,72 @@ export function createGroupRidePlanner(params: {
       params.state.assignedRideIds.delete(rideId);
     },
   };
+
+  async function enqueueReadyRequest(request: GroupRideRequest): Promise<void> {
+    params.state.pendingRequestsByRideId.set(request.rideId, request);
+    await groupRideClient.updateMatchRequestStatus(request.rideId, 'MATCHING').catch(() => null);
+
+    const candidates = findNearestRouteCandidates(
+      request,
+      params.state.pendingRequestsByRideId.values(),
+      params.env,
+    );
+    const group = buildNearestRouteGroup({
+      anchor: request,
+      candidates,
+      env: params.env,
+    });
+
+    if (group.length < 2) {
+      return;
+    }
+
+    const fingerprint = buildGroupFingerprint(group.map((member) => member.rideId));
+    if (params.state.emittedCandidateFingerprints.has(fingerprint)) {
+      return;
+    }
+
+    params.state.emittedCandidateFingerprints.add(fingerprint);
+
+    const candidateEvent: GroupRideCandidatesIdentifiedEvent = {
+      eventType: 'GROUP_RIDE_CANDIDATES_IDENTIFIED',
+      groupId: randomUUID(),
+      anchorRideId: request.rideId,
+      rideIds: group.map((member) => member.rideId),
+      members: group.map((member) => ({
+        rideId: member.rideId,
+        riderId: member.riderId,
+        pickup: member.pickup,
+        destination: member.destination,
+        headingDeg: member.headingDeg,
+        compatibilityScore:
+          member.rideId === request.rideId
+            ? 1
+            : candidates.find((candidate) => candidate.request.rideId === member.rideId)
+                ?.score ?? 0.5,
+      })),
+      searchRadiusKm: params.env.GROUP_RIDE_PICKUP_RADIUS_KM,
+      maxBearingDeltaDeg: params.env.GROUP_RIDE_BEARING_THRESHOLD_DEG,
+      timestamp: new Date().toISOString(),
+    };
+
+    try {
+      await params.groupRideEventsProducer.candidatesIdentified(candidateEvent);
+    } catch (error) {
+      params.state.emittedCandidateFingerprints.delete(fingerprint);
+      throw error;
+    }
+  }
 }
 
-function mapRideRequestedEvent(event: RideRequestedEvent): GroupRideRequest {
+function mapReadyForMatchEvent(event: GroupRideReadyForMatchEvent): GroupRideRequest {
   return {
     rideId: event.rideId,
     riderId: event.riderId,
     pickup: event.pickup,
     destination: event.destination,
     headingDeg: bearingDegrees(event.pickup, event.destination),
-    fareEstimateUsdt: event.fareEstimateUsdt,
+    fareEstimateUsdt: event.fareEstimateUsdt ?? 0,
     requestedAt: event.timestamp,
     sourceEvent: event,
   };
