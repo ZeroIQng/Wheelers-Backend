@@ -55,6 +55,11 @@ export function createGroupRidePlanner(params: {
         return;
       }
 
+      if (event.eventType === 'GROUP_RIDE_MATCH_CANCELLED') {
+        this.releaseRide(event.rideId);
+        return;
+      }
+
       if (event.eventType === 'GROUP_RIDE_CANDIDATES_IDENTIFIED') {
         const members = event.members
           .map((member) => params.state.pendingRequestsByRideId.get(member.rideId))
@@ -217,6 +222,7 @@ function pruneExpiredRequests(state: GroupRideState, env: GroupRideEnv): void {
     if (!Number.isFinite(requestedAt) || requestedAt < expiresBefore) {
       state.pendingRequestsByRideId.delete(rideId);
       state.assignedRideIds.delete(rideId);
+      void groupRideClient.updateMatchRequestStatus(rideId, 'EXPIRED').catch(() => null);
     }
   }
 }

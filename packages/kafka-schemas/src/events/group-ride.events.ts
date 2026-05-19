@@ -41,6 +41,14 @@ export const GroupRideReadyForMatchEvent = z.object({
   timestamp: z.string().datetime(),
 });
 
+export const GroupRideMatchCancelledEvent = z.object({
+  eventType: z.literal('GROUP_RIDE_MATCH_CANCELLED'),
+  rideId: z.string().uuid(),
+  riderId: z.string().uuid(),
+  reason: z.string().optional(),
+  timestamp: z.string().datetime(),
+});
+
 const GroupRideMember = z.object({
   rideId: z.string().uuid(),
   riderId: z.string().uuid(),
@@ -99,12 +107,14 @@ export const GroupRideRouteBuiltEvent = BaseGroupRideEvent.extend({
 
 export const GroupRideEvent = z.discriminatedUnion('eventType', [
   GroupRideReadyForMatchEvent,
+  GroupRideMatchCancelledEvent,
   GroupRideCandidatesIdentifiedEvent,
   GroupRidePlannedEvent,
   GroupRideRouteBuiltEvent,
 ]);
 
 export type GroupRideReadyForMatchEvent = z.infer<typeof GroupRideReadyForMatchEvent>;
+export type GroupRideMatchCancelledEvent = z.infer<typeof GroupRideMatchCancelledEvent>;
 export type GroupRideCandidatesIdentifiedEvent = z.infer<typeof GroupRideCandidatesIdentifiedEvent>;
 export type GroupRidePlannedEvent = z.infer<typeof GroupRidePlannedEvent>;
 export type GroupRideRouteBuiltEvent = z.infer<typeof GroupRideRouteBuiltEvent>;

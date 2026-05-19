@@ -21,6 +21,7 @@ import {
 import { createGroupRidePlanner } from './planner/group-ride.planner';
 import { createGroupRideEventsProducer } from './producers/group-ride-events.producer';
 import { createGroupRideState } from './state';
+import { bearingDegrees } from './algorithms/geo';
 
 const SERVICE_ID = 'group-ride';
 
@@ -74,7 +75,10 @@ async function bootstrap(): Promise<void> {
         lng: request.destLng,
         address: request.destAddress,
       },
-      headingDeg: 0,
+      headingDeg: bearingDegrees(
+        { lat: request.pickupLat, lng: request.pickupLng },
+        { lat: request.destLat, lng: request.destLng },
+      ),
       fareEstimateUsdt: Number(request.fareEstimateUsdt ?? 0),
       requestedAt: (request.readyForMatchAt ?? request.createdAt).toISOString(),
       sourceEvent: {
@@ -131,6 +135,11 @@ async function bootstrap(): Promise<void> {
 
       if (event.eventType === 'GROUP_RIDE_READY_FOR_MATCH') {
         await planner.handleRideReadyForMatch(event);
+        return;
+      }
+
+      if (event.eventType === 'GROUP_RIDE_MATCH_CANCELLED') {
+        planner.releaseRide(event.rideId);
         return;
       }
 

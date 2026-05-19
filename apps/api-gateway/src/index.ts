@@ -31,6 +31,14 @@ import {
   handleRiderRideHistoryRoute,
 } from "./http/ride.route";
 import {
+  handleCancelGroupRideMatchRequestRoute,
+  handleCompleteGroupRideFaceUploadRoute,
+  handleCreateGroupRideFaceUploadUrlRoute,
+  handleCreateGroupRideMatchRequestRoute,
+  handleGetGroupRideMatchRequestRoute,
+  handleListGroupRideMatchRequestsRoute,
+} from "./http/group-ride.route";
+import {
   handlePouchHealthRoute,
   handlePouchOfframpRoute,
   handlePouchOnrampRoute,
@@ -59,6 +67,7 @@ import { asRawProducer, startOutboxPublisher } from "./outbox/outbox-publisher";
 import { GatewayPublisher } from "./websocket/publisher";
 import { SocketRegistry } from "./websocket/registry";
 import { createGatewayWebSocketServer } from "./websocket/server";
+import { GroupRideFaceStorage } from "./storage/group-ride-face-storage";
 
 const SCHEDULED_RIDE_QUEUE = "wheleers-scheduled-rides";
 
@@ -215,6 +224,16 @@ async function bootstrap(): Promise<void> {
     gatewayEnv.GOOGLE_MAPS_API_KEY,
   );
 
+  const groupRideFaceStorage =
+    gatewayEnv.AWS_REGION && gatewayEnv.GROUP_RIDE_FACE_S3_BUCKET
+      ? new GroupRideFaceStorage({
+          region: gatewayEnv.AWS_REGION,
+          bucket: gatewayEnv.GROUP_RIDE_FACE_S3_BUCKET,
+          prefix: gatewayEnv.GROUP_RIDE_FACE_S3_PREFIX,
+          uploadUrlTtlSeconds: gatewayEnv.GROUP_RIDE_FACE_UPLOAD_URL_TTL_S,
+        })
+      : undefined;
+
   const ridePricingDisplayProvider = new CoinGeckoRidePricingDisplayProvider(
     gatewayEnv.COINGECKO_BASE_URL,
     gatewayEnv.RIDE_DISPLAY_RATE_TTL_MS,
@@ -241,6 +260,14 @@ async function bootstrap(): Promise<void> {
     ridePricingDisplayProvider,
     dispatcherQueue,
     leadTimeMs,
+  };
+
+  const groupRideDeps = {
+    privyAppId: gatewayEnv.PRIVY_APP_ID,
+    privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+    routePlanner,
+    publisher,
+    faceStorage: groupRideFaceStorage,
   };
 
   const server = createServer(async (req, res) => {
@@ -414,6 +441,96 @@ async function bootstrap(): Promise<void> {
         decodeURIComponent(scheduledRideMatch[1]),
       );
 
+      return;
+    }
+
+    if (url.pathname === "/group-rides/requests") {
+      if (req.method === "GET") {
+        await handleListGroupRideMatchRequestsRoute(req, res, groupRideDeps, url);
+        return;
+      }
+
+      if (req.method === "POST") {
+        await handleCreateGroupRideMatchRequestRoute(req, res, groupRideDeps);
+        return;
+      }
+
+      sendMethodNotAllowed(res);
+      return;
+    }
+
+    if (url.pathname.startsWith("/group-rides/requests/")) {
+      const uploadUrlMatch = url.pathname.match(
+        /^\/group-rides\/requests\/([^/]+)\/face-upload-url$/,
+      );
+      if (uploadUrlMatch) {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+
+        await handleCreateGroupRideFaceUploadUrlRoute(
+          req,
+          res,
+          groupRideDeps,
+          decodeURIComponent(uploadUrlMatch[1]),
+        );
+        return;
+      }
+
+      const completeUploadMatch = url.pathname.match(
+        /^\/group-rides\/requests\/([^/]+)\/face-upload-complete$/,
+      );
+      if (completeUploadMatch) {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+
+        await handleCompleteGroupRideFaceUploadRoute(
+          req,
+          res,
+          groupRideDeps,
+          decodeURIComponent(completeUploadMatch[1]),
+        );
+        return;
+      }
+
+      const cancelMatch = url.pathname.match(
+        /^\/group-rides\/requests\/([^/]+)\/cancel$/,
+      );
+      if (cancelMatch) {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+
+        await handleCancelGroupRideMatchRequestRoute(
+          req,
+          res,
+          groupRideDeps,
+          decodeURIComponent(cancelMatch[1]),
+        );
+        return;
+      }
+
+      const requestMatch = url.pathname.match(/^\/group-rides\/requests\/([^/]+)$/);
+      if (!requestMatch) {
+        sendJson(res, 404, { error: "Not found" });
+        return;
+      }
+
+      if (req.method === "GET") {
+        await handleGetGroupRideMatchRequestRoute(
+          req,
+          res,
+          groupRideDeps,
+          decodeURIComponent(requestMatch[1]),
+        );
+        return;
+      }
+
+      sendMethodNotAllowed(res);
       return;
     }
 

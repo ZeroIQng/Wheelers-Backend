@@ -168,6 +168,26 @@ export const groupRideClient = {
       },
     }),
 
+  cancelMatchRequestForUser: (
+    id: string,
+    userId: string,
+    reason?: string,
+  ) =>
+    prisma.groupRideMatchRequest.updateMany({
+      where: {
+        id,
+        userId,
+        status: {
+          in: ['PENDING_FACE_UPLOAD', 'READY_FOR_MATCH', 'MATCHING'],
+        },
+      },
+      data: {
+        status: 'CANCELLED',
+        cancelledAt: new Date(),
+        cancelReason: reason,
+      },
+    }),
+
   findReadyRequests: () =>
     prisma.groupRideMatchRequest.findMany({
       where: {
