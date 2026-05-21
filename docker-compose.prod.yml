@@ -1,0 +1,214 @@
+name: wheelers-prod
+
+x-app-common: &app-common
+  env_file:
+    - ${DOCKER_ENV_FILE:-.env.docker}
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    kafka:
+      condition: service_started
+  networks:
+    - wheelers
+
+services:
+  postgres:
+    image: postgres:16
+    profiles: ["infra"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-wheelers}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-wheelers}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - wheelers
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["infra"]
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - wheelers
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    profiles: ["infra"]
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    ports:
+      - "127.0.0.1:2181:2181"
+    networks:
+      - wheelers
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    profiles: ["infra"]
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    ports:
+      - "127.0.0.1:29092:29092"
+    networks:
+      - wheelers
+
+  api-gateway:
+    <<: *app-common
+    profiles: ["gateway"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+      args:
+        WORKSPACE: "@wheleers/api-gateway"
+    environment:
+      NODE_ENV: production
+      PORT: ${PORT:-3000}
+      KAFKA_CLIENT_ID: api-gateway
+      KAFKA_BROKERS: kafka:9092
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-wheelers}
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || '3000') + '/health').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  ride-service:
+    <<: *app-common
+    profiles: ["rides"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+      args:
+        WORKSPACE: "@wheleers/ride-service"
+    environment:
+      NODE_ENV: production
+      KAFKA_CLIENT_ID: ride-service
+      KAFKA_BROKERS: kafka:9092
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-wheelers}
+      REDIS_URL: redis://redis:6379
+
+  group-ride:
+    <<: *app-common
+    profiles: ["rides"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+      args:
+        WORKSPACE: "@wheleers/group-ride"
+    environment:
+      NODE_ENV: production
+      KAFKA_CLIENT_ID: group-ride
+      KAFKA_BROKERS: kafka:9092
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-wheelers}
+      REDIS_URL: redis://redis:6379
+
+  payment-service:
+    <<: *app-common
+    profiles: ["finance"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+      args:
+        WORKSPACE: "@wheleers/payment-service"
+    environment:
+      NODE_ENV: production
+      KAFKA_CLIENT_ID: payment-service
+      KAFKA_BROKERS: kafka:9092
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-wheelers}
+      REDIS_URL: redis://redis:6379
+
+  wallet-service:
+    <<: *app-common
+    profiles: ["finance"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+      args:
+        WORKSPACE: "@wheleers/wallet-service"
+    environment:
+      NODE_ENV: production
+      KAFKA_CLIENT_ID: wallet-service
+      KAFKA_BROKERS: kafka:9092
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-wheelers}
+      REDIS_URL: redis://redis:6379
+
+  notification-worker:
+    <<: *app-common
+    profiles: ["workers"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+      args:
+        WORKSPACE: "@wheleers/notification-worker"
+    environment:
+      NODE_ENV: production
+      KAFKA_CLIENT_ID: notification-worker
+      KAFKA_BROKERS: kafka:9092
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-wheelers}
+      REDIS_URL: redis://redis:6379
+
+  defi-scheduler:
+    <<: *app-common
+    profiles: ["workers"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+      args:
+        WORKSPACE: "@wheleers/defi-scheduler"
+    environment:
+      NODE_ENV: production
+      KAFKA_CLIENT_ID: defi-scheduler
+      KAFKA_BROKERS: kafka:9092
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-wheelers}
+      REDIS_URL: redis://redis:6379
+
+volumes:
+  postgres_data:
+  redis_data:
+  kafka_data:
+  zookeeper_data:
+  zookeeper_log:
+
+networks:
+  wheelers:
+    driver: bridge

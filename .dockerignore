@@ -1,0 +1,14 @@
+node_modules
+*/node_modules
+dist
+*/dist
+.git
+.DS_Store
+.env
+.env.*
+!.env.example
+!.env.docker.example
+coverage
+npm-debug.log*
+Dockerfile*
+infra/docker-compose.yml
