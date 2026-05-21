@@ -41,6 +41,7 @@ export const groupRideClient = {
       },
       include: {
         faceVerification: true,
+        user: true,
       },
     }),
 
@@ -150,6 +151,7 @@ export const groupRideClient = {
         },
         include: {
           faceVerification: true,
+          user: true,
         },
       });
 
