@@ -136,10 +136,16 @@ function decimalToNumber(value: unknown): number | null {
 function mapMatchRequestItem(
   request: NonNullable<Awaited<ReturnType<typeof groupRideClient.findMatchRequestById>>>,
 ) {
+  const matchedRideIds = Array.isArray(request.matchedRideIds)
+    ? request.matchedRideIds.filter((item): item is string => typeof item === 'string')
+    : [];
+
   return {
     id: request.id,
     userId: request.userId,
     status: request.status,
+    groupId: request.groupId ?? null,
+    matchedRideIds,
     pickup: {
       lat: request.pickupLat,
       lng: request.pickupLng,
@@ -180,6 +186,32 @@ function mapMatchRequestItem(
     createdAt: request.createdAt.toISOString(),
     updatedAt: request.updatedAt.toISOString(),
   };
+}
+
+async function buildMatchedRiders(
+  request: NonNullable<Awaited<ReturnType<typeof groupRideClient.findMatchRequestById>>>,
+) {
+  const matchedRideIds = Array.isArray(request.matchedRideIds)
+    ? request.matchedRideIds.filter((item): item is string => typeof item === 'string')
+    : [];
+
+  if (matchedRideIds.length < 2) {
+    return [];
+  }
+
+  const requests = await groupRideClient.findMatchRequestsByIds(matchedRideIds);
+  return requests
+    .filter((item) => item.id !== request.id)
+    .map((item) => ({
+      rideId: item.id,
+      userId: item.userId,
+      name: item.user.name ?? null,
+      username: item.user.username ?? null,
+      photoUrl: item.user.photoUrl ?? null,
+      pickupAddress: item.pickupAddress,
+      destinationAddress: item.destAddress,
+      status: item.status,
+    }));
 }
 
 function buildReadyForMatchEvent(
@@ -348,6 +380,7 @@ export async function handleGetGroupRideMatchRequestRoute(
 
     sendJson(res, 200, {
       item: mapMatchRequestItem(request),
+      matchedRiders: await buildMatchedRiders(request),
     });
   } catch (error) {
     sendJson(res, 401, {

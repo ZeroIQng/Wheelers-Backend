@@ -49,6 +49,7 @@ export const groupRideClient = {
       where: { id, userId },
       include: {
         faceVerification: true,
+        user: true,
       },
     }),
 
@@ -57,6 +58,7 @@ export const groupRideClient = {
       where: { id },
       include: {
         faceVerification: true,
+        user: true,
       },
     }),
 
@@ -67,6 +69,20 @@ export const groupRideClient = {
       take: limit,
       include: {
         faceVerification: true,
+        user: true,
+      },
+    }),
+
+  findMatchRequestsByIds: (ids: string[]) =>
+    prisma.groupRideMatchRequest.findMany({
+      where: {
+        id: {
+          in: ids,
+        },
+      },
+      include: {
+        faceVerification: true,
+        user: true,
       },
     }),
 
@@ -165,8 +181,33 @@ export const groupRideClient = {
       data: buildStatusUpdate(status),
       include: {
         faceVerification: true,
+        user: true,
       },
     }),
+
+  assignRequestsToGroup: (data: {
+    groupId: string;
+    rideIds: string[];
+    status: GroupRideMatchRequestStatus;
+  }) => {
+    const matchedRideIds = data.rideIds as Prisma.InputJsonValue;
+    return prisma.$transaction(
+      data.rideIds.map((rideId) =>
+        prisma.groupRideMatchRequest.update({
+          where: { id: rideId },
+          data: {
+            ...buildStatusUpdate(data.status),
+            groupId: data.groupId,
+            matchedRideIds,
+          },
+          include: {
+            faceVerification: true,
+            user: true,
+          },
+        }),
+      ),
+    );
+  },
 
   cancelMatchRequestForUser: (
     id: string,

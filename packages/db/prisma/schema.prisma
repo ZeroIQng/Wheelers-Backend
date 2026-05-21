@@ -269,6 +269,8 @@ model GroupRideMatchRequest {
   id                     String                      @id @default(uuid())
   userId                 String
   status                 GroupRideMatchRequestStatus @default(PENDING_FACE_UPLOAD)
+  groupId                String?
+  matchedRideIds         Json?
   pickupLat              Float
   pickupLng              Float
   pickupAddress          String
@@ -294,6 +296,7 @@ model GroupRideMatchRequest {
 
   @@index([userId, status, createdAt])
   @@index([status, updatedAt])
+  @@index([groupId, status, updatedAt])
 }
 
 model GroupRideFaceVerification {

@@ -87,11 +87,13 @@ export function createGroupRidePlanner(params: {
           timestamp: new Date().toISOString(),
         });
 
-        await Promise.all(
-          members.map((member) =>
-            groupRideClient.updateMatchRequestStatus(member.rideId, 'GROUPED').catch(() => null),
-          ),
-        );
+        await groupRideClient
+          .assignRequestsToGroup({
+            groupId: event.groupId,
+            rideIds: members.map((member) => member.rideId),
+            status: 'GROUPED',
+          })
+          .catch(() => null);
 
         for (const member of members) {
           params.state.assignedRideIds.add(member.rideId);
@@ -121,11 +123,13 @@ export function createGroupRidePlanner(params: {
           timestamp: new Date().toISOString(),
         });
 
-        await Promise.all(
-          event.rideIds.map((rideId) =>
-            groupRideClient.updateMatchRequestStatus(rideId, 'BOOKED').catch(() => null),
-          ),
-        );
+        await groupRideClient
+          .assignRequestsToGroup({
+            groupId: event.groupId,
+            rideIds: event.rideIds,
+            status: 'BOOKED',
+          })
+          .catch(() => null);
         return;
       }
 
