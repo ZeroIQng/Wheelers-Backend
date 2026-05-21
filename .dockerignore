@@ -8,6 +8,7 @@ dist
 .env.*
 !.env.example
 !.env.docker.example
+!.env.compose.example
 coverage
 npm-debug.log*
 Dockerfile*

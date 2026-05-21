@@ -1,8 +1,6 @@
 name: wheelers-prod
 
 x-app-common: &app-common
-  env_file:
-    - ${DOCKER_ENV_FILE:-.env.docker}
   restart: unless-stopped
   depends_on:
     postgres:
@@ -13,6 +11,8 @@ x-app-common: &app-common
       condition: service_started
   networks:
     - wheelers
+  volumes:
+    - ${DOCKER_APP_ENV_FILE:-.env.docker}:/app/.env:ro
 
 services:
   postgres:
