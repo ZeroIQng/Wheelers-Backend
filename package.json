@@ -5,7 +5,9 @@
   ],
   "scripts": {
     "dev": "npm --workspaces --if-present run dev",
-    "build": "npm --workspaces --if-present run build",
+    "build": "npm run build:packages && npm run build:apps",
+    "build:packages": "npm -w @wheleers/config run build && npm -w @wheleers/kafka-schemas run build && npm -w @wheleers/kafka-client run build && npm -w @wheleers/db run build && npm -w @wheleers/blockchain run build",
+    "build:apps": "npm -w @wheleers/defi-scheduler run build && npm -w @wheleers/group-ride run build && npm -w @wheleers/notification-worker run build && npm -w @wheleers/payment-service run build && npm -w @wheleers/ride-service run build && npm -w @wheleers/wallet-service run build && npm -w @wheleers/api-gateway run build",
     "typecheck": "npm --workspaces --if-present run typecheck",
     "lint": "npm --workspaces --if-present run lint",
     "docker:prod:build": "docker compose --env-file .env.compose -f docker-compose.prod.yml build",
