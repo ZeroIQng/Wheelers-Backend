@@ -34,6 +34,7 @@ export type {
   YieldHarvest,
   UserConsent,
   Notification,
+  NotificationDevice,
   WalletReservation,
   WithdrawalRequest,
   GroupRideMatchRequest,

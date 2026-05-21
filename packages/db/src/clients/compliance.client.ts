@@ -115,10 +115,23 @@ export const complianceClient = {
       data:  { read: true },
     }),
 
+  markAllNotificationsRead: (userId: string) =>
+    prisma.notification.updateMany({
+      where: { userId, read: false },
+      data: { read: true },
+    }),
+
   findUnreadNotifications: (userId: string, limit = 20) =>
     prisma.notification.findMany({
       where:   { userId, read: false },
       orderBy: { createdAt: 'desc' },
       take:    limit,
+    }),
+
+  listNotifications: (userId: string, limit = 50) =>
+    prisma.notification.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
     }),
 };

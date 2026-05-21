@@ -77,6 +77,59 @@ export const userClient = {
       include: { wallet: true },
     }),
 
+  upsertNotificationDevice: (userId: string, data: {
+    expoPushToken: string;
+    platform?: string;
+    deviceName?: string;
+    appOwnership?: string;
+    enabled?: boolean;
+  }) =>
+    prisma.notificationDevice.upsert({
+      where: {
+        expoPushToken: data.expoPushToken,
+      },
+      create: {
+        userId,
+        expoPushToken: data.expoPushToken,
+        platform: data.platform,
+        deviceName: data.deviceName,
+        appOwnership: data.appOwnership,
+        enabled: data.enabled ?? true,
+        lastRegisteredAt: new Date(),
+      },
+      update: {
+        userId,
+        platform: data.platform,
+        deviceName: data.deviceName,
+        appOwnership: data.appOwnership,
+        enabled: data.enabled ?? true,
+        lastRegisteredAt: new Date(),
+      },
+    }),
+
+  listActiveNotificationDevices: (userId: string) =>
+    prisma.notificationDevice.findMany({
+      where: {
+        userId,
+        enabled: true,
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+    }),
+
+  disableNotificationDevice: (expoPushToken: string) =>
+    prisma.notificationDevice.updateMany({
+      where: { expoPushToken },
+      data: { enabled: false },
+    }),
+
+  touchNotificationDeviceDelivery: (expoPushToken: string) =>
+    prisma.notificationDevice.updateMany({
+      where: { expoPushToken },
+      data: { lastDeliveredAt: new Date() },
+    }),
+
   updateRole: (userId: string, role: UserRole) =>
     prisma.user.update({
       where: { id: userId },

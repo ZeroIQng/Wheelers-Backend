@@ -1,9 +1,10 @@
 import { validateNotificationEnv, validateSharedEnv } from '@wheleers/config';
-import { prisma } from '@wheleers/db';
+import { prisma, userClient, type NotificationDevice } from '@wheleers/db';
 import { createConsumer } from '@wheleers/kafka-client';
-import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
+import { safeParseKafkaEvent, TOPICS, type PushSendEvent } from '@wheleers/kafka-schemas';
 
 const SERVICE_ID = 'notification-worker';
+const EXPO_PUSH_ENDPOINT = 'https://exp.host/--/api/v2/push/send';
 
 bootstrap().catch((err) => {
   console.error(`[${SERVICE_ID}] fatal`, err);
@@ -24,13 +25,17 @@ async function bootstrap(): Promise<void> {
   process.env['TWILIO_FROM_NUMBER'] ??= 'dev';
 
   validateSharedEnv();
-  validateNotificationEnv();
+  const notificationEnv = validateNotificationEnv();
 
   const consumer = await createConsumer({ groupId: SERVICE_ID });
 
   await consumer.subscribe([TOPICS.NOTIFICATION_EVENTS], async (value) => {
     const event = safeParseKafkaEvent(TOPICS.NOTIFICATION_EVENTS, value);
     if (!event) return;
+
+    if (event.eventType === 'PUSH_SEND') {
+      await handlePushSend(event, notificationEnv.EXPO_ACCESS_TOKEN);
+    }
 
     if (event.eventType === 'IN_APP_SEND') {
       try {
@@ -51,7 +56,6 @@ async function bootstrap(): Promise<void> {
       }
     }
 
-    // PUSH_SEND and SMS_SEND are intentionally stubbed here.
     console.log(`[${SERVICE_ID}] ${event.eventType} -> user=${event.userId}`);
   });
 
@@ -79,3 +83,74 @@ function categoryToDb(category: string): any {
   }
 }
 
+async function handlePushSend(
+  event: PushSendEvent,
+  expoAccessToken: string,
+): Promise<void> {
+  const devices = await userClient.listActiveNotificationDevices(event.userId);
+  if (devices.length === 0) {
+    return;
+  }
+
+  const messages = devices.map((device: NotificationDevice) => ({
+    to: device.expoPushToken,
+    title: event.title,
+    body: event.body,
+    data: event.data,
+    priority: event.priority === 'high' ? 'high' : 'default',
+    sound: 'default',
+  }));
+
+  const response = await fetch(EXPO_PUSH_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      authorization: `Bearer ${expoAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(messages),
+  });
+
+  const payload = (await response.json().catch(() => null)) as
+    | {
+        data?: Array<{
+          status?: string;
+          details?: {
+            error?: string;
+          };
+        }>;
+        errors?: Array<{ message?: string }>;
+      }
+    | null;
+
+  if (!response.ok) {
+    const message =
+      payload?.errors?.map((error) => error.message).filter(Boolean).join('; ') ||
+      `Expo push send failed with status ${response.status}`;
+    throw new Error(message);
+  }
+
+  const results = Array.isArray(payload?.data) ? payload.data : [];
+  await Promise.all(
+    devices.map(async (device: NotificationDevice, index: number) => {
+      const result = results[index];
+      if (!result) {
+        return;
+      }
+
+      if (result.status === 'ok') {
+        await userClient.touchNotificationDeviceDelivery(device.expoPushToken);
+        return;
+      }
+
+      if (result.details?.error === 'DeviceNotRegistered') {
+        await userClient.disableNotificationDevice(device.expoPushToken);
+        return;
+      }
+
+      console.warn(
+        `[${SERVICE_ID}] push delivery warning token=${device.expoPushToken} status=${result.status ?? 'unknown'} error=${result.details?.error ?? 'unknown'}`,
+      );
+    }),
+  );
+}

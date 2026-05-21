@@ -24,6 +24,11 @@ import {
   handleUpdateCurrentProfileRoute,
 } from "./http/profile.route";
 import {
+  handleListNotificationsRoute,
+  handleMarkNotificationsReadRoute,
+  handleRegisterPushTokenRoute,
+} from "./http/notification.route";
+import {
   handleCancelScheduledRideRoute,
   handleCreateScheduledRideRoute,
   handleListScheduledRidesRoute,
@@ -325,6 +330,45 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleUpdateCurrentProfileRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+      });
+      return;
+    }
+
+    if (url.pathname === "/notifications") {
+      if (req.method === "GET") {
+        await handleListNotificationsRoute(req, res, {
+          privyAppId: gatewayEnv.PRIVY_APP_ID,
+          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        }, url);
+        return;
+      }
+
+      sendMethodNotAllowed(res);
+      return;
+    }
+
+    if (url.pathname === "/notifications/read") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleMarkNotificationsReadRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+      });
+      return;
+    }
+
+    if (url.pathname === "/notifications/device") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleRegisterPushTokenRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
       });
