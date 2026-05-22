@@ -1,4 +1,4 @@
-import { DEFI, validateDefiEnv, validateSharedEnv } from '@wheleers/config';
+import { DEFI, loadWorkspaceEnv, validateDefiEnv, validateSharedEnv } from '@wheleers/config';
 import { defiClient } from '@wheleers/db';
 import { createProducer } from '@wheleers/kafka-client';
 import { TOPICS } from '@wheleers/kafka-schemas';
@@ -11,6 +11,7 @@ bootstrap().catch((err) => {
 });
 
 async function bootstrap(): Promise<void> {
+  loadWorkspaceEnv();
   process.env['NODE_ENV'] ??= 'development';
   process.env['KAFKA_CLIENT_ID'] ??= SERVICE_ID;
   process.env['KAFKA_BROKERS'] ??= 'localhost:9092';
@@ -61,4 +62,3 @@ function recommendTier(balanceUsdt: number): 'tier1' | 'tier2' | 'tier3' {
   if (balanceUsdt >= DEFI.TIER2_MIN_USDT) return 'tier2';
   return 'tier1';
 }
-

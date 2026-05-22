@@ -57,7 +57,8 @@ wheleers/
 │   ├── ride-service/         # Matching, GPS processing, trip lifecycle
 │   ├── payment-service/      # Pouch settlement audit + ride fee calculation
 │   ├── wallet-service/       # USDT balances, DeFi staking, smart accounts
-│   ├── notification-worker/  # Expo push, Twilio SMS, in-app notifications
+│   ├── notification-worker/  # Expo push + in-app notifications
+│   ├── whatsapp-gateway/     # Stateful WhatsApp Web sender for OTP delivery
 │   ├── compliance-worker/    # On-chain logs, recordings, disputes, KYC review
 │   └── defi-scheduler/       # Idle fund detection cron, yield harvesting
 │
@@ -452,10 +453,9 @@ Authenticated client → POST /payments/pouch/onramp
 **What it does:**
 - The only consumer of `notification.events`
 - `PUSH_SEND` → calls Expo Push API
-- `SMS_SEND` → calls Twilio
 - `IN_APP_SEND` → writes to `Notification` table + pushes to user's open WebSocket via Redis pub/sub
 
-Every other service that wants to notify a user produces a `PUSH_SEND` or `IN_APP_SEND` event. notification-worker is the only thing that knows about Expo or Twilio. No other service has those SDKs.
+Every other service that wants to notify a user produces a `PUSH_SEND` or `IN_APP_SEND` event. notification-worker is the only thing that knows about Expo for push delivery. Phone OTP delivery is handled separately by `whatsapp-gateway`.
 
 **Kafka topics consumed:** `notification.events`
 
@@ -762,6 +762,9 @@ Every service validates its own env vars at startup using `@wheleers/config`. Be
 | `PRIVY_VERIFICATION_KEY` | Privy public verification key (PEM) used for access-token signature validation |
 | `JWT_SECRET` | Legacy local JWT secret (optional; no longer used for Privy access tokens) |
 | `PRIVY_APP_ID` | Privy application ID |
+| `WHATSAPP_GATEWAY_URL` | Base URL for the separate WhatsApp Web sender |
+| `WHATSAPP_GATEWAY_TOKEN` | Bearer token used when calling the WhatsApp gateway |
+| `WHATSAPP_OTP_TTL_SECONDS` | OTP lifetime in seconds (default: `300`) |
 | `POUCH_API_KEY` | Pouch API key used for shared-KYC ramp calls |
 | `POUCH_BASE_URL` | Pouch API base URL |
 | `POUCH_PROVIDER_ID` | Default ramp provider (default: `yellowcard`) |
@@ -809,9 +812,18 @@ Every service validates its own env vars at startup using `@wheleers/config`. Be
 | Variable | Description |
 |----------|-------------|
 | `EXPO_ACCESS_TOKEN` | Expo push notification access token |
-| `TWILIO_ACCOUNT_SID` | Twilio account SID |
-| `TWILIO_AUTH_TOKEN` | Twilio auth token |
-| `TWILIO_FROM_NUMBER` | Twilio phone number |
+
+**whatsapp-gateway**
+
+| Variable | Description |
+|----------|-------------|
+| `PORT` | HTTP port for the WhatsApp gateway (default: `3010`) |
+| `WHATSAPP_GATEWAY_PORT` | HTTP port for the WhatsApp gateway (default: `3010`) |
+| `WHATSAPP_GATEWAY_TOKEN` | Bearer token required by `POST /messages/text` |
+| `WHATSAPP_CLIENT_ID` | LocalAuth client identifier used for session persistence |
+| `WHATSAPP_SESSION_PATH` | Directory where the QR-authenticated session is stored |
+| `WHATSAPP_HEADLESS` | `true` or `false` for Chromium headless mode |
+| `WHATSAPP_CHROME_EXECUTABLE_PATH` | Optional system Chrome/Chromium binary path |
 
 **defi-scheduler**
 

@@ -3,10 +3,6 @@ import { z } from 'zod';
 const NotificationEnvSchema = z.object({
   // Expo push notifications
   EXPO_ACCESS_TOKEN:     z.string().min(1),
-  // Twilio SMS fallback
-  TWILIO_ACCOUNT_SID:    z.string().min(1),
-  TWILIO_AUTH_TOKEN:     z.string().min(1),
-  TWILIO_FROM_NUMBER:    z.string().min(1),
   // Rate limiting — max pushes per user per minute
   PUSH_RATE_LIMIT:       z.string().default('10'),
 });

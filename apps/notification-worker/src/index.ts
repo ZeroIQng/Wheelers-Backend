@@ -1,4 +1,4 @@
-import { validateNotificationEnv, validateSharedEnv } from '@wheleers/config';
+import { loadWorkspaceEnv, validateNotificationEnv, validateSharedEnv } from '@wheleers/config';
 import { prisma, userClient, type NotificationDevice } from '@wheleers/db';
 import { createConsumer } from '@wheleers/kafka-client';
 import { safeParseKafkaEvent, TOPICS, type PushSendEvent } from '@wheleers/kafka-schemas';
@@ -12,6 +12,7 @@ bootstrap().catch((err) => {
 });
 
 async function bootstrap(): Promise<void> {
+  loadWorkspaceEnv();
   process.env['NODE_ENV'] ??= 'development';
   process.env['KAFKA_CLIENT_ID'] ??= SERVICE_ID;
   process.env['KAFKA_BROKERS'] ??= 'localhost:9092';
@@ -20,9 +21,6 @@ async function bootstrap(): Promise<void> {
 
   // Dev placeholders for required notification env
   process.env['EXPO_ACCESS_TOKEN'] ??= 'dev';
-  process.env['TWILIO_ACCOUNT_SID'] ??= 'dev';
-  process.env['TWILIO_AUTH_TOKEN'] ??= 'dev';
-  process.env['TWILIO_FROM_NUMBER'] ??= 'dev';
 
   validateSharedEnv();
   const notificationEnv = validateNotificationEnv();

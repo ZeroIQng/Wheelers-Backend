@@ -14,10 +14,12 @@ interface PhoneRouteDeps {
   privyAppId: string;
   privyVerificationKey: string;
   redisClient: RedisClient;
+  whatsappGatewayUrl?: string;
+  whatsappGatewayToken?: string;
   twilioAccountSid?: string;
   twilioAuthToken?: string;
   twilioFromNumber?: string;
-  twilioOtpTtlSeconds?: number;
+  phoneOtpTtlSeconds?: number;
 }
 
 interface StoredPhoneOtp {
@@ -128,6 +130,79 @@ async function sendTwilioSms(params: {
   throw new Error(`Twilio SMS send failed (${response.status}): ${payload}`);
 }
 
+async function sendWhatsappTextMessage(params: {
+  gatewayUrl: string;
+  gatewayToken: string;
+  toNumber: string;
+  body: string;
+}): Promise<void> {
+  const endpoint = new URL('/messages/text', params.gatewayUrl).toString();
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${params.gatewayToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      phone: params.toNumber,
+      body: params.body,
+    }),
+  });
+
+  if (response.ok) {
+    return;
+  }
+
+  const payload = await response.text();
+  throw new Error(`WhatsApp gateway send failed (${response.status}): ${payload}`);
+}
+
+function hasConfiguredWhatsappGateway(deps: PhoneRouteDeps): deps is PhoneRouteDeps & {
+  whatsappGatewayUrl: string;
+  whatsappGatewayToken: string;
+} {
+  return Boolean(deps.whatsappGatewayUrl && deps.whatsappGatewayToken);
+}
+
+function hasConfiguredTwilio(deps: PhoneRouteDeps): deps is PhoneRouteDeps & {
+  twilioAccountSid: string;
+  twilioAuthToken: string;
+  twilioFromNumber: string;
+} {
+  return Boolean(deps.twilioAccountSid && deps.twilioAuthToken && deps.twilioFromNumber);
+}
+
+async function sendPhoneOtpMessage(
+  deps: PhoneRouteDeps,
+  phone: string,
+  body: string,
+): Promise<'whatsapp' | 'sms'> {
+  if (hasConfiguredWhatsappGateway(deps)) {
+    await sendWhatsappTextMessage({
+      gatewayUrl: deps.whatsappGatewayUrl,
+      gatewayToken: deps.whatsappGatewayToken,
+      toNumber: phone,
+      body,
+    });
+    return 'whatsapp';
+  }
+
+  if (hasConfiguredTwilio(deps)) {
+    await sendTwilioSms({
+      accountSid: deps.twilioAccountSid,
+      authToken: deps.twilioAuthToken,
+      fromNumber: deps.twilioFromNumber,
+      toNumber: phone,
+      body,
+    });
+    return 'sms';
+  }
+
+  throw new Error(
+    'Phone OTP delivery is not configured. Set WHATSAPP_GATEWAY_URL and WHATSAPP_GATEWAY_TOKEN, or restore the legacy Twilio credentials.',
+  );
+}
+
 async function readStoredPhoneOtp(
   redisClient: RedisClient,
   userId: string,
@@ -171,9 +246,26 @@ export async function handleSendPhoneOtpRoute(
       return;
     }
 
-    if (!deps.twilioAccountSid || !deps.twilioAuthToken || !deps.twilioFromNumber) {
+    const hasWhatsappGateway =
+      Boolean(deps.whatsappGatewayUrl) && Boolean(deps.whatsappGatewayToken);
+    const hasTwilio =
+      Boolean(deps.twilioAccountSid) &&
+      Boolean(deps.twilioAuthToken) &&
+      Boolean(deps.twilioFromNumber);
+
+    if (
+      (Boolean(deps.whatsappGatewayUrl) && !deps.whatsappGatewayToken) ||
+      (!deps.whatsappGatewayUrl && Boolean(deps.whatsappGatewayToken))
+    ) {
       sendJson(res, 500, {
-        error: 'Twilio is not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER.',
+        error: 'WhatsApp gateway config is incomplete. Set both WHATSAPP_GATEWAY_URL and WHATSAPP_GATEWAY_TOKEN.',
+      });
+      return;
+    }
+
+    if (!hasWhatsappGateway && !hasTwilio) {
+      sendJson(res, 500, {
+        error: 'Phone OTP delivery is not configured. Set WHATSAPP_GATEWAY_URL and WHATSAPP_GATEWAY_TOKEN.',
       });
       return;
     }
@@ -181,9 +273,10 @@ export async function handleSendPhoneOtpRoute(
     const phone = normalizePhoneNumber(rawPhone);
     const code = buildOtpCode();
     const codeHash = hashOtp(code);
-    const ttlSeconds = deps.twilioOtpTtlSeconds ?? PHONE_OTP_TTL_SECONDS;
+    const ttlSeconds = deps.phoneOtpTtlSeconds ?? PHONE_OTP_TTL_SECONDS;
 
     const redisKey = buildOtpRedisKey(user.id);
+    const messageBody = `Your Wheelers verification code is ${code}. It expires in ${Math.max(1, Math.floor(ttlSeconds / 60))} minute(s).`;
 
     await deps.redisClient.set(
       redisKey,
@@ -195,23 +288,17 @@ export async function handleSendPhoneOtpRoute(
     );
 
     try {
-      await sendTwilioSms({
-        accountSid: deps.twilioAccountSid,
-        authToken: deps.twilioAuthToken,
-        fromNumber: deps.twilioFromNumber,
-        toNumber: phone,
-        body: `Your Wheelers verification code is ${code}. It expires in ${Math.max(1, Math.floor(ttlSeconds / 60))} minute(s).`,
+      const channel = await sendPhoneOtpMessage(deps, phone, messageBody);
+      sendJson(res, 200, {
+        sent: true,
+        channel,
+        phone,
+        expiresInSeconds: ttlSeconds,
       });
     } catch (error) {
       await deps.redisClient.del(redisKey);
       throw error;
     }
-
-    sendJson(res, 200, {
-      sent: true,
-      phone,
-      expiresInSeconds: ttlSeconds,
-    });
   } catch (error) {
     sendJson(res, 400, {
       error: error instanceof Error ? error.message : 'Could not send phone verification code',

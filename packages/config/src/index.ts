@@ -9,6 +9,7 @@ export { validateComplianceEnv }   from './env/compliance.env';
 export { validateDefiEnv }         from './env/defi.env';
 export { validateNotificationEnv } from './env/notification.env';
 export { validateGroupRideEnv }    from './env/group-ride.env';
+export { validateWhatsappEnv }     from './env/whatsapp.env';
 
 // Env types
 export type { SharedEnv }       from './env/shared.env';
@@ -20,6 +21,7 @@ export type { ComplianceEnv }   from './env/compliance.env';
 export type { DefiEnv }         from './env/defi.env';
 export type { NotificationEnv } from './env/notification.env';
 export type { GroupRideEnv }    from './env/group-ride.env';
+export type { WhatsappEnv }     from './env/whatsapp.env';
 
 // Constants
 export { FEES }                        from './constants/fees';

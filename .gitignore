@@ -11,3 +11,5 @@ coverage/
 kafka-schemas/node_modules/
 kafka-schemas/dist/
 kafka-schemas/build/
+apps/whatsapp-gateway/.wwebjs_auth/
+apps/whatsapp-gateway/.wwebjs_cache/

@@ -385,10 +385,12 @@ async function bootstrap(): Promise<void> {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         redisClient: redisCommandClient,
+        whatsappGatewayUrl: gatewayEnv.WHATSAPP_GATEWAY_URL,
+        whatsappGatewayToken: gatewayEnv.WHATSAPP_GATEWAY_TOKEN,
         twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
         twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
         twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
-        twilioOtpTtlSeconds: gatewayEnv.TWILIO_OTP_TTL_SECONDS,
+        phoneOtpTtlSeconds: gatewayEnv.WHATSAPP_OTP_TTL_SECONDS,
       });
 
       return;
@@ -404,10 +406,12 @@ async function bootstrap(): Promise<void> {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         redisClient: redisCommandClient,
+        whatsappGatewayUrl: gatewayEnv.WHATSAPP_GATEWAY_URL,
+        whatsappGatewayToken: gatewayEnv.WHATSAPP_GATEWAY_TOKEN,
         twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
         twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
         twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
-        twilioOtpTtlSeconds: gatewayEnv.TWILIO_OTP_TTL_SECONDS,
+        phoneOtpTtlSeconds: gatewayEnv.WHATSAPP_OTP_TTL_SECONDS,
       });
 
       return;
