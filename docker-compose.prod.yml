@@ -11,6 +11,8 @@ x-app-common: &app-common
       condition: service_started
   networks:
     - wheelers
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
   volumes:
     - ${DOCKER_APP_ENV_FILE:-.env.docker}:/app/.env:ro
 
