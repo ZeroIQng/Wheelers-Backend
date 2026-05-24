@@ -3,6 +3,7 @@ import { sendTreasuryStellarUsdcPayment } from "@wheleers/blockchain";
 import { paymentClient, walletClient, withdrawalClient } from "@wheleers/db";
 import { hydrateProcessEnvWithStellarMasterWalletSecret } from "../treasury/master-wallet-secret";
 import { authenticateHttpUser } from "./authenticate";
+import { runIdempotentJsonRequest } from "./idempotency";
 import { readJsonBody, sendJson } from "./utils";
 import {
   convertUsdtToRideDisplayAmount,
@@ -779,132 +780,146 @@ export async function handleCreateWalletWithdrawalRoute(
       reservedAmountUsdt,
     );
 
-    const reserveResult = await withdrawalClient.reserve({
+    const result = await runIdempotentJsonRequest({
+      req,
+      redisClient: deps.redisClient!,
       userId: user.id,
-      walletId: wallet.id,
-      requestedAmountNgn,
-      reservedAmountUsdt,
-      displayCurrency: pricing.displayCurrency,
-      displayExchangeRate: pricing.displayExchangeRate,
-      payoutCurrency: deps.defaults.currency,
-      cryptoCurrency: payload.cryptoCurrency,
-      cryptoNetwork: payload.cryptoNetwork,
-      bankAccountNumber: payload.bankAccount.accountNumber,
-      bankAccountName: payload.bankAccount.accountName,
-      bankNetworkId: payload.bankAccount.networkId,
+      routeKey: "wallet:withdrawals:create",
+      requestBody: rawBody,
+      execute: async () => {
+        const reserveResult = await withdrawalClient.reserve({
+          userId: user.id,
+          walletId: wallet.id,
+          requestedAmountNgn,
+          reservedAmountUsdt,
+          displayCurrency: pricing.displayCurrency,
+          displayExchangeRate: pricing.displayExchangeRate,
+          payoutCurrency: deps.defaults.currency,
+          cryptoCurrency: payload.cryptoCurrency,
+          cryptoNetwork: payload.cryptoNetwork,
+          bankAccountNumber: payload.bankAccount.accountNumber,
+          bankAccountName: payload.bankAccount.accountName,
+          bankNetworkId: payload.bankAccount.networkId,
+        });
+        reservedRequestId = reserveResult.request.id;
+
+        const response = await deps.pouchClient.createSharedKycOfframp(payload);
+        const createdEvent = normalizePouchTransactionCreated({
+          type: "OFFRAMP",
+          payload: response,
+          metadata: buildPouchMetadata({
+            userId: user.id,
+            walletAddress: wallet.address,
+          }),
+          chain: deps.defaults.chain,
+          customerEmail: user.email ?? deps.defaults.testEmail,
+        });
+
+        if (!createdEvent) {
+          throw new Error("Pouch offramp response could not be normalized.");
+        }
+
+        await paymentClient.upsertPaymentIntent(
+          buildPaymentIntentUpsertFromEvent(createdEvent, response),
+        );
+        await withdrawalClient.attachOfframp({
+          withdrawalRequestId: reserveResult.request.id,
+          paymentId: createdEvent.paymentId,
+          providerReference: createdEvent.providerReference,
+          quotedAmountNgn:
+            pickNumber(response, ["cryptoInstruction.amountLocal"]) ?? undefined,
+          quotedAmountUsd:
+            pickNumber(response, ["cryptoInstruction.amountUsd"]) ?? undefined,
+          quotedCryptoAmount:
+            pickNumber(response, ["cryptoInstruction.cryptoAmount"]) ??
+            createdEvent.amountUsd,
+          providerPayload: response,
+          expiresAt:
+            typeof response.cryptoInstruction?.expiresAt === "string"
+              ? new Date(response.cryptoInstruction.expiresAt)
+              : undefined,
+        });
+        await deps.publisher.publishPaymentEvent(createdEvent);
+
+        const treasuryDestinationAddress =
+          typeof response.cryptoInstruction?.walletAddress === "string"
+            ? response.cryptoInstruction.walletAddress.trim()
+            : "";
+        const treasuryCryptoAmount =
+          pickNumber(response, ["cryptoInstruction.cryptoAmount"]) ??
+          createdEvent.amountUsd;
+
+        if (!treasuryDestinationAddress) {
+          throw new Error("Pouch offramp did not return a Stellar destination address.");
+        }
+
+        if (payload.cryptoCurrency !== "USDC" || payload.cryptoNetwork !== "XLM") {
+          throw new Error(
+            `Automated treasury payout only supports USDC on XLM right now. Received ${payload.cryptoCurrency} on ${payload.cryptoNetwork}.`,
+          );
+        }
+
+        console.log("[api-gateway][wallet-withdrawal] sending treasury payout", {
+          withdrawalRequestId: reserveResult.request.id,
+          providerReference: createdEvent.providerReference,
+          destinationAddress: maskWalletAddress(treasuryDestinationAddress),
+          cryptoAmount: treasuryCryptoAmount,
+          cryptoCurrency: payload.cryptoCurrency,
+          cryptoNetwork: payload.cryptoNetwork,
+          stellarNetwork: deps.defaults.stellarNetwork ?? "mainnet",
+        });
+
+        await hydrateProcessEnvWithStellarMasterWalletSecret({
+          AWS_REGION: process.env["AWS_REGION"],
+          STELLAR_MASTER_WALLET_SECRET_NAME:
+            process.env["STELLAR_MASTER_WALLET_SECRET_NAME"],
+          STELLAR_SECRET_KEY: process.env["STELLAR_SECRET_KEY"],
+          POUCH_MASTER_WALLET_ADDRESS: deps.defaults.masterWalletAddress,
+        });
+
+        const treasurySendResult = await sendTreasuryStellarUsdcPayment({
+          destinationAddress: treasuryDestinationAddress,
+          amount: treasuryCryptoAmount,
+          network: deps.defaults.stellarNetwork ?? "mainnet",
+        });
+        treasurySubmitted = true;
+
+        await withdrawalClient.recordTreasurySubmission({
+          withdrawalRequestId: reserveResult.request.id,
+          transactionHash: treasurySendResult.hash,
+          senderAddress: treasurySendResult.sourceAddress,
+          destinationAddress: treasurySendResult.destinationAddress,
+          amount: treasurySendResult.amount,
+          assetCode: treasurySendResult.assetCode,
+          assetIssuer: treasurySendResult.assetIssuer,
+          network: treasurySendResult.network,
+        });
+
+        console.log("[api-gateway][wallet-withdrawal] treasury payout submitted", {
+          withdrawalRequestId: reserveResult.request.id,
+          providerReference: createdEvent.providerReference,
+          transactionHash: maskTransactionHash(treasurySendResult.hash),
+          senderAddress: maskWalletAddress(treasurySendResult.sourceAddress),
+          destinationAddress: maskWalletAddress(treasurySendResult.destinationAddress),
+          amount: treasurySendResult.amount,
+          assetCode: treasurySendResult.assetCode,
+        });
+
+        const createdRequest = await withdrawalClient.findById(reserveResult.request.id);
+
+        return {
+          statusCode: 200,
+          body: {
+            withdrawal: createdRequest ? mapWithdrawalRequest(createdRequest) : null,
+            provider: "pouch",
+            type: "OFFRAMP",
+            cryptoInstruction: response.cryptoInstruction,
+          },
+        };
+      },
     });
-    reservedRequestId = reserveResult.request.id;
 
-    const response = await deps.pouchClient.createSharedKycOfframp(payload);
-    const createdEvent = normalizePouchTransactionCreated({
-      type: "OFFRAMP",
-      payload: response,
-      metadata: buildPouchMetadata({
-        userId: user.id,
-        walletAddress: wallet.address,
-      }),
-      chain: deps.defaults.chain,
-      customerEmail: user.email ?? deps.defaults.testEmail,
-    });
-
-    if (!createdEvent) {
-      throw new Error("Pouch offramp response could not be normalized.");
-    }
-
-    await paymentClient.upsertPaymentIntent(
-      buildPaymentIntentUpsertFromEvent(createdEvent, response),
-    );
-    await withdrawalClient.attachOfframp({
-      withdrawalRequestId: reserveResult.request.id,
-      paymentId: createdEvent.paymentId,
-      providerReference: createdEvent.providerReference,
-      quotedAmountNgn:
-        pickNumber(response, ["cryptoInstruction.amountLocal"]) ?? undefined,
-      quotedAmountUsd:
-        pickNumber(response, ["cryptoInstruction.amountUsd"]) ?? undefined,
-      quotedCryptoAmount:
-        pickNumber(response, ["cryptoInstruction.cryptoAmount"]) ??
-        createdEvent.amountUsd,
-      providerPayload: response,
-      expiresAt:
-        typeof response.cryptoInstruction?.expiresAt === "string"
-          ? new Date(response.cryptoInstruction.expiresAt)
-          : undefined,
-    });
-    await deps.publisher.publishPaymentEvent(createdEvent);
-
-    const treasuryDestinationAddress =
-      typeof response.cryptoInstruction?.walletAddress === "string"
-        ? response.cryptoInstruction.walletAddress.trim()
-        : "";
-    const treasuryCryptoAmount =
-      pickNumber(response, ["cryptoInstruction.cryptoAmount"]) ??
-      createdEvent.amountUsd;
-
-    if (!treasuryDestinationAddress) {
-      throw new Error("Pouch offramp did not return a Stellar destination address.");
-    }
-
-    if (payload.cryptoCurrency !== "USDC" || payload.cryptoNetwork !== "XLM") {
-      throw new Error(
-        `Automated treasury payout only supports USDC on XLM right now. Received ${payload.cryptoCurrency} on ${payload.cryptoNetwork}.`,
-      );
-    }
-
-    console.log("[api-gateway][wallet-withdrawal] sending treasury payout", {
-      withdrawalRequestId: reserveResult.request.id,
-      providerReference: createdEvent.providerReference,
-      destinationAddress: maskWalletAddress(treasuryDestinationAddress),
-      cryptoAmount: treasuryCryptoAmount,
-      cryptoCurrency: payload.cryptoCurrency,
-      cryptoNetwork: payload.cryptoNetwork,
-      stellarNetwork: deps.defaults.stellarNetwork ?? "mainnet",
-    });
-
-    await hydrateProcessEnvWithStellarMasterWalletSecret({
-      AWS_REGION: process.env["AWS_REGION"],
-      STELLAR_MASTER_WALLET_SECRET_NAME:
-        process.env["STELLAR_MASTER_WALLET_SECRET_NAME"],
-      STELLAR_SECRET_KEY: process.env["STELLAR_SECRET_KEY"],
-      POUCH_MASTER_WALLET_ADDRESS: deps.defaults.masterWalletAddress,
-    });
-
-    const treasurySendResult = await sendTreasuryStellarUsdcPayment({
-      destinationAddress: treasuryDestinationAddress,
-      amount: treasuryCryptoAmount,
-      network: deps.defaults.stellarNetwork ?? "mainnet",
-    });
-    treasurySubmitted = true;
-
-    await withdrawalClient.recordTreasurySubmission({
-      withdrawalRequestId: reserveResult.request.id,
-      transactionHash: treasurySendResult.hash,
-      senderAddress: treasurySendResult.sourceAddress,
-      destinationAddress: treasurySendResult.destinationAddress,
-      amount: treasurySendResult.amount,
-      assetCode: treasurySendResult.assetCode,
-      assetIssuer: treasurySendResult.assetIssuer,
-      network: treasurySendResult.network,
-    });
-
-    console.log("[api-gateway][wallet-withdrawal] treasury payout submitted", {
-      withdrawalRequestId: reserveResult.request.id,
-      providerReference: createdEvent.providerReference,
-      transactionHash: maskTransactionHash(treasurySendResult.hash),
-      senderAddress: maskWalletAddress(treasurySendResult.sourceAddress),
-      destinationAddress: maskWalletAddress(treasurySendResult.destinationAddress),
-      amount: treasurySendResult.amount,
-      assetCode: treasurySendResult.assetCode,
-    });
-
-    const createdRequest = await withdrawalClient.findById(reserveResult.request.id);
-
-    sendJson(res, 200, {
-      withdrawal: createdRequest ? mapWithdrawalRequest(createdRequest) : null,
-      provider: "pouch",
-      type: "OFFRAMP",
-      cryptoInstruction: response.cryptoInstruction,
-    });
+    sendJson(res, result.statusCode, result.body);
   } catch (error) {
     if (reservedRequestId && !treasurySubmitted) {
       await withdrawalClient

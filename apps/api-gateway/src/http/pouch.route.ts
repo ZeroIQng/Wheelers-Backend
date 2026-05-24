@@ -12,6 +12,7 @@ import type { RidePricingDisplayProvider } from '../pricing/display';
 import { verifyPrivyAccessToken } from '../auth/privy';
 import { isRecord, pickNumber, pickString } from '../utils/object';
 import type { GatewayPublisher } from '../websocket/publisher';
+import type { RedisClient } from '../redis/client';
 import {
   buildPaymentIntentUpsertFromEvent,
   buildPouchMetadata,
@@ -19,6 +20,7 @@ import {
   normalizePouchTransactionCreated,
   normalizePouchTransactionStatus,
 } from './pouch.helpers';
+import { runIdempotentJsonRequest } from './idempotency';
 import {
   PouchApiError,
   PouchClient,
@@ -33,6 +35,7 @@ interface PouchRouteDeps {
   pouchClient: PouchClient;
   publisher: GatewayPublisher;
   ridePricingDisplayProvider: RidePricingDisplayProvider;
+  redisClient: RedisClient;
   defaults: {
     providerId: string;
     countryCode: string;
@@ -242,51 +245,65 @@ export async function handlePouchOnrampRoute(
       summary: summarizeOnrampPayload(payload, rawBody),
     });
 
-    const response = await deps.pouchClient.createSharedKycOnramp(payload);
-    const createdEvent = normalizePouchTransactionCreated({
-      type: 'ONRAMP',
-      payload: response,
-      metadata: buildPouchMetadata({
-        userId: auth.user.id,
-        walletAddress: paymentWallet,
-      }),
-      customerEmail,
-      chain: deps.defaults.chain,
-      walletTag,
-    });
-
-    if (!createdEvent) {
-      console.error('[api-gateway][pouch] onramp response normalization failed', {
-        userId: auth.user.id,
-        response: summarizeCreateResponse(response),
-      });
-      throw new Error('Pouch onramp response could not be normalized');
-    }
-
-    await paymentClient.upsertPaymentIntent(
-      buildPaymentIntentUpsertFromEvent(createdEvent, response),
-    );
-    await deps.publisher.publishPaymentEvent(createdEvent);
-
-    console.log('[api-gateway][pouch] onramp created', {
+    const result = await runIdempotentJsonRequest({
+      req,
+      redisClient: deps.redisClient,
       userId: auth.user.id,
-      providerRef: createdEvent.providerReference,
-      paymentId: createdEvent.paymentId,
-      amountLocal: createdEvent.amountLocal,
-      amountUsd: createdEvent.amountUsd,
-      cryptoCurrency: createdEvent.cryptoCurrency,
-      cryptoNetwork: createdEvent.cryptoNetwork,
+      routeKey: "payments:pouch:onramp:create",
+      requestBody: rawBody,
+      execute: async () => {
+        const response = await deps.pouchClient.createSharedKycOnramp(payload);
+        const createdEvent = normalizePouchTransactionCreated({
+          type: 'ONRAMP',
+          payload: response,
+          metadata: buildPouchMetadata({
+            userId: auth.user.id,
+            walletAddress: paymentWallet,
+          }),
+          customerEmail,
+          chain: deps.defaults.chain,
+          walletTag,
+        });
+
+        if (!createdEvent) {
+          console.error('[api-gateway][pouch] onramp response normalization failed', {
+            userId: auth.user.id,
+            response: summarizeCreateResponse(response),
+          });
+          throw new Error('Pouch onramp response could not be normalized');
+        }
+
+        await paymentClient.upsertPaymentIntent(
+          buildPaymentIntentUpsertFromEvent(createdEvent, response),
+        );
+        await deps.publisher.publishPaymentEvent(createdEvent);
+
+        console.log('[api-gateway][pouch] onramp created', {
+          userId: auth.user.id,
+          providerRef: createdEvent.providerReference,
+          paymentId: createdEvent.paymentId,
+          amountLocal: createdEvent.amountLocal,
+          amountUsd: createdEvent.amountUsd,
+          cryptoCurrency: createdEvent.cryptoCurrency,
+          cryptoNetwork: createdEvent.cryptoNetwork,
+        });
+
+        return {
+          statusCode: 200,
+          body: {
+            provider: 'pouch',
+            type: 'ONRAMP',
+            providerRef: response.providerRef,
+            destinationWalletAddress: payload.walletAddress,
+            paymentInstruction: response.paymentInstruction,
+            walletCreditable:
+              createdEvent.cryptoCurrency === 'USDT' || createdEvent.cryptoCurrency === 'USDC',
+          },
+        };
+      },
     });
 
-    sendJson(res, 200, {
-      provider: 'pouch',
-      type: 'ONRAMP',
-      providerRef: response.providerRef,
-      destinationWalletAddress: payload.walletAddress,
-      paymentInstruction: response.paymentInstruction,
-      walletCreditable:
-        createdEvent.cryptoCurrency === 'USDT' || createdEvent.cryptoCurrency === 'USDC',
-    });
+    sendJson(res, result.statusCode, result.body);
   } catch (error) {
     sendPouchError(res, error, 'Failed to create Pouch onramp transaction');
   }

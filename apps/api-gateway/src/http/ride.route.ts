@@ -7,6 +7,7 @@ import {
 import { GoogleMapsRoutePlanner } from "@wheleers/config";
 import { Queue } from "bullmq";
 import { authenticateHttpUser } from "./authenticate";
+import { runIdempotentJsonRequest } from "./idempotency";
 import { readJsonBody, sendJson } from "./utils";
 import { getNumber, getRecord, getString, isRecord } from "../utils/object";
 import {
@@ -15,6 +16,7 @@ import {
   type RidePricingDisplayProvider,
 } from "../pricing/display";
 import { buildRideEstimatePricing } from "../pricing/ride-estimate";
+import type { RedisClient } from "../redis/client";
 
 interface RideRouteDeps {
   privyAppId: string;
@@ -35,6 +37,7 @@ interface ScheduledRideRouteDeps {
   ridePricingDisplayProvider: RidePricingDisplayProvider;
   dispatcherQueue: Queue;
   leadTimeMs: number;
+  redisClient: RedisClient;
 }
 
 type LatLngAddress = {
@@ -308,60 +311,74 @@ export async function handleCreateScheduledRideRoute(
       return;
     }
 
-    const scheduledFor = parseScheduledFor(rawBody["scheduledFor"]);
-    const pickup = parseWaypoint(rawBody, "pickup");
-    const destination = parseWaypoint(rawBody, "destination");
-    const stops = parseStops(rawBody, "stops");
-    const plannedRoute = await deps.routePlanner.planRoute({
-      origin: pickup,
-      stops,
-      destination,
+    const result = await runIdempotentJsonRequest({
+      req,
+      redisClient: deps.redisClient,
+      userId: user.id,
+      routeKey: "scheduled-rides:create",
+      requestBody: rawBody,
+      execute: async () => {
+        const scheduledFor = parseScheduledFor(rawBody["scheduledFor"]);
+        const pickup = parseWaypoint(rawBody, "pickup");
+        const destination = parseWaypoint(rawBody, "destination");
+        const stops = parseStops(rawBody, "stops");
+        const plannedRoute = await deps.routePlanner.planRoute({
+          origin: pickup,
+          stops,
+          destination,
+        });
+
+        const scheduledRide = await scheduledRideClient.create({
+          riderId: user.id,
+          riderWallet: user.walletAddress.toLowerCase(),
+          scheduledFor,
+          paymentMethod: normalizeScheduledPaymentMethod(rawBody["paymentMethod"]),
+          pickupLat: pickup.lat,
+          pickupLng: pickup.lng,
+          pickupAddress: pickup.address,
+          destLat: destination.lat,
+          destLng: destination.lng,
+          destAddress: destination.address,
+          stops,
+          plannedDistanceKm: plannedRoute.distanceKm,
+          plannedDurationSeconds: plannedRoute.durationSeconds,
+          fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
+        });
+
+        const delayMs = Math.max(
+          0,
+          scheduledRide.scheduledFor.getTime() - deps.leadTimeMs - Date.now(),
+        );
+
+        deps.dispatcherQueue
+          .add(
+            "dispatch",
+            {
+              scheduledRideId: scheduledRide.id,
+              scheduledFor: scheduledRide.scheduledFor.toISOString(),
+            },
+            {
+              delay: delayMs,
+              jobId: buildScheduledRideJobId(scheduledRide.id),
+            },
+          )
+          .catch((err) =>
+            console.warn(
+              `[api-gateway] BullMQ enqueue failed for ${scheduledRide.id} (recovery scanner will catch it):`,
+              err,
+            ),
+          );
+
+        return {
+          statusCode: 201,
+          body: {
+            item: mapScheduledRideItem(scheduledRide),
+          },
+        };
+      },
     });
 
-    const scheduledRide = await scheduledRideClient.create({
-      riderId: user.id,
-      riderWallet: user.walletAddress.toLowerCase(),
-      scheduledFor,
-      paymentMethod: normalizeScheduledPaymentMethod(rawBody["paymentMethod"]),
-      pickupLat: pickup.lat,
-      pickupLng: pickup.lng,
-      pickupAddress: pickup.address,
-      destLat: destination.lat,
-      destLng: destination.lng,
-      destAddress: destination.address,
-      stops,
-      plannedDistanceKm: plannedRoute.distanceKm,
-      plannedDurationSeconds: plannedRoute.durationSeconds,
-      fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
-    });
-
-    const delayMs = Math.max(
-      0,
-      scheduledRide.scheduledFor.getTime() - deps.leadTimeMs - Date.now(),
-    );
-
-    deps.dispatcherQueue
-      .add(
-        "dispatch",
-        {
-          scheduledRideId: scheduledRide.id,
-          scheduledFor: scheduledRide.scheduledFor.toISOString(),
-        },
-        {
-          delay: delayMs,
-          jobId: buildScheduledRideJobId(scheduledRide.id),
-        },
-      )
-      .catch((err) =>
-        console.warn(
-          `[api-gateway] BullMQ enqueue failed for ${scheduledRide.id} (recovery scanner will catch it):`,
-          err,
-        ),
-      );
-
-    sendJson(res, 201, {
-      item: mapScheduledRideItem(scheduledRide),
-    });
+    sendJson(res, result.statusCode, result.body);
   } catch (error) {
     sendJson(res, 400, {
       error: error instanceof Error ? error.message : "Could not schedule ride",

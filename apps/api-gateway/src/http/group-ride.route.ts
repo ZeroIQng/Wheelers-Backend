@@ -8,16 +8,19 @@ import type {
 } from '@wheleers/config';
 import type { GroupRideReadyForMatchEvent, GroupRideMatchCancelledEvent } from '@wheleers/kafka-schemas';
 import { authenticateHttpUser } from './authenticate';
+import { runIdempotentJsonRequest } from './idempotency';
 import { readJsonBody, sendJson } from './utils';
 import { getNumber, getRecord, getString, isRecord } from '../utils/object';
 import type { GatewayPublisher } from '../websocket/publisher';
 import type { GroupRideFaceStorage } from '../storage/group-ride-face-storage';
+import type { RedisClient } from '../redis/client';
 
 interface GroupRideRouteDeps {
   privyAppId: string;
   privyVerificationKey: string;
   routePlanner: GoogleMapsRoutePlanner;
   publisher: GatewayPublisher;
+  redisClient: RedisClient;
   faceStorage?: GroupRideFaceStorage;
 }
 
@@ -287,37 +290,51 @@ export async function handleCreateGroupRideMatchRequestRoute(
       return;
     }
 
-    const pickup = parseWaypoint(rawBody, 'pickup');
-    const destination = parseWaypoint(rawBody, 'destination');
-    const stops = parseStops(rawBody, 'stops');
-    const plannedRoute = await deps.routePlanner.planRoute({
-      origin: pickup,
-      stops,
-      destination,
-    });
-
-    const request = await groupRideClient.createMatchRequest({
+    const result = await runIdempotentJsonRequest({
+      req,
+      redisClient: deps.redisClient,
       userId: user.id,
-      pickupLat: pickup.lat,
-      pickupLng: pickup.lng,
-      pickupAddress: pickup.address,
-      destLat: destination.lat,
-      destLng: destination.lng,
-      destAddress: destination.address,
-      stops,
-      plannedDistanceKm: plannedRoute.distanceKm,
-      plannedDurationSeconds: plannedRoute.durationSeconds,
-      fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
-      paymentMethod:
-        normalizePaymentMethod(rawBody['paymentMethod']) === 'smart_account'
-          ? 'SMART_ACCOUNT'
-          : 'WALLET_BALANCE',
+      routeKey: "group-rides:match-request:create",
+      requestBody: rawBody,
+      execute: async () => {
+        const pickup = parseWaypoint(rawBody, 'pickup');
+        const destination = parseWaypoint(rawBody, 'destination');
+        const stops = parseStops(rawBody, 'stops');
+        const plannedRoute = await deps.routePlanner.planRoute({
+          origin: pickup,
+          stops,
+          destination,
+        });
+
+        const request = await groupRideClient.createMatchRequest({
+          userId: user.id,
+          pickupLat: pickup.lat,
+          pickupLng: pickup.lng,
+          pickupAddress: pickup.address,
+          destLat: destination.lat,
+          destLng: destination.lng,
+          destAddress: destination.address,
+          stops,
+          plannedDistanceKm: plannedRoute.distanceKm,
+          plannedDurationSeconds: plannedRoute.durationSeconds,
+          fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
+          paymentMethod:
+            normalizePaymentMethod(rawBody['paymentMethod']) === 'smart_account'
+              ? 'SMART_ACCOUNT'
+              : 'WALLET_BALANCE',
+        });
+
+        return {
+          statusCode: 201,
+          body: {
+            item: mapMatchRequestItem(request),
+            uploadRequired: true,
+          },
+        };
+      },
     });
 
-    sendJson(res, 201, {
-      item: mapMatchRequestItem(request),
-      uploadRequired: true,
-    });
+    sendJson(res, result.statusCode, result.body);
   } catch (error) {
     sendJson(res, 400, {
       error:

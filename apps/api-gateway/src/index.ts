@@ -265,6 +265,7 @@ async function bootstrap(): Promise<void> {
     ridePricingDisplayProvider,
     dispatcherQueue,
     leadTimeMs,
+    redisClient: redisCommandClient,
   };
 
   const groupRideDeps = {
@@ -272,6 +273,7 @@ async function bootstrap(): Promise<void> {
     privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
     routePlanner,
     publisher,
+    redisClient: redisCommandClient,
     faceStorage: groupRideFaceStorage,
   };
 
@@ -621,6 +623,7 @@ async function bootstrap(): Promise<void> {
         pouchClient,
         publisher,
         ridePricingDisplayProvider,
+        redisClient: redisCommandClient,
         defaults: {
           providerId: gatewayEnv.POUCH_PROVIDER_ID,
           countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
@@ -877,6 +880,7 @@ async function bootstrap(): Promise<void> {
           ridePricingDisplayProvider,
           pouchClient,
           publisher,
+          redisClient: redisCommandClient,
           defaults: {
             providerId: gatewayEnv.POUCH_PROVIDER_ID,
             countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
