@@ -304,6 +304,7 @@ export async function handleCreateScheduledRideRoute(
       sendJson(res, 400, { error: "Link a wallet before scheduling a ride." });
       return;
     }
+    const riderWallet = user.walletAddress.toLowerCase();
 
     const rawBody = await readJsonBody(req);
     if (!isRecord(rawBody)) {
@@ -330,7 +331,7 @@ export async function handleCreateScheduledRideRoute(
 
         const scheduledRide = await scheduledRideClient.create({
           riderId: user.id,
-          riderWallet: user.walletAddress.toLowerCase(),
+          riderWallet,
           scheduledFor,
           paymentMethod: normalizeScheduledPaymentMethod(rawBody["paymentMethod"]),
           pickupLat: pickup.lat,

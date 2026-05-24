@@ -5,7 +5,7 @@ import type { RedisClient } from "../redis/client";
 
 type JsonRouteResult = {
   statusCode: number;
-  body: unknown;
+  body: Record<string, unknown>;
 };
 
 type IdempotencyStoredRecord =
@@ -73,7 +73,10 @@ function parseStoredRecord(raw: string | null): IdempotencyStoredRecord | null {
         state: "completed",
         fingerprint: parsed.fingerprint,
         statusCode: parsed.statusCode,
-        body: parsed.body ?? {},
+        body:
+          parsed.body && typeof parsed.body === "object" && !Array.isArray(parsed.body)
+            ? (parsed.body as Record<string, unknown>)
+            : {},
         completedAt:
           typeof parsed.completedAt === "string"
             ? parsed.completedAt
@@ -192,14 +195,14 @@ export async function runIdempotentJsonRequest(params: {
   if (storedRecord.state === "completed") {
     return {
       statusCode: storedRecord.statusCode,
-      body: storedRecord.body,
+      body: storedRecord.body as Record<string, unknown>,
     };
   }
 
   return {
     statusCode: 409,
-    body: {
-      error: "This request is already being processed. Try again in a moment.",
-    },
+      body: {
+        error: "This request is already being processed. Try again in a moment.",
+      },
   };
 }
