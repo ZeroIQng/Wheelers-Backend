@@ -59,6 +59,32 @@ function normalizeName(value: string | undefined): string | undefined {
   return trimmed;
 }
 
+function normalizeEmail(value: string | undefined): string | undefined {
+  const trimmed = value?.trim().toLowerCase();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    throw new Error("email must be a valid email address.");
+  }
+
+  return trimmed;
+}
+
+function normalizePhone(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (trimmed.length < 7 || trimmed.length > 24) {
+    throw new Error("phone number must be between 7 and 24 characters.");
+  }
+
+  return trimmed;
+}
+
 export async function handleGetCurrentProfileRoute(
   req: IncomingMessage,
   res: ServerResponse,
@@ -104,10 +130,12 @@ export async function handleUpdateCurrentProfileRoute(
     const name = normalizeName(
       getString(rawBody, "fullName") ?? getString(rawBody, "name"),
     );
+    const email = normalizeEmail(getString(rawBody, "email"));
+    const phone = normalizePhone(getString(rawBody, "phone"));
 
-    if (!username && !name) {
+    if (!username && !name && !email && !phone) {
       sendJson(res, 400, {
-        error: "username or fullName is required.",
+        error: "username, email, phone, or fullName is required.",
       });
       return;
     }
@@ -115,6 +143,8 @@ export async function handleUpdateCurrentProfileRoute(
     const updated = await userClient.updateProfile(user.id, {
       username,
       name,
+      email,
+      phone,
     });
 
     sendJson(res, 200, {
@@ -128,7 +158,7 @@ export async function handleUpdateCurrentProfileRoute(
       error.code === "P2002"
     ) {
       sendJson(res, 409, {
-        error: "That username is already taken.",
+        error: "That username or email is already taken.",
       });
       return;
     }

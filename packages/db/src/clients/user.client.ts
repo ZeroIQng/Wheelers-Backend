@@ -67,6 +67,7 @@ export const userClient = {
 
   updateProfile: (userId: string, data: {
     username?: string;
+    email?:    string;
     name?:     string;
     phone?:    string;
     photoUrl?: string;
