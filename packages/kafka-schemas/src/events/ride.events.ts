@@ -46,6 +46,8 @@ export const RideRequestedEvent = BaseRideEvent.extend({
   plannedDistanceKm: z.number().optional(),
   plannedDurationSeconds: z.number().int().optional(),
   fareEstimateUsdt: z.number(),
+  fareBeforeCashbackUsdt: z.number().optional(),
+  referralCashbackAppliedNgn: z.number().optional(),
   route:            RouteGeometry.optional(),
   paymentMethod:    z.enum(['wallet_balance', 'smart_account']),
 });

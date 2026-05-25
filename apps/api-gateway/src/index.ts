@@ -68,6 +68,7 @@ import {
   handleGetReferralSummaryRoute,
   handleListReferralCashbackRoute,
   handleListReferralReferralsRoute,
+  handlePreviewReferralRideCashbackRoute,
 } from "./http/referral.route";
 import { PouchClient } from "./http/pouch.client";
 import { applyCorsHeaders, sendJson } from "./http/utils";
@@ -451,6 +452,19 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleListReferralCashbackRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+      });
+      return;
+    }
+
+    if (url.pathname === "/referrals/me/cashback/ride-preview") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handlePreviewReferralRideCashbackRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
       });
