@@ -13,6 +13,7 @@ export { withdrawalClient } from './clients/withdrawal.client';
 export { groupRideClient }  from './clients/group-ride.client';
 export { complianceClient } from './clients/compliance.client';
 export { defiClient }       from './clients/defi.client';
+export { referralClient }   from './clients/referral.client';
 
 // Re-export Prisma types so services don't need to install @prisma/client directly
 export type {
@@ -39,6 +40,11 @@ export type {
   WithdrawalRequest,
   GroupRideMatchRequest,
   GroupRideFaceVerification,
+  ReferralCode,
+  Referral,
+  ReferralCashback,
+  ReferralCashbackUsage,
+  ReferralCashbackUnlock,
   Prisma,
 } from '@prisma/client';
 
@@ -69,4 +75,7 @@ export {
   RideStopType,
   ScheduledRideStatus,
   ScheduledRidePaymentMethod,
+  ReferralStatus,
+  ReferralCashbackType,
+  ReferralCashbackStatus,
 } from '@prisma/client';
