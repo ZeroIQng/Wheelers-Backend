@@ -46,7 +46,7 @@ const GatewayEnvSchema = z.object({
   // Must match ride-service so BullMQ enqueue timing aligns with dispatcher recovery.
   SCHEDULED_RIDE_DISPATCH_LEAD_TIME_S: z.coerce.number().int().positive().default(300),
   // Comma-separated list of allowed WebSocket/HTTP origins
-  CORS_ORIGINS:       z.string().default('http://localhost:19006'),
+  CORS_ORIGINS:       z.string().default('http://localhost:19006,https://app.wheelersng.com'),
   // How long a WebSocket connection can stay idle before being dropped (ms)
   WS_IDLE_TIMEOUT_MS: z.string().default('60000'),
 });
