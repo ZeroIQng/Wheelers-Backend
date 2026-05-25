@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "http";
 import { referralClient } from "@wheleers/db";
 import { authenticateHttpUser } from "./authenticate";
 import { readJsonBody, sendJson } from "./utils";
-import { getString, isRecord } from "../utils/object";
+import { getNumber, getString, isRecord } from "../utils/object";
 
 interface ReferralRouteDeps {
   privyAppId: string;
@@ -193,6 +193,47 @@ export async function handleListReferralCashbackRoute(
     sendJson(res, 400, {
       error:
         error instanceof Error ? error.message : "Could not load cashback.",
+    });
+  }
+}
+
+export async function handlePreviewReferralRideCashbackRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: ReferralRouteDeps,
+): Promise<void> {
+  try {
+    const user = await authenticateHttpUser(
+      req,
+      deps.privyAppId,
+      deps.privyVerificationKey,
+    );
+    const rawBody = await readJsonBody(req);
+    if (!isRecord(rawBody)) {
+      sendJson(res, 400, { error: "Body must be a JSON object" });
+      return;
+    }
+
+    const fareNgn = getNumber(rawBody, "fareNgn");
+    if (fareNgn === undefined || fareNgn <= 0) {
+      sendJson(res, 400, { error: "fareNgn must be greater than zero" });
+      return;
+    }
+
+    const requestedAmountNgn = getNumber(rawBody, "requestedAmountNgn");
+    const preview = await referralClient.previewRideCashback({
+      userId: user.id,
+      fareNgn,
+      requestedAmountNgn,
+    });
+
+    sendJson(res, 200, preview);
+  } catch (error) {
+    sendJson(res, 400, {
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not preview referral cashback.",
     });
   }
 }
