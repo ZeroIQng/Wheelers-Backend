@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "http";
+import { randomUUID } from "crypto";
 import {
+  referralClient,
   ScheduledRidePaymentMethod,
   scheduledRideClient,
   rideClient,
@@ -9,7 +11,7 @@ import { Queue } from "bullmq";
 import { authenticateHttpUser } from "./authenticate";
 import { runIdempotentJsonRequest } from "./idempotency";
 import { readJsonBody, sendJson } from "./utils";
-import { getNumber, getRecord, getString, isRecord } from "../utils/object";
+import { getBoolean, getNumber, getRecord, getString, isRecord } from "../utils/object";
 import {
   convertUsdtToRideDisplayAmount,
   type RidePricingDisplay,
@@ -134,6 +136,23 @@ function decimalToNumber(value: unknown): number | null {
   }
 
   return null;
+}
+
+function resolveNetFareUsdt(params: {
+  grossFareUsdt: number;
+  grossFareNgn: number;
+  discountNgn: number;
+}): number {
+  if (
+    params.discountNgn <= 0 ||
+    params.grossFareNgn <= 0 ||
+    params.grossFareUsdt <= 0
+  ) {
+    return params.grossFareUsdt;
+  }
+
+  const discountRatio = Math.min(params.discountNgn / params.grossFareNgn, 1);
+  return Math.max(0, Math.round(params.grossFareUsdt * (1 - discountRatio) * 1_000_000) / 1_000_000);
 }
 
 function parseScheduledFor(value: unknown): Date {
@@ -328,23 +347,67 @@ export async function handleCreateScheduledRideRoute(
           stops,
           destination,
         });
+        const scheduledRideId = randomUUID();
+        const useReferralCashback =
+          getBoolean(rawBody, "useReferralCashback") ?? false;
+        const requestedReferralCashbackNgn = getNumber(
+          rawBody,
+          "requestedReferralCashbackNgn",
+        );
+        let referralCashbackAppliedNgn = 0;
+        let fareEstimateUsdt = plannedRoute.fareEstimateUsdt;
 
-        const scheduledRide = await scheduledRideClient.create({
-          riderId: user.id,
-          riderWallet,
-          scheduledFor,
-          paymentMethod: normalizeScheduledPaymentMethod(rawBody["paymentMethod"]),
-          pickupLat: pickup.lat,
-          pickupLng: pickup.lng,
-          pickupAddress: pickup.address,
-          destLat: destination.lat,
-          destLng: destination.lng,
-          destAddress: destination.address,
-          stops,
-          plannedDistanceKm: plannedRoute.distanceKm,
-          plannedDurationSeconds: plannedRoute.durationSeconds,
-          fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
-        });
+        if (useReferralCashback) {
+          const reservation = await referralClient.reserveRideCashback({
+            userId: user.id,
+            rideId: scheduledRideId,
+            fareNgn: plannedRoute.ridePrice.tripPrice,
+            requestedAmountNgn: requestedReferralCashbackNgn,
+          });
+          referralCashbackAppliedNgn = reservation.reservedCashbackNgn;
+          fareEstimateUsdt = resolveNetFareUsdt({
+            grossFareUsdt: plannedRoute.fareEstimateUsdt,
+            grossFareNgn: plannedRoute.ridePrice.tripPrice,
+            discountNgn: referralCashbackAppliedNgn,
+          });
+        }
+
+        const scheduledRide = await scheduledRideClient
+          .create({
+            id: scheduledRideId,
+            riderId: user.id,
+            riderWallet,
+            scheduledFor,
+            paymentMethod: normalizeScheduledPaymentMethod(rawBody["paymentMethod"]),
+            pickupLat: pickup.lat,
+            pickupLng: pickup.lng,
+            pickupAddress: pickup.address,
+            destLat: destination.lat,
+            destLng: destination.lng,
+            destAddress: destination.address,
+            stops,
+            plannedDistanceKm: plannedRoute.distanceKm,
+            plannedDurationSeconds: plannedRoute.durationSeconds,
+            fareEstimateUsdt,
+          })
+          .catch(async (error) => {
+            if (referralCashbackAppliedNgn > 0) {
+              await referralClient.releaseRideCashback(scheduledRideId).catch(
+                (releaseError) =>
+                  console.warn(
+                    "[referrals] scheduled cashback release after create failure failed",
+                    {
+                      scheduledRideId,
+                      error:
+                        releaseError instanceof Error
+                          ? releaseError.message
+                          : String(releaseError),
+                    },
+                  ),
+              );
+            }
+            throw error;
+          });
 
         const delayMs = Math.max(
           0,
@@ -374,6 +437,8 @@ export async function handleCreateScheduledRideRoute(
           statusCode: 201,
           body: {
             item: mapScheduledRideItem(scheduledRide),
+            referralCashbackAppliedNgn,
+            fareBeforeCashbackNgn: plannedRoute.ridePrice.tripPrice,
           },
         };
       },
