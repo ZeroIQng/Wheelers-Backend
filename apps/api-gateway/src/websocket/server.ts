@@ -126,6 +126,11 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
 
         wsServer.handleUpgrade(request, socket as never, head, (ws: WebSocket) => {
           void deps.registry.register(ws, auth).then(() => {
+            console.info('[ws] connected', {
+              userId: user.id,
+              driverId: driver?.id ?? null,
+              ...getRequestLogContext(request, requestOrigin),
+            });
             wsServer.emit('connection', ws, request);
           }).catch((error) => {
             console.error('[ws] registry error', {
@@ -183,6 +188,12 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
           throw new Error('Unauthenticated socket context');
         }
 
+        console.info('[ws] message', {
+          type: parsed.type,
+          userId: auth.userId,
+          driverId: auth.driverId ?? null,
+        });
+
         const response =
           (await handleRideMessage(
             parsed.type,
@@ -204,19 +215,35 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
         deps.registry.sendToSocket(socket, response.type, response.payload);
 
       } catch (error) {
+        console.warn('[ws] message error', {
+          message: error instanceof Error ? error.message : 'Unknown message handling error',
+        });
         deps.registry.sendToSocket(socket, 'error', {
           message: error instanceof Error ? error.message : 'Unknown message handling error',
         });
       }
     });
 
-    socket.on('close', () => {
+    socket.on('close', (code, reason) => {
       clearInterval(heartbeat);
+      const auth = deps.registry.getAuthContext(socket);
+      console.info('[ws] closed', {
+        code,
+        reason: reason.toString() || null,
+        userId: auth?.userId ?? null,
+        driverId: auth?.driverId ?? null,
+      });
       void deps.registry.unregister(socket);
     });
 
-    socket.on('error', () => {
+    socket.on('error', (error) => {
       clearInterval(heartbeat);
+      const auth = deps.registry.getAuthContext(socket);
+      console.warn('[ws] socket error', {
+        message: error.message,
+        userId: auth?.userId ?? null,
+        driverId: auth?.driverId ?? null,
+      });
       void deps.registry.unregister(socket);
     });
   });

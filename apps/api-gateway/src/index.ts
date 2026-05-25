@@ -1,4 +1,4 @@
-import { createServer, type ServerResponse } from "http";
+import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import {
   buildTopicList,
   createConsumer,
@@ -100,6 +100,62 @@ function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
 
 function sendMethodNotAllowed(res: ServerResponse): void {
   sendJson(res, 405, { error: "Method not allowed" });
+}
+
+function getHeaderValue(req: IncomingMessage, name: string): string | null {
+  const value = req.headers[name.toLowerCase()];
+  return typeof value === "string" ? value : null;
+}
+
+function getClientIp(req: IncomingMessage): string | null {
+  const forwardedFor = getHeaderValue(req, "x-forwarded-for");
+  if (forwardedFor) {
+    return forwardedFor.split(",")[0]?.trim() || null;
+  }
+
+  return req.socket.remoteAddress ?? null;
+}
+
+function getSafePathForLog(url: URL): string {
+  if (url.searchParams.size === 0) {
+    return url.pathname;
+  }
+
+  const queryKeys = Array.from(url.searchParams.keys())
+    .filter((key) => !/token|secret|password|authorization|otp|code/i.test(key))
+    .sort();
+
+  return queryKeys.length > 0
+    ? `${url.pathname}?${queryKeys.map((key) => `${key}=<redacted>`).join("&")}`
+    : url.pathname;
+}
+
+function logHttpRequestStart(req: IncomingMessage, url: URL): void {
+  console.info("[http] request", {
+    method: req.method ?? null,
+    path: getSafePathForLog(url),
+    origin: getHeaderValue(req, "origin"),
+    ip: getClientIp(req),
+    userAgent: getHeaderValue(req, "user-agent"),
+  });
+}
+
+function attachHttpResponseLogger(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  startedAt: number,
+): void {
+  res.on("finish", () => {
+    console.info("[http] response", {
+      method: req.method ?? null,
+      path: getSafePathForLog(url),
+      statusCode: res.statusCode,
+      durationMs: Date.now() - startedAt,
+      origin: getHeaderValue(req, "origin"),
+      ip: getClientIp(req),
+    });
+  });
 }
 
 function buildPouchUserKycDefaults(env: {
@@ -278,24 +334,28 @@ async function bootstrap(): Promise<void> {
   };
 
   const server = createServer(async (req, res) => {
+    const startedAt = Date.now();
     const url = new URL(req.url ?? "/", "http://localhost");
+    attachHttpResponseLogger(req, res, url, startedAt);
+    logHttpRequestStart(req, url);
 
-    applyCorsHeaders(req, res, allowedOrigins);
+    try {
+      applyCorsHeaders(req, res, allowedOrigins);
 
-    if (req.method === "OPTIONS") {
-      res.statusCode = 204;
-      res.end();
-      return;
-    }
+      if (req.method === "OPTIONS") {
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
 
-    if (req.method === "GET" && url.pathname === "/health") {
-      sendJson(res, 200, {
-        status: "ok",
-        service: "api-gateway",
-        timestamp: new Date().toISOString(),
-      });
-      return;
-    }
+      if (req.method === "GET" && url.pathname === "/health") {
+        sendJson(res, 200, {
+          status: "ok",
+          service: "api-gateway",
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
 
     if (url.pathname === "/auth/privy") {
       if (req.method !== "POST") {
@@ -941,6 +1001,23 @@ async function bootstrap(): Promise<void> {
     sendJson(res, 404, {
       error: "Not found",
     });
+    } catch (error) {
+      console.error("[http] unhandled request error", {
+        method: req.method ?? null,
+        path: getSafePathForLog(url),
+        statusCode: res.statusCode,
+        durationMs: Date.now() - startedAt,
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+
+      if (!res.headersSent) {
+        sendJson(res, 500, { error: "Internal server error" });
+        return;
+      }
+
+      res.destroy(error instanceof Error ? error : undefined);
+    }
   });
 
   createGatewayWebSocketServer({
@@ -1007,6 +1084,21 @@ async function bootstrap(): Promise<void> {
     await redisCommandClient.disconnect();
   });
 }
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[api-gateway] unhandled rejection", {
+    message: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+  });
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("[api-gateway] uncaught exception", {
+    message: error.message,
+    stack: error.stack,
+  });
+  process.exit(1);
+});
 
 bootstrap().catch((error) => {
   console.error("[api-gateway] Failed to start:", error);
