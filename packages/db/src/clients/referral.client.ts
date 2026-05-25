@@ -183,33 +183,33 @@ export const referralClient = {
   async findSummary(userId: string) {
     const [code, referrals, cashbackGroups, settledUsages, reservedUsages] =
       await Promise.all([
-      this.ensureCodeForUser(userId),
-      prisma.referral.groupBy({
-        by: ['status'],
-        where: { referrerId: userId },
-        _count: { _all: true },
-      }),
-      prisma.referralCashback.groupBy({
-        by: ['status'],
-        where: { userId },
-        _sum: { remainingAmountNgn: true },
-        _count: { _all: true },
-      }),
-      prisma.referralCashbackUsage.aggregate({
-        where: {
-          status: ReferralCashbackUsageStatus.SETTLED,
-          cashback: { userId },
-        },
-        _sum: { amountNgn: true },
-      }),
-      prisma.referralCashbackUsage.aggregate({
-        where: {
-          status: ReferralCashbackUsageStatus.RESERVED,
-          cashback: { userId },
-        },
-        _sum: { amountNgn: true },
-      }),
-    ]);
+        this.ensureCodeForUser(userId),
+        prisma.referral.groupBy({
+          by: ['status'],
+          where: { referrerId: userId },
+          _count: { _all: true },
+        }),
+        prisma.referralCashback.groupBy({
+          by: ['status'],
+          where: { userId },
+          _sum: { remainingAmountNgn: true },
+          _count: { _all: true },
+        }),
+        prisma.referralCashbackUsage.aggregate({
+          where: {
+            status: ReferralCashbackUsageStatus.SETTLED,
+            cashback: { userId },
+          },
+          _sum: { amountNgn: true },
+        }),
+        prisma.referralCashbackUsage.aggregate({
+          where: {
+            status: ReferralCashbackUsageStatus.RESERVED,
+            cashback: { userId },
+          },
+          _sum: { amountNgn: true },
+        }),
+      ]);
 
     const referralCount = (status: ReferralStatus) =>
       referrals.find((group) => group.status === status)?._count._all ?? 0;
