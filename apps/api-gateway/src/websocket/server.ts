@@ -59,25 +59,42 @@ function rejectUpgrade(socket: Duplex, statusCode: number, message: string): voi
   socket.destroy();
 }
 
+function getRequestLogContext(request: IncomingMessage, origin: string | null): Record<string, string | null> {
+  return {
+    origin,
+    remoteAddress: request.socket.remoteAddress ?? null,
+    userAgent: typeof request.headers['user-agent'] === 'string' ? request.headers['user-agent'] : null,
+  };
+}
+
 export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
   const wsServer = new WebSocketServer({ noServer: true });
 
   deps.server.on('upgrade', (request, socket, head) => {
     void (async () => {
       const url = new URL(request.url ?? '/', 'http://localhost');
+      const requestOrigin = getRequestOrigin(request);
       if (url.pathname !== '/ws') {
+        console.warn('[ws] reject: unsupported path', {
+          path: url.pathname,
+          ...getRequestLogContext(request, requestOrigin),
+        });
         rejectUpgrade(socket, 404, 'Not Found');
         return;
       }
 
-      const requestOrigin = getRequestOrigin(request);
       if (deps.allowedOrigins.size > 0 && requestOrigin && !deps.allowedOrigins.has(requestOrigin)) {
+        console.warn('[ws] reject: origin not allowed', {
+          allowedOrigins: Array.from(deps.allowedOrigins),
+          ...getRequestLogContext(request, requestOrigin),
+        });
         rejectUpgrade(socket, 403, 'Forbidden');
         return;
       }
 
       const token = getConnectionToken(request, url.searchParams);
       if (!token) {
+        console.warn('[ws] reject: missing access token', getRequestLogContext(request, requestOrigin));
         rejectUpgrade(socket, 401, 'Unauthorized');
         return;
       }
@@ -91,6 +108,10 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
 
         const user = await userClient.findByPrivyDid(verifiedToken.privyDid);
         if (!user) {
+          console.warn('[ws] reject: user not registered', {
+            privyDid: verifiedToken.privyDid,
+            ...getRequestLogContext(request, requestOrigin),
+          });
           rejectUpgrade(socket, 401, 'User not registered. Call POST /auth/privy first.');
           return;
         }
@@ -107,11 +128,20 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
           void deps.registry.register(ws, auth).then(() => {
             wsServer.emit('connection', ws, request);
           }).catch((error) => {
+            console.error('[ws] registry error', {
+              message: error instanceof Error ? error.message : String(error),
+              userId: user.id,
+              ...getRequestLogContext(request, requestOrigin),
+            });
             ws.close(1011, error instanceof Error ? error.message : 'Socket registry error');
           });
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Invalid auth token';
+        console.warn('[ws] reject: invalid access token', {
+          message,
+          ...getRequestLogContext(request, requestOrigin),
+        });
         rejectUpgrade(socket, 401, message);
       }
     })();
