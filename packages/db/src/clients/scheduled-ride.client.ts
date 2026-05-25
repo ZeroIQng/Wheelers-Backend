@@ -1,4 +1,9 @@
-import { Prisma, ScheduledRidePaymentMethod, ScheduledRideStatus } from '@prisma/client';
+import {
+  Prisma,
+  ReferralCashbackUsageStatus,
+  ScheduledRidePaymentMethod,
+  ScheduledRideStatus,
+} from '@prisma/client';
 import { prisma } from '../prisma';
 
 type ScheduledStopInput = {
@@ -35,6 +40,7 @@ function parseStops(value: Prisma.JsonValue | null | undefined): ScheduledStopIn
 
 export const scheduledRideClient = {
   create: (data: {
+    id?: string;
     riderId: string;
     riderWallet: string;
     scheduledFor: Date;
@@ -52,6 +58,7 @@ export const scheduledRideClient = {
   }) =>
     prisma.scheduledRide.create({
       data: {
+        id: data.id,
         riderId: data.riderId,
         riderWallet: data.riderWallet,
         scheduledFor: data.scheduledFor,
@@ -159,23 +166,33 @@ export const scheduledRideClient = {
     rideId: string;
     outbox: { topic: string; key: string; payload: unknown };
   }) => {
-    const [ride] = await prisma.$transaction([
-      prisma.scheduledRide.update({
+    const [ride] = await prisma.$transaction(async (tx) => {
+      const dispatchedRide = await tx.scheduledRide.update({
         where: { id: params.id },
         data: {
           status: ScheduledRideStatus.DISPATCHED,
           requestedRideId: params.rideId,
           dispatchedAt: new Date(),
         },
-      }),
-      prisma.outboxEvent.create({
+      });
+      await tx.referralCashbackUsage.updateMany({
+        where: {
+          rideId: params.id,
+          status: ReferralCashbackUsageStatus.RESERVED,
+        },
+        data: {
+          rideId: params.rideId,
+        },
+      });
+      await tx.outboxEvent.create({
         data: {
           topic: params.outbox.topic,
           key: params.outbox.key,
           payload: params.outbox.payload as Prisma.InputJsonValue,
         },
-      }),
-    ]);
+      });
+      return [dispatchedRide] as const;
+    });
     return ride;
   },
 

@@ -1,4 +1,5 @@
 import type { WheelersConsumer } from '@wheleers/kafka-client';
+import { referralClient } from '@wheleers/db';
 import {
   ComplianceEvent,
   GpsProcessedEvent,
@@ -172,6 +173,7 @@ async function handleRideEvent(
 
   if (event.eventType === 'RIDE_COMPLETED') {
     const ridePricingDisplay = await ridePricingDisplayProvider.getPricingDisplay();
+    const settledReferralUsages = await referralClient.settleRideCashback(event.rideId);
     await registry.sendToUser(event.riderId, 'ride:completed', {
       rideId: event.rideId,
       fareUsdt: event.fareUsdt,
@@ -179,6 +181,7 @@ async function handleRideEvent(
       distanceKm: event.distanceKm,
       durationSeconds: event.durationSeconds,
       completedAt: event.completedAt,
+      referralCashbackSettled: settledReferralUsages > 0,
       displayCurrency: ridePricingDisplay.displayCurrency,
       displayExchangeRate: ridePricingDisplay.displayExchangeRate,
     });
@@ -199,9 +202,14 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_CANCELLED') {
+    const releasedReferralCashback = await referralClient.releaseRideCashback(
+      event.rideId,
+    );
     await registry.sendToUser(event.riderId, 'ride:cancelled', {
       rideId: event.rideId,
       reason: event.reason,
+      referralCashbackReleasedNgn:
+        releasedReferralCashback.releasedCashbackNgn,
     });
 
     if (event.driverId) {

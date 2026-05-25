@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { GoogleMapsRoutePlanner } from '@wheleers/config';
+import { referralClient } from '@wheleers/db';
 import {
   DisputeOpenedEvent,
   FeedbackLoggedEvent,
@@ -104,6 +105,27 @@ function normalizeOpenedByRole(value: unknown): 'rider' | 'driver' {
   return 'rider';
 }
 
+function resolveNetFareUsdt(params: {
+  grossFareUsdt: number;
+  grossFareNgn: number;
+  discountNgn: number;
+}): number {
+  if (
+    params.discountNgn <= 0 ||
+    params.grossFareNgn <= 0 ||
+    params.grossFareUsdt <= 0
+  ) {
+    return params.grossFareUsdt;
+  }
+
+  const discountRatio = Math.min(params.discountNgn / params.grossFareNgn, 1);
+  return Math.max(0, round6(params.grossFareUsdt * (1 - discountRatio)));
+}
+
+function round6(value: number): number {
+  return Math.round(value * 1_000_000) / 1_000_000;
+}
+
 export async function handleRideMessage(
   type: string,
   payload: Record<string, unknown>,
@@ -123,6 +145,29 @@ export async function handleRideMessage(
       stops,
       destination,
     });
+    const useReferralCashback =
+      getBoolean(payload, 'useReferralCashback') ?? false;
+    const requestedReferralCashbackNgn = getNumber(
+      payload,
+      'requestedReferralCashbackNgn',
+    );
+    let referralCashbackAppliedNgn = 0;
+    let fareEstimateUsdt = plannedRoute.fareEstimateUsdt;
+
+    if (useReferralCashback) {
+      const reservation = await referralClient.reserveRideCashback({
+        userId: auth.userId,
+        rideId,
+        fareNgn: plannedRoute.ridePrice.tripPrice,
+        requestedAmountNgn: requestedReferralCashbackNgn,
+      });
+      referralCashbackAppliedNgn = reservation.reservedCashbackNgn;
+      fareEstimateUsdt = resolveNetFareUsdt({
+        grossFareUsdt: plannedRoute.fareEstimateUsdt,
+        grossFareNgn: plannedRoute.ridePrice.tripPrice,
+        discountNgn: referralCashbackAppliedNgn,
+      });
+    }
 
     const event = RideRequestedEvent.parse({
       eventType: 'RIDE_REQUESTED',
@@ -134,13 +179,39 @@ export async function handleRideMessage(
       stops,
       plannedDistanceKm: plannedRoute.distanceKm,
       plannedDurationSeconds: plannedRoute.durationSeconds,
-      fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
+      fareEstimateUsdt,
+      fareBeforeCashbackUsdt:
+        referralCashbackAppliedNgn > 0
+          ? plannedRoute.fareEstimateUsdt
+          : undefined,
+      referralCashbackAppliedNgn:
+        referralCashbackAppliedNgn > 0 ? referralCashbackAppliedNgn : undefined,
       route: plannedRoute.geometry,
       paymentMethod: normalizePaymentMethod(payload['paymentMethod']),
       timestamp,
     });
 
-    await publisher.publishRideEvent(event);
+    try {
+      await publisher.publishRideEvent(event);
+    } catch (error) {
+      if (referralCashbackAppliedNgn > 0) {
+        await referralClient.releaseRideCashback(rideId).catch((releaseError) => {
+          console.warn('[referrals] cashback release after publish failure failed', {
+            rideId,
+            error:
+              releaseError instanceof Error
+                ? releaseError.message
+                : String(releaseError),
+          });
+        });
+      }
+      throw error;
+    }
+
+    const payableFareNgn = Math.max(
+      0,
+      plannedRoute.ridePrice.tripPrice - referralCashbackAppliedNgn,
+    );
     return {
       type: 'ride:request:accepted',
       payload: {
@@ -153,9 +224,17 @@ export async function handleRideMessage(
         plannedDistanceKm: event.plannedDistanceKm,
         plannedDurationSeconds: event.plannedDurationSeconds,
         fareEstimateUsdt: event.fareEstimateUsdt,
-        fareEstimateNgn: plannedRoute.ridePrice.tripPrice,
+        fareBeforeCashbackUsdt: event.fareBeforeCashbackUsdt,
+        fareEstimateNgn: payableFareNgn,
+        fareBeforeCashbackNgn: plannedRoute.ridePrice.tripPrice,
+        referralCashbackAppliedNgn,
         pricingCurrency: 'NGN',
-        pricingBreakdown: plannedRoute.ridePrice,
+        pricingBreakdown: {
+          ...plannedRoute.ridePrice,
+          tripPrice: payableFareNgn,
+          originalTripPrice: plannedRoute.ridePrice.tripPrice,
+          referralCashbackAppliedNgn,
+        },
       },
     };
   }
