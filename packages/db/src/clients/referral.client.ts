@@ -181,7 +181,8 @@ export const referralClient = {
   },
 
   async findSummary(userId: string) {
-    const [code, referrals, cashbackGroups] = await Promise.all([
+    const [code, referrals, cashbackGroups, settledUsages, reservedUsages] =
+      await Promise.all([
       this.ensureCodeForUser(userId),
       prisma.referral.groupBy({
         by: ['status'],
@@ -193,6 +194,20 @@ export const referralClient = {
         where: { userId },
         _sum: { remainingAmountNgn: true },
         _count: { _all: true },
+      }),
+      prisma.referralCashbackUsage.aggregate({
+        where: {
+          status: ReferralCashbackUsageStatus.SETTLED,
+          cashback: { userId },
+        },
+        _sum: { amountNgn: true },
+      }),
+      prisma.referralCashbackUsage.aggregate({
+        where: {
+          status: ReferralCashbackUsageStatus.RESERVED,
+          cashback: { userId },
+        },
+        _sum: { amountNgn: true },
       }),
     ]);
 
@@ -208,7 +223,8 @@ export const referralClient = {
       code: code.code,
       availableCashbackNgn: cashbackAmount(ReferralCashbackStatus.AVAILABLE),
       frozenCashbackNgn: cashbackAmount(ReferralCashbackStatus.FROZEN),
-      usedCashbackNgn: cashbackAmount(ReferralCashbackStatus.USED),
+      reservedCashbackNgn: decimalToNumber(reservedUsages._sum.amountNgn),
+      usedCashbackNgn: decimalToNumber(settledUsages._sum.amountNgn),
       pendingReferrals: referralCount(ReferralStatus.PENDING),
       qualifiedReferrals: referralCount(ReferralStatus.QUALIFIED_RIDE),
       expiredNoRideReferrals: referralCount(ReferralStatus.EXPIRED_NO_RIDE),

@@ -513,6 +513,9 @@ export async function handleCancelScheduledRideRoute(
       return;
     }
 
+    const releasedReferralCashback =
+      await referralClient.releaseRideCashback(scheduledRideId);
+
     deps.dispatcherQueue
       .remove(buildScheduledRideJobId(scheduledRideId))
       .catch((err) =>
@@ -524,6 +527,7 @@ export async function handleCancelScheduledRideRoute(
     sendJson(res, 200, {
       cancelled: true,
       scheduledRideId,
+      referralCashbackReleasedNgn: releasedReferralCashback.releasedCashbackNgn,
     });
   } catch (error) {
     sendJson(res, 400, {
