@@ -360,6 +360,7 @@ model Ride {
   driver           Driver?      @relation("DriverRides", fields: [driverId], references: [id])
   routeStops       RideStop[]
   referralQualifications Referral[] @relation("ReferralFirstRide")
+  referralCashbackUsages ReferralCashbackUsage[]
 
   @@index([riderId, createdAt])
   @@index([driverId, status])
@@ -477,15 +478,19 @@ model ReferralCashback {
 }
 
 model ReferralCashbackUsage {
-  id          String            @id @default(uuid())
+  id          String                      @id @default(uuid())
   cashbackId  String
   rideId      String?
-  amountNgn   Decimal           @db.Decimal(18, 2)
-  createdAt   DateTime          @default(now())
-  cashback    ReferralCashback  @relation(fields: [cashbackId], references: [id], onDelete: Cascade)
+  amountNgn   Decimal                     @db.Decimal(18, 2)
+  status      ReferralCashbackUsageStatus @default(RESERVED)
+  createdAt   DateTime                    @default(now())
+  settledAt   DateTime?
+  releasedAt  DateTime?
+  cashback    ReferralCashback            @relation(fields: [cashbackId], references: [id], onDelete: Cascade)
+  ride        Ride?                       @relation(fields: [rideId], references: [id], onDelete: SetNull)
 
   @@index([cashbackId])
-  @@index([rideId])
+  @@index([rideId, status])
 }
 
 model ReferralCashbackUnlock {
@@ -856,4 +861,10 @@ enum ReferralCashbackStatus {
   FROZEN
   USED
   EXPIRED
+}
+
+enum ReferralCashbackUsageStatus {
+  RESERVED
+  SETTLED
+  RELEASED
 }

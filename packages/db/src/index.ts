@@ -78,4 +78,5 @@ export {
   ReferralStatus,
   ReferralCashbackType,
   ReferralCashbackStatus,
+  ReferralCashbackUsageStatus,
 } from '@prisma/client';
