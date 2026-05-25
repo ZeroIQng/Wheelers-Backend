@@ -63,6 +63,12 @@ import {
   handleSendPhoneOtpRoute,
   handleVerifyPhoneOtpRoute,
 } from "./http/phone.route";
+import {
+  handleApplyReferralCodeRoute,
+  handleGetReferralSummaryRoute,
+  handleListReferralCashbackRoute,
+  handleListReferralReferralsRoute,
+} from "./http/referral.route";
 import { PouchClient } from "./http/pouch.client";
 import { applyCorsHeaders, sendJson } from "./http/utils";
 import { startGatewayKafkaConsumer } from "./kafka/consumer";
@@ -392,6 +398,58 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleUpdateCurrentProfileRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+      });
+      return;
+    }
+
+    if (url.pathname === "/referrals/me") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleGetReferralSummaryRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+      });
+      return;
+    }
+
+    if (url.pathname === "/referrals/apply") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleApplyReferralCodeRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+      });
+      return;
+    }
+
+    if (url.pathname === "/referrals/me/referrals") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleListReferralReferralsRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+      });
+      return;
+    }
+
+    if (url.pathname === "/referrals/me/cashback") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleListReferralCashbackRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
       });
