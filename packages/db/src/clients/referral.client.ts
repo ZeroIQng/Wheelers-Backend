@@ -56,7 +56,7 @@ async function settleReferralWithReward(
   tx: Prisma.TransactionClient,
   input: {
     referralId: string;
-    status: ReferralStatus.QUALIFIED_RIDE | ReferralStatus.EXPIRED_NO_RIDE;
+    status: 'QUALIFIED_RIDE' | 'EXPIRED_NO_RIDE';
     firstRideId?: string;
     amountNgn: Prisma.Decimal;
     type: ReferralCashbackType;
