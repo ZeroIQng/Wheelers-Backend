@@ -27,12 +27,10 @@ export function startReferralJobs(): ReferralJobsHandle {
 
     try {
       const now = new Date();
-      const [frozen, qualified, expired, closed] = await Promise.all([
-        referralClient.freezeExpiredCashbacks(now),
-        referralClient.settleQualifiedRideRewards(now),
-        referralClient.settleExpiredNoRideRewards(now),
-        referralClient.closeStaleReferrals(now),
-      ]);
+      const frozen = await referralClient.freezeExpiredCashbacks(now);
+      const qualified = await referralClient.settleQualifiedRideRewards(now);
+      const expired = await referralClient.settleExpiredNoRideRewards(now);
+      const closed = await referralClient.closeStaleReferrals(now);
 
       if (frozen > 0 || qualified > 0 || expired > 0 || closed > 0) {
         console.info('[referrals] jobs settled', {

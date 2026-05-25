@@ -79,6 +79,7 @@ import { GatewayPublisher } from "./websocket/publisher";
 import { SocketRegistry } from "./websocket/registry";
 import { createGatewayWebSocketServer } from "./websocket/server";
 import { GroupRideFaceStorage } from "./storage/group-ride-face-storage";
+import { startReferralJobs } from "./referrals/jobs";
 
 const SCHEDULED_RIDE_QUEUE = "wheleers-scheduled-rides";
 
@@ -1095,6 +1096,8 @@ async function bootstrap(): Promise<void> {
     batchSize: 100,
   });
 
+  const referralJobs = startReferralJobs();
+
   await startGatewayKafkaConsumer({
     consumer,
     registry,
@@ -1124,6 +1127,10 @@ async function bootstrap(): Promise<void> {
 
   onShutdown(async () => {
     outboxPublisher.shutdown();
+  });
+
+  onShutdown(async () => {
+    referralJobs.shutdown();
   });
 
   onShutdown(async () => {
