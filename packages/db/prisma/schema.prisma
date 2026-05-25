@@ -360,7 +360,6 @@ model Ride {
   driver           Driver?      @relation("DriverRides", fields: [driverId], references: [id])
   routeStops       RideStop[]
   referralQualifications Referral[] @relation("ReferralFirstRide")
-  referralCashbackUsages ReferralCashbackUsage[]
 
   @@index([riderId, createdAt])
   @@index([driverId, status])
@@ -487,7 +486,6 @@ model ReferralCashbackUsage {
   settledAt   DateTime?
   releasedAt  DateTime?
   cashback    ReferralCashback            @relation(fields: [cashbackId], references: [id], onDelete: Cascade)
-  ride        Ride?                       @relation(fields: [rideId], references: [id], onDelete: SetNull)
 
   @@index([cashbackId])
   @@index([rideId, status])

@@ -9,7 +9,3 @@ ALTER TABLE "ReferralCashbackUsage"
 
 DROP INDEX IF EXISTS "ReferralCashbackUsage_rideId_idx";
 CREATE INDEX "ReferralCashbackUsage_rideId_status_idx" ON "ReferralCashbackUsage"("rideId", "status");
-
-ALTER TABLE "ReferralCashbackUsage"
-  ADD CONSTRAINT "ReferralCashbackUsage_rideId_fkey"
-  FOREIGN KEY ("rideId") REFERENCES "Ride"("id") ON DELETE SET NULL ON UPDATE CASCADE;

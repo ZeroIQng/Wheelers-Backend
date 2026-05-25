@@ -1,4 +1,10 @@
-import { Prisma, ReferralCashbackStatus, ReferralCashbackType, ReferralStatus } from '@prisma/client';
+import {
+  Prisma,
+  ReferralCashbackStatus,
+  ReferralCashbackType,
+  ReferralCashbackUsageStatus,
+  ReferralStatus,
+} from '@prisma/client';
 import { prisma } from '../prisma';
 
 const RIDE_QUALIFIED_REWARD_NGN = new Prisma.Decimal(1000);
@@ -27,6 +33,32 @@ function buildReferralCodeCandidate(): string {
     value += alphabet[Math.floor(Math.random() * alphabet.length)];
   }
   return value;
+}
+
+function toNgnDecimal(value: number): Prisma.Decimal {
+  if (!Number.isFinite(value) || value <= 0) {
+    return new Prisma.Decimal(0);
+  }
+
+  return new Prisma.Decimal(Math.round(value * 100)).div(100);
+}
+
+async function sumAvailableCashbackNgn(
+  tx: Pick<typeof prisma, 'referralCashback'>,
+  userId: string,
+  now: Date,
+): Promise<Prisma.Decimal> {
+  const result = await tx.referralCashback.aggregate({
+    where: {
+      userId,
+      status: ReferralCashbackStatus.AVAILABLE,
+      remainingAmountNgn: { gt: new Prisma.Decimal(0) },
+      freezesAt: { gt: now },
+    },
+    _sum: { remainingAmountNgn: true },
+  });
+
+  return result._sum.remainingAmountNgn ?? new Prisma.Decimal(0);
 }
 
 async function createCashback(
@@ -300,6 +332,185 @@ export const referralClient = {
         },
       },
     });
+  },
+
+  async previewRideCashback(input: {
+    userId: string;
+    fareNgn: number;
+    requestedAmountNgn?: number;
+    now?: Date;
+  }) {
+    const now = input.now ?? new Date();
+    const fareNgn = toNgnDecimal(input.fareNgn);
+    const requestedAmountNgn =
+      input.requestedAmountNgn === undefined
+        ? fareNgn
+        : toNgnDecimal(input.requestedAmountNgn);
+    const available = await sumAvailableCashbackNgn(prisma, input.userId, now);
+    const discount = Prisma.Decimal.min(fareNgn, requestedAmountNgn, available);
+
+    return {
+      availableCashbackNgn: decimalToNumber(available),
+      discountNgn: decimalToNumber(discount),
+      payableNgn: decimalToNumber(Prisma.Decimal.max(fareNgn.minus(discount), 0)),
+    };
+  },
+
+  async reserveRideCashback(input: {
+    userId: string;
+    rideId: string;
+    fareNgn: number;
+    requestedAmountNgn?: number;
+    now?: Date;
+  }) {
+    const now = input.now ?? new Date();
+    const fareNgn = toNgnDecimal(input.fareNgn);
+    const requestedAmountNgn =
+      input.requestedAmountNgn === undefined
+        ? fareNgn
+        : toNgnDecimal(input.requestedAmountNgn);
+
+    if (fareNgn.lte(0) || requestedAmountNgn.lte(0)) {
+      return {
+        reservedCashbackNgn: 0,
+        payableNgn: decimalToNumber(fareNgn),
+        alreadyReserved: false,
+      };
+    }
+
+    return prisma.$transaction(async (tx) => {
+      const existingUsages = await tx.referralCashbackUsage.findMany({
+        where: {
+          rideId: input.rideId,
+          status: {
+            in: [
+              ReferralCashbackUsageStatus.RESERVED,
+              ReferralCashbackUsageStatus.SETTLED,
+            ],
+          },
+        },
+        select: { amountNgn: true },
+      });
+
+      if (existingUsages.length > 0) {
+        const existingAmount = existingUsages.reduce(
+          (total, usage) => total.plus(usage.amountNgn),
+          new Prisma.Decimal(0),
+        );
+        return {
+          reservedCashbackNgn: decimalToNumber(existingAmount),
+          payableNgn: decimalToNumber(Prisma.Decimal.max(fareNgn.minus(existingAmount), 0)),
+          alreadyReserved: true,
+        };
+      }
+
+      const cashbacks = await tx.referralCashback.findMany({
+        where: {
+          userId: input.userId,
+          status: ReferralCashbackStatus.AVAILABLE,
+          remainingAmountNgn: { gt: new Prisma.Decimal(0) },
+          freezesAt: { gt: now },
+        },
+        orderBy: [{ freezesAt: 'asc' }, { createdAt: 'asc' }],
+      });
+
+      let remainingToReserve = Prisma.Decimal.min(fareNgn, requestedAmountNgn);
+      let reservedCashbackNgn = new Prisma.Decimal(0);
+
+      for (const cashback of cashbacks) {
+        if (remainingToReserve.lte(0)) break;
+
+        const amountToUse = Prisma.Decimal.min(
+          cashback.remainingAmountNgn,
+          remainingToReserve,
+        );
+        if (amountToUse.lte(0)) continue;
+
+        const nextRemaining = cashback.remainingAmountNgn.minus(amountToUse);
+
+        await tx.referralCashbackUsage.create({
+          data: {
+            cashbackId: cashback.id,
+            rideId: input.rideId,
+            amountNgn: amountToUse,
+            status: ReferralCashbackUsageStatus.RESERVED,
+          },
+        });
+
+        await tx.referralCashback.update({
+          where: { id: cashback.id },
+          data: {
+            remainingAmountNgn: { decrement: amountToUse },
+            status: nextRemaining.lte(0)
+              ? ReferralCashbackStatus.USED
+              : ReferralCashbackStatus.AVAILABLE,
+            usedAt: nextRemaining.lte(0) ? now : cashback.usedAt,
+          },
+        });
+
+        reservedCashbackNgn = reservedCashbackNgn.plus(amountToUse);
+        remainingToReserve = remainingToReserve.minus(amountToUse);
+      }
+
+      return {
+        reservedCashbackNgn: decimalToNumber(reservedCashbackNgn),
+        payableNgn: decimalToNumber(Prisma.Decimal.max(fareNgn.minus(reservedCashbackNgn), 0)),
+        alreadyReserved: false,
+      };
+    });
+  },
+
+  async releaseRideCashback(rideId: string, now = new Date()) {
+    return prisma.$transaction(async (tx) => {
+      const usages = await tx.referralCashbackUsage.findMany({
+        where: {
+          rideId,
+          status: ReferralCashbackUsageStatus.RESERVED,
+        },
+        include: { cashback: true },
+      });
+
+      let releasedCashbackNgn = new Prisma.Decimal(0);
+
+      for (const usage of usages) {
+        await tx.referralCashback.update({
+          where: { id: usage.cashbackId },
+          data: {
+            remainingAmountNgn: { increment: usage.amountNgn },
+            status: ReferralCashbackStatus.AVAILABLE,
+            usedAt: null,
+          },
+        });
+        await tx.referralCashbackUsage.update({
+          where: { id: usage.id },
+          data: {
+            status: ReferralCashbackUsageStatus.RELEASED,
+            releasedAt: now,
+          },
+        });
+        releasedCashbackNgn = releasedCashbackNgn.plus(usage.amountNgn);
+      }
+
+      return {
+        releasedCount: usages.length,
+        releasedCashbackNgn: decimalToNumber(releasedCashbackNgn),
+      };
+    });
+  },
+
+  async settleRideCashback(rideId: string, now = new Date()) {
+    const result = await prisma.referralCashbackUsage.updateMany({
+      where: {
+        rideId,
+        status: ReferralCashbackUsageStatus.RESERVED,
+      },
+      data: {
+        status: ReferralCashbackUsageStatus.SETTLED,
+        settledAt: now,
+      },
+    });
+
+    return result.count;
   },
 
   async freezeExpiredCashbacks(now = new Date()) {
