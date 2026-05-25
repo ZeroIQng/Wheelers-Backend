@@ -281,6 +281,7 @@ model GroupRideMatchRequest {
   destLat                Float
   destLng                Float
   destAddress            String
+  genderPreference       GroupRideGenderPreference   @default(ANY)
   stops                  Json?
   plannedDistanceKm      Float?
   plannedDurationSeconds Int?
@@ -301,6 +302,7 @@ model GroupRideMatchRequest {
   @@index([userId, status, createdAt])
   @@index([status, updatedAt])
   @@index([groupId, status, updatedAt])
+  @@index([genderPreference, status])
 }
 
 model GroupRideFaceVerification {
@@ -739,6 +741,12 @@ enum GroupRideFaceVerificationStatus {
   UPLOADING
   STORED
   FAILED
+}
+
+enum GroupRideGenderPreference {
+  ANY
+  WOMEN_ONLY
+  MEN_ONLY
 }
 
 enum DefiTier {

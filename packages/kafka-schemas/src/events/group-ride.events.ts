@@ -21,6 +21,12 @@ const LatLng = z.object({
   address: z.string(),
 });
 
+export const GroupRideGenderPreference = z.enum([
+  'any',
+  'women_only',
+  'men_only',
+]);
+
 const BaseGroupRideEvent = z.object({
   groupId: z.string().uuid(),
   timestamp: z.string().datetime(),
@@ -37,6 +43,7 @@ export const GroupRideReadyForMatchEvent = z.object({
   plannedDistanceKm: z.number().optional(),
   plannedDurationSeconds: z.number().int().optional(),
   fareEstimateUsdt: z.number().optional(),
+  genderPreference: GroupRideGenderPreference.default('any'),
   paymentMethod: z.enum(['wallet_balance', 'smart_account']),
   timestamp: z.string().datetime(),
 });
@@ -54,6 +61,7 @@ const GroupRideMember = z.object({
   riderId: z.string().uuid(),
   pickup: LatLng,
   destination: LatLng,
+  genderPreference: GroupRideGenderPreference.default('any'),
   headingDeg: z.number(),
   compatibilityScore: z.number().min(0).max(1),
 });

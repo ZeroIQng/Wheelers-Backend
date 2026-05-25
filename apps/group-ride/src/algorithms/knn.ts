@@ -37,6 +37,10 @@ export function scoreRideCompatibility(
   request: GroupRideRequest,
   env: GroupRideEnv,
 ): CompatibleRideCandidate | null {
+  if (!genderPreferencesCompatible(anchor, request)) {
+    return null;
+  }
+
   const pickupDistanceKm = haversineKm(anchor.pickup, request.pickup);
   if (pickupDistanceKm > env.GROUP_RIDE_PICKUP_RADIUS_KM) {
     return null;
@@ -81,4 +85,18 @@ export function scoreRideCompatibility(
     headingDeltaDeg: round3(headingDeltaDeg),
     score,
   };
+}
+
+function genderPreferencesCompatible(
+  anchor: GroupRideRequest,
+  request: GroupRideRequest,
+): boolean {
+  if (anchor.genderPreference === 'any' && request.genderPreference === 'any') {
+    return true;
+  }
+
+  return (
+    anchor.genderPreference !== 'any' &&
+    anchor.genderPreference === request.genderPreference
+  );
 }

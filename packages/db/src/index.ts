@@ -70,6 +70,7 @@ export {
   WithdrawalRequestStatus,
   GroupRideMatchRequestStatus,
   GroupRideFaceVerificationStatus,
+  GroupRideGenderPreference,
   RideHoldStatus,
   RideStopStatus,
   RideStopType,

@@ -184,6 +184,7 @@ export function createGroupRidePlanner(params: {
         riderId: member.riderId,
         pickup: member.pickup,
         destination: member.destination,
+        genderPreference: member.genderPreference,
         headingDeg: member.headingDeg,
         compatibilityScore:
           member.rideId === request.rideId
@@ -211,6 +212,7 @@ function mapReadyForMatchEvent(event: GroupRideReadyForMatchEvent): GroupRideReq
     riderId: event.riderId,
     pickup: event.pickup,
     destination: event.destination,
+    genderPreference: event.genderPreference,
     headingDeg: bearingDegrees(event.pickup, event.destination),
     fareEstimateUsdt: event.fareEstimateUsdt ?? 0,
     requestedAt: event.timestamp,

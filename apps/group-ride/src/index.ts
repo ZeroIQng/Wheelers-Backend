@@ -75,6 +75,12 @@ async function bootstrap(): Promise<void> {
         lng: request.destLng,
         address: request.destAddress,
       },
+      genderPreference:
+        request.genderPreference === 'WOMEN_ONLY'
+          ? 'women_only'
+          : request.genderPreference === 'MEN_ONLY'
+            ? 'men_only'
+            : 'any',
       headingDeg: bearingDegrees(
         { lat: request.pickupLat, lng: request.pickupLng },
         { lat: request.destLat, lng: request.destLng },
@@ -100,6 +106,12 @@ async function bootstrap(): Promise<void> {
         plannedDistanceKm: request.plannedDistanceKm ?? undefined,
         plannedDurationSeconds: request.plannedDurationSeconds ?? undefined,
         fareEstimateUsdt: Number(request.fareEstimateUsdt ?? 0),
+        genderPreference:
+          request.genderPreference === 'WOMEN_ONLY'
+            ? 'women_only'
+            : request.genderPreference === 'MEN_ONLY'
+              ? 'men_only'
+              : 'any',
         paymentMethod:
           request.paymentMethod === 'SMART_ACCOUNT'
             ? 'smart_account'

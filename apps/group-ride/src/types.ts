@@ -18,6 +18,7 @@ export type GroupRideRequest = {
   riderId: string;
   pickup: AddressPoint;
   destination: AddressPoint;
+  genderPreference: GroupRideReadyForMatchEvent['genderPreference'];
   headingDeg: number;
   fareEstimateUsdt: number;
   requestedAt: string;

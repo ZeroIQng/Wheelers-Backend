@@ -1,4 +1,5 @@
 import type {
+  GroupRideGenderPreference,
   GroupRideMatchRequestStatus,
   ScheduledRidePaymentMethod,
 } from '@prisma/client';
@@ -15,6 +16,7 @@ export const groupRideClient = {
     destLat: number;
     destLng: number;
     destAddress: string;
+    genderPreference?: GroupRideGenderPreference;
     stops?: unknown[];
     plannedDistanceKm?: number;
     plannedDurationSeconds?: number;
@@ -31,6 +33,7 @@ export const groupRideClient = {
         destLat: data.destLat,
         destLng: data.destLng,
         destAddress: data.destAddress,
+        genderPreference: data.genderPreference,
         stops: data.stops
           ? (data.stops as Prisma.InputJsonValue)
           : undefined,

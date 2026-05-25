@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import {
+  GroupRideGenderPreference,
   GroupRideMatchRequestStatus,
   groupRideClient,
 } from '@wheleers/db';
@@ -87,6 +88,32 @@ function normalizePaymentMethod(value: unknown): 'wallet_balance' | 'smart_accou
   return value === 'smart_account' ? 'smart_account' : 'wallet_balance';
 }
 
+function normalizeGenderPreference(value: unknown): GroupRideGenderPreference {
+  if (value === 'women_only' || value === 'WOMEN_ONLY') {
+    return GroupRideGenderPreference.WOMEN_ONLY;
+  }
+
+  if (value === 'men_only' || value === 'MEN_ONLY') {
+    return GroupRideGenderPreference.MEN_ONLY;
+  }
+
+  return GroupRideGenderPreference.ANY;
+}
+
+function serializeGenderPreference(
+  value: GroupRideGenderPreference,
+): 'any' | 'women_only' | 'men_only' {
+  if (value === GroupRideGenderPreference.WOMEN_ONLY) {
+    return 'women_only';
+  }
+
+  if (value === GroupRideGenderPreference.MEN_ONLY) {
+    return 'men_only';
+  }
+
+  return 'any';
+}
+
 function parseCapturedAt(value: unknown): Date | undefined {
   if (typeof value !== 'string' || value.trim().length === 0) {
     return undefined;
@@ -163,6 +190,7 @@ function mapMatchRequestItem(
     plannedDistanceKm: request.plannedDistanceKm ?? null,
     plannedDurationSeconds: request.plannedDurationSeconds ?? null,
     fareEstimateUsdt: decimalToNumber(request.fareEstimateUsdt),
+    genderPreference: serializeGenderPreference(request.genderPreference),
     paymentMethod:
       request.paymentMethod === 'SMART_ACCOUNT'
         ? 'smart_account'
@@ -243,6 +271,7 @@ function buildReadyForMatchEvent(
     plannedDistanceKm: request.plannedDistanceKm ?? undefined,
     plannedDurationSeconds: request.plannedDurationSeconds ?? undefined,
     fareEstimateUsdt: decimalToNumber(request.fareEstimateUsdt) ?? undefined,
+    genderPreference: serializeGenderPreference(request.genderPreference),
     paymentMethod:
       request.paymentMethod === 'SMART_ACCOUNT'
         ? 'smart_account'
@@ -314,6 +343,7 @@ export async function handleCreateGroupRideMatchRequestRoute(
           destLat: destination.lat,
           destLng: destination.lng,
           destAddress: destination.address,
+          genderPreference: normalizeGenderPreference(rawBody['genderPreference']),
           stops,
           plannedDistanceKm: plannedRoute.distanceKm,
           plannedDurationSeconds: plannedRoute.durationSeconds,
