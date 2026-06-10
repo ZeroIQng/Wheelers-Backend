@@ -69,7 +69,9 @@ wheleers/
 │   ├── config/               # Env validation + constants (fees, GPS, ride, DeFi)
 │   └── blockchain/           # viem, Solana, Stellar clients + contract helpers
 │
-├── ecosystem.config.cjs      # PM2 process definitions for backend services
+├── infra/
+│   └── docker-compose.yml    # Local Postgres, Redis, Kafka only
+├── ecosystem.config.cjs      # PM2 process definitions for backend app services
 └── package.json
 ```
 
@@ -673,15 +675,15 @@ GPS topics get 8 partitions because at 400 concurrent riders that's ~133 GPS eve
 
 ## 9. Infrastructure
 
-Backend app processes run under PM2 using `ecosystem.config.cjs`.
+Backend app processes run under PM2 using `ecosystem.config.cjs`. Local infrastructure runs in Docker Compose through `infra/docker-compose.yml`.
 
 ```
-npm run build
+npm run infra:up
 npm run db:migrate:deploy
 npm run pm2:start
 ```
 
-Postgres, Redis, and Kafka are expected to run as host or managed services. Set `DATABASE_URL`, `REDIS_URL`, and `KAFKA_BROKERS` in `.env`.
+Docker Compose is only for Postgres, Redis, Kafka, and Zookeeper. The Node apps are not run in Docker.
 
 To scale a service: `pm2 scale ride-service 3`. Kafka's consumer groups handle the load distribution automatically; no code changes needed.
 
@@ -689,7 +691,7 @@ To scale a service: `pm2 scale ride-service 3`. Kafka's consumer groups handle t
 
 ## 10. Getting started
 
-**Prerequisites:** Node.js 20+, npm, PM2, Postgres, Redis, Kafka
+**Prerequisites:** Docker Compose, Node.js 20+, npm, PM2
 
 ```bash
 # Clone and install
@@ -706,14 +708,17 @@ cd ../..
 cp .env.example .env
 # Fill in your Korapay, YellowCard, Privy, and RPC URL values
 
-# Run DB migrations and start backend services with PM2
+# Start infra, run Prisma migrations, then start backend services with PM2
 npm run start:local
 ```
 
 **Local dev — run only what you need:**
 
 ```bash
-# Run services individually after Postgres, Redis, and Kafka are available
+# Start local infra only
+npm run infra:up
+
+# Run services individually with Postgres, Redis, and Kafka available
 npm run start:api-gateway
 npm run start:ride-service
 ```
@@ -730,7 +735,7 @@ Every service validates its own env vars at startup using `@wheleers/config`. Be
 |----------|-------------|
 | `NODE_ENV` | `development` / `production` / `test` |
 | `DATABASE_URL` | PostgreSQL connection string |
-| `KAFKA_BROKERS` | Comma-separated broker list e.g. `localhost:9092` |
+| `KAFKA_BROKERS` | Comma-separated broker list e.g. `localhost:29092` |
 | `KAFKA_CLIENT_ID` | Service name e.g. `ride-service` |
 | `REDIS_URL` | Redis connection string |
 
