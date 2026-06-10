@@ -40,8 +40,8 @@ const dockerAppEnv = dockerAppEnvFile
   : {};
 const workspaceEnv = parseEnvFile(path.join(cwd, ".env"));
 const mergedEnv = {
-  ...composeEnv,
   ...dockerAppEnv,
+  ...composeEnv,
   ...workspaceEnv,
   ...process.env,
 };
