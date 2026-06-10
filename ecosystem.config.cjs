@@ -29,11 +29,39 @@ function parseEnvFile(filePath) {
 }
 
 const cwd = __dirname;
+const composeEnv = parseEnvFile(path.join(cwd, ".env.compose"));
+const dockerAppEnvFile = composeEnv.DOCKER_APP_ENV_FILE || process.env.DOCKER_APP_ENV_FILE;
+const dockerAppEnv = dockerAppEnvFile
+  ? parseEnvFile(
+      path.isAbsolute(dockerAppEnvFile)
+        ? dockerAppEnvFile
+        : path.join(cwd, dockerAppEnvFile),
+    )
+  : {};
 const workspaceEnv = parseEnvFile(path.join(cwd, ".env"));
 const mergedEnv = {
+  ...composeEnv,
+  ...dockerAppEnv,
   ...workspaceEnv,
   ...process.env,
 };
+
+if (!workspaceEnv.DATABASE_URL && !process.env.DATABASE_URL) {
+  const user = mergedEnv.POSTGRES_USER || "postgres";
+  const password = mergedEnv.POSTGRES_PASSWORD || "postgres";
+  const database = mergedEnv.POSTGRES_DB || "wheelers";
+  mergedEnv.DATABASE_URL = `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(
+    password,
+  )}@localhost:5432/${encodeURIComponent(database)}`;
+}
+
+if (!workspaceEnv.REDIS_URL && !process.env.REDIS_URL) {
+  mergedEnv.REDIS_URL = "redis://localhost:6379";
+}
+
+if (!workspaceEnv.KAFKA_BROKERS && !process.env.KAFKA_BROKERS) {
+  mergedEnv.KAFKA_BROKERS = "localhost:29092";
+}
 
 function app(name, args, extraEnv = {}) {
   return {
