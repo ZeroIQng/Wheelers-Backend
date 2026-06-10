@@ -29,19 +29,8 @@ function parseEnvFile(filePath) {
 }
 
 const cwd = __dirname;
-const composeEnv = parseEnvFile(path.join(cwd, ".env.compose"));
-const dockerAppEnvFile = composeEnv.DOCKER_APP_ENV_FILE || process.env.DOCKER_APP_ENV_FILE;
-const dockerAppEnv = dockerAppEnvFile
-  ? parseEnvFile(
-      path.isAbsolute(dockerAppEnvFile)
-        ? dockerAppEnvFile
-        : path.join(cwd, dockerAppEnvFile),
-    )
-  : {};
 const workspaceEnv = parseEnvFile(path.join(cwd, ".env"));
 const mergedEnv = {
-  ...dockerAppEnv,
-  ...composeEnv,
   ...workspaceEnv,
   ...process.env,
 };
