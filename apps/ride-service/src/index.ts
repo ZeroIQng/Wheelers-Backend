@@ -79,7 +79,7 @@ async function bootstrap(): Promise<void> {
   loadWorkspaceEnv();
   process.env['NODE_ENV'] ??= 'development';
   process.env['KAFKA_CLIENT_ID'] ??= SERVICE_ID;
-  // If using `infra/docker-compose.yml`, Kafka host listener is `localhost:29092`.
+  // Default local Kafka broker for host-managed development.
   process.env['KAFKA_BROKERS'] ??= 'localhost:29092';
   process.env['DATABASE_URL'] ??= 'postgresql://postgres:postgres@localhost:5432/wheelers';
   process.env['REDIS_URL'] ??= 'redis://localhost:6379';

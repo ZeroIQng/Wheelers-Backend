@@ -16,13 +16,15 @@ If you remember only one thing, remember this:
 
 It does 3 main jobs:
 
-1. Authenticates users with **Privy access tokens**.
+1. Authenticates users with **Privy access tokens** or backend username/password tokens.
 2. Accepts real-time client events over **WebSocket** and publishes them to **Kafka**.
 3. Consumes Kafka events from other services and pushes updates back to connected users over WebSocket.
 
 It also exposes these HTTP endpoints:
 
 - `POST /auth/privy`
+- `POST /auth/signup`
+- `POST /auth/signin`
 - `POST /rides/estimate`
 - `GET /rides/history`
 - `GET /scheduled-rides`
@@ -104,11 +106,11 @@ Other services (ride-service, wallet-service, payment-service, ...)
 
 ## Flow A: Login / registration
 
-1. User logs in on mobile via Privy.
-2. Mobile gets Privy access token.
-3. Mobile calls `POST /auth/privy` with token.
-4. Gateway verifies token (`iss`, `aud`, `exp`, signature).
-5. Gateway finds user by Privy DID (`sub` claim).
+1. User logs in on mobile via Privy or username/password.
+2. Mobile gets either a Privy access token or the backend token from `POST /auth/signin`.
+3. Mobile sends `Authorization: Bearer <token>` to HTTP routes and WebSocket.
+4. Gateway verifies the Privy token or backend token signature.
+5. Gateway finds user by Privy DID or local user id.
 6. If user does not exist, create user in DB and emit `USER_CREATED` on `user.events`.
 7. Return user info to client.
 
@@ -202,7 +204,7 @@ Gateway specific:
 - `SCHEDULED_RIDE_DISPATCH_LEAD_TIME_S`
 - `CORS_ORIGINS`
 - `WS_IDLE_TIMEOUT_MS`
-- `JWT_SECRET` (legacy/optional)
+- `JWT_SECRET` (required for `POST /auth/signup` and `POST /auth/signin`; minimum 32 characters)
 
 ---
 

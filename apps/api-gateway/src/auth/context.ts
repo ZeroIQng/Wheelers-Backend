@@ -13,11 +13,12 @@ interface UserSnapshot {
   walletAddress: string | null;
   role: UserRole;
   name: string | null;
+  email: string | null;
 }
 
 interface BuildGatewayAuthContextInput {
   user: UserSnapshot;
-  verifiedToken: VerifiedPrivyToken;
+  verifiedToken?: VerifiedPrivyToken;
   driverId?: string;
 }
 
@@ -30,8 +31,8 @@ export function buildGatewayAuthContext(input: BuildGatewayAuthContextInput): Ga
     driverId: input.driverId,
     name: input.user.name ?? undefined,
     email:
-      typeof input.verifiedToken.claims['email'] === 'string'
+      input.verifiedToken && typeof input.verifiedToken.claims['email'] === 'string'
         ? input.verifiedToken.claims['email']
-        : undefined,
+        : input.user.email ?? undefined,
   };
 }

@@ -29,33 +29,49 @@ function parseEnvFile(filePath) {
 }
 
 const cwd = __dirname;
-const dockerEnv = parseEnvFile(path.join(cwd, ".env.docker"));
 const workspaceEnv = parseEnvFile(path.join(cwd, ".env"));
 const mergedEnv = {
   ...workspaceEnv,
-  ...dockerEnv,
   ...process.env,
 };
 
+function app(name, args, extraEnv = {}) {
+  return {
+    name,
+    cwd,
+    script: "npm",
+    args,
+    autorestart: true,
+    max_restarts: 10,
+    restart_delay: 3000,
+    env: {
+      NODE_ENV: "production",
+      KAFKAJS_NO_PARTITIONER_WARNING: "1",
+      ...mergedEnv,
+      ...extraEnv,
+    },
+  };
+}
+
 module.exports = {
   apps: [
-    {
-      name: "whatsapp-gateway",
-      cwd,
-      script: "npm",
-      args: "run start:whatsapp-gateway",
-      env: {
-        NODE_ENV: "production",
-        WHATSAPP_GATEWAY_PORT: mergedEnv.WHATSAPP_GATEWAY_PORT || "3010",
-        WHATSAPP_GATEWAY_TOKEN: mergedEnv.WHATSAPP_GATEWAY_TOKEN,
-        WHATSAPP_CLIENT_ID: mergedEnv.WHATSAPP_CLIENT_ID,
-        WHATSAPP_SESSION_PATH:
-          mergedEnv.WHATSAPP_SESSION_PATH ||
-          "/var/lib/wheelers-whatsapp/.wwebjs_auth",
-        WHATSAPP_HEADLESS: mergedEnv.WHATSAPP_HEADLESS || "true",
-        WHATSAPP_CHROME_EXECUTABLE_PATH:
-          mergedEnv.WHATSAPP_CHROME_EXECUTABLE_PATH || "/usr/bin/google-chrome",
-      },
-    },
+    app("api-gateway", "run start:api-gateway", {
+      PORT: mergedEnv.PORT || "3000",
+    }),
+    app("ride-service", "run start:ride-service"),
+    app("group-ride", "run start:group-ride"),
+    app("payment-service", "run start:payment-service"),
+    app("wallet-service", "run start:wallet-service"),
+    app("notification-worker", "run start:notification-worker"),
+    app("defi-scheduler", "run start:defi-scheduler"),
+    app("whatsapp-gateway", "run start:whatsapp-gateway", {
+      WHATSAPP_GATEWAY_PORT: mergedEnv.WHATSAPP_GATEWAY_PORT || "3010",
+      WHATSAPP_SESSION_PATH:
+        mergedEnv.WHATSAPP_SESSION_PATH ||
+        "/var/lib/wheelers-whatsapp/.wwebjs_auth",
+      WHATSAPP_HEADLESS: mergedEnv.WHATSAPP_HEADLESS || "true",
+      WHATSAPP_CHROME_EXECUTABLE_PATH:
+        mergedEnv.WHATSAPP_CHROME_EXECUTABLE_PATH || "/usr/bin/google-chrome",
+    }),
   ],
 };

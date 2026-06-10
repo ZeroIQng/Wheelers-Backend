@@ -1,5 +1,6 @@
 import type { IncomingMessage } from 'http';
 import { userClient } from '@wheleers/db';
+import { verifyLocalAccessToken } from '../auth/local';
 import { verifyPrivyAccessToken } from '../auth/privy';
 
 export function extractBearerToken(value: string | undefined): string | undefined {
@@ -26,6 +27,19 @@ export async function authenticateHttpUser(
 
   if (!token) {
     throw new Error('Authorization bearer token is required');
+  }
+
+  if (process.env.JWT_SECRET) {
+    try {
+      const localToken = verifyLocalAccessToken(token, process.env.JWT_SECRET);
+      return await userClient.findById(localToken.sub);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Local auth token')) {
+        // Fall through to Privy verification so legacy clients keep working.
+      } else {
+        throw error;
+      }
+    }
   }
 
   const verifiedToken = verifyPrivyAccessToken({

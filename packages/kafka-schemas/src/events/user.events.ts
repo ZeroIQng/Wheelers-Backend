@@ -5,7 +5,7 @@ const BaseUserEvent = z.object({
   timestamp: z.string().datetime(),
 });
 
-// Fired by api-gateway after Privy auth succeeds for a new user.
+// Fired by api-gateway after Privy or local auth creates a new user.
 // Consumed by: wallet-service (create wallet), payment-service
 // (prepare payment-side customer funding profile when needed),
 // compliance-worker (log consent on-chain).
@@ -16,7 +16,7 @@ export const UserCreatedEvent = BaseUserEvent.extend({
   role:          z.enum(['RIDER', 'DRIVER', 'BOTH']),
   email:         z.string().email().optional(),
   name:          z.string().optional(),
-  authMethod:    z.enum(['email', 'google', 'apple', 'wallet']),
+  authMethod:    z.enum(['email', 'google', 'apple', 'wallet', 'username']),
 });
 
 // Fired by api-gateway when a previously wallet-less user later gets a linked wallet.

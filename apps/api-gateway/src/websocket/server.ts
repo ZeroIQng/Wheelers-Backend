@@ -4,6 +4,7 @@ import WebSocket, { Server as WebSocketServer } from 'ws';
 import { driverClient, userClient } from '@wheleers/db';
 import type { GoogleMapsRoutePlanner } from '@wheleers/config';
 import { buildGatewayAuthContext } from '../auth/context';
+import { verifyLocalAccessToken } from '../auth/local';
 import { verifyPrivyAccessToken } from '../auth/privy';
 import type { InboundWsMessage } from '../types';
 import { isRecord } from '../utils/object';
@@ -17,6 +18,7 @@ interface WebSocketServerDeps {
   server: HttpServer;
   privyAppId: string;
   privyVerificationKey: string;
+  jwtSecret?: string;
   allowedOrigins: Set<string>;
   idleTimeoutMs: number;
   registry: SocketRegistry;
@@ -100,19 +102,42 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
       }
 
       try {
-        const verifiedToken = verifyPrivyAccessToken({
-          accessToken: token,
-          appId: deps.privyAppId,
-          verificationKey: deps.privyVerificationKey,
-        });
+        let verifiedToken: ReturnType<typeof verifyPrivyAccessToken> | undefined;
+        let user: Awaited<ReturnType<typeof userClient.findById>> | null = null;
 
-        const user = await userClient.findByPrivyDid(verifiedToken.privyDid);
+        if (deps.jwtSecret) {
+          try {
+            const localToken = verifyLocalAccessToken(token, deps.jwtSecret);
+            user = await userClient.findById(localToken.sub);
+          } catch (error) {
+            if (error instanceof Error && error.message.includes('Local auth token')) {
+              user = null;
+            } else {
+              throw error;
+            }
+          }
+        }
+
         if (!user) {
-          console.warn('[ws] reject: user not registered', {
-            privyDid: verifiedToken.privyDid,
-            ...getRequestLogContext(request, requestOrigin),
+          verifiedToken = verifyPrivyAccessToken({
+            accessToken: token,
+            appId: deps.privyAppId,
+            verificationKey: deps.privyVerificationKey,
           });
-          rejectUpgrade(socket, 401, 'User not registered. Call POST /auth/privy first.');
+
+          user = await userClient.findByPrivyDid(verifiedToken.privyDid);
+          if (!user) {
+            console.warn('[ws] reject: user not registered', {
+              privyDid: verifiedToken.privyDid,
+              ...getRequestLogContext(request, requestOrigin),
+            });
+            rejectUpgrade(socket, 401, 'User not registered. Call POST /auth/privy first.');
+            return;
+          }
+        }
+
+        if (!user) {
+          rejectUpgrade(socket, 401, 'User not registered.');
           return;
         }
 

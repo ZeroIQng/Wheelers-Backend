@@ -1,10 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'http';
+import { randomUUID } from 'crypto';
 import {
   UserCreatedEvent,
   UserRoleChangedEvent,
   UserWalletLinkedEvent,
 } from '@wheleers/kafka-schemas';
 import { UserRole, userClient } from '@wheleers/db';
+import { createLocalAccessToken, hashPassword, verifyPassword } from '../auth/local';
 import { verifyPrivyAccessToken } from '../auth/privy';
 import type { GatewayRole } from '../types';
 import { getString, isRecord } from '../utils/object';
@@ -14,6 +16,7 @@ import { readJsonBody, sendJson } from './utils';
 interface AuthRouteDeps {
   privyAppId: string;
   privyVerificationKey: string;
+  jwtSecret?: string;
   publisher: GatewayPublisher;
 }
 
@@ -31,7 +34,10 @@ function parseRole(value: unknown): GatewayRole | undefined {
   return undefined;
 }
 
-function normalizeAuthMethod(value: unknown): 'email' | 'google' | 'apple' | 'wallet' {
+function normalizeAuthMethod(value: unknown): 'email' | 'google' | 'apple' | 'wallet' | 'username' {
+  if (value === 'username') {
+    return value;
+  }
   if (value === 'email' || value === 'google' || value === 'apple') {
     return value;
   }
@@ -41,6 +47,67 @@ function normalizeAuthMethod(value: unknown): 'email' | 'google' | 'apple' | 'wa
 function normalizeWalletAddress(value: string | undefined): string | undefined {
   const trimmed = value?.trim().toLowerCase();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function requireJwtSecret(value: string | undefined): string {
+  if (!value || value.length < 32) {
+    throw new Error('JWT_SECRET must be set to at least 32 characters for username/password auth.');
+  }
+
+  return value;
+}
+
+function normalizeUsername(value: string | undefined): string {
+  const trimmed = value?.trim().toLowerCase();
+  if (!trimmed) {
+    throw new Error('username is required');
+  }
+
+  if (!/^[a-z0-9_]{3,24}$/.test(trimmed)) {
+    throw new Error(
+      'username must be 3-24 characters and use only lowercase letters, numbers, or underscores.',
+    );
+  }
+
+  return trimmed;
+}
+
+function normalizePassword(value: string | undefined): string {
+  if (!value) {
+    throw new Error('password is required');
+  }
+
+  if (value.length < 8 || value.length > 128) {
+    throw new Error('password must be between 8 and 128 characters.');
+  }
+
+  return value;
+}
+
+function normalizeEmail(value: string | undefined): string | undefined {
+  const trimmed = value?.trim().toLowerCase();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    throw new Error('email must be a valid email address.');
+  }
+
+  return trimmed;
+}
+
+function normalizeName(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (trimmed.length < 2 || trimmed.length > 80) {
+    throw new Error('fullName must be between 2 and 80 characters.');
+  }
+
+  return trimmed;
 }
 
 function serializeUser(user: {
@@ -224,6 +291,115 @@ export async function handlePrivyAuthRoute(
   } catch (error) {
     sendJson(res, 401, {
       error: error instanceof Error ? error.message : 'Privy auth failed',
+    });
+  }
+}
+
+export async function handleUsernamePasswordSignupRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: AuthRouteDeps,
+): Promise<void> {
+  try {
+    const rawBody = await readJsonBody(req);
+    if (!isRecord(rawBody)) {
+      sendJson(res, 400, { error: 'Body must be a JSON object' });
+      return;
+    }
+
+    const username = normalizeUsername(getString(rawBody, 'username'));
+    const password = normalizePassword(getString(rawBody, 'password'));
+    const jwtSecret = requireJwtSecret(deps.jwtSecret);
+    const email = normalizeEmail(getString(rawBody, 'email'));
+    const name = normalizeName(getString(rawBody, 'fullName') ?? getString(rawBody, 'name'));
+    const phone = getString(rawBody, 'phone')?.trim() || undefined;
+    const requestedRole = parseRole(getString(rawBody, 'role'));
+    const role = requestedRole ?? 'RIDER';
+
+    const existing = await userClient.findByUsername(username);
+    if (existing) {
+      sendJson(res, 409, { error: 'That username is already taken.' });
+      return;
+    }
+
+    const passwordHash = await hashPassword(password);
+    const created = await userClient.create({
+      privyDid: `local:${randomUUID()}`,
+      username,
+      passwordHash,
+      email,
+      role: ROLE_MAP[role],
+      name,
+      phone,
+    });
+
+    const event = UserCreatedEvent.parse({
+      eventType: 'USER_CREATED',
+      userId: created.id,
+      privyDid: created.privyDid,
+      walletAddress: created.walletAddress ?? undefined,
+      role: ROLE_MAP[role],
+      email: created.email ?? undefined,
+      name: created.name ?? undefined,
+      authMethod: 'username',
+      timestamp: new Date().toISOString(),
+    });
+
+    await deps.publisher.publishUserEvent(event);
+
+    sendJson(res, 201, {
+      created: true,
+      accessToken: createLocalAccessToken(created.id, jwtSecret),
+      tokenType: 'Bearer',
+      user: serializeUser(created),
+    });
+  } catch (error) {
+    if (
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      error.code === 'P2002'
+    ) {
+      sendJson(res, 409, { error: 'That username is already taken.' });
+      return;
+    }
+
+    sendJson(res, 400, {
+      error: error instanceof Error ? error.message : 'Signup failed',
+    });
+  }
+}
+
+export async function handleUsernamePasswordSigninRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: Pick<AuthRouteDeps, 'jwtSecret'>,
+): Promise<void> {
+  try {
+    const rawBody = await readJsonBody(req);
+    if (!isRecord(rawBody)) {
+      sendJson(res, 400, { error: 'Body must be a JSON object' });
+      return;
+    }
+
+    const username = normalizeUsername(getString(rawBody, 'username'));
+    const password = normalizePassword(getString(rawBody, 'password'));
+    const jwtSecret = requireJwtSecret(deps.jwtSecret);
+    const user = await userClient.findByUsername(username);
+
+    if (!user || !(await verifyPassword(password, user.passwordHash))) {
+      sendJson(res, 401, { error: 'Invalid username or password.' });
+      return;
+    }
+
+    sendJson(res, 200, {
+      accessToken: createLocalAccessToken(user.id, jwtSecret),
+      tokenType: 'Bearer',
+      user: serializeUser(user),
+    });
+  } catch (error) {
+    sendJson(res, 400, {
+      error: error instanceof Error ? error.message : 'Signin failed',
     });
   }
 }

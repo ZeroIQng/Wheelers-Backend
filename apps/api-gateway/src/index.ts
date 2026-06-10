@@ -18,7 +18,11 @@ import { TOPICS } from "@wheleers/kafka-schemas";
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
 
-import { handlePrivyAuthRoute } from "./http/auth.route";
+import {
+  handlePrivyAuthRoute,
+  handleUsernamePasswordSigninRoute,
+  handleUsernamePasswordSignupRoute,
+} from "./http/auth.route";
 import {
   handleGetCurrentProfileRoute,
   handleUpdateCurrentProfileRoute,
@@ -374,7 +378,37 @@ async function bootstrap(): Promise<void> {
       await handlePrivyAuthRoute(req, res, {
         privyAppId: gatewayEnv.PRIVY_APP_ID,
         privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        jwtSecret: gatewayEnv.JWT_SECRET,
         publisher,
+      });
+
+      return;
+    }
+
+    if (url.pathname === "/auth/signup") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleUsernamePasswordSignupRoute(req, res, {
+        privyAppId: gatewayEnv.PRIVY_APP_ID,
+        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        jwtSecret: gatewayEnv.JWT_SECRET,
+        publisher,
+      });
+
+      return;
+    }
+
+    if (url.pathname === "/auth/signin") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleUsernamePasswordSigninRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
       });
 
       return;
@@ -1097,6 +1131,7 @@ async function bootstrap(): Promise<void> {
     server,
     privyAppId: gatewayEnv.PRIVY_APP_ID,
     privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+    jwtSecret: gatewayEnv.JWT_SECRET,
     allowedOrigins,
     idleTimeoutMs: Number(gatewayEnv.WS_IDLE_TIMEOUT_MS),
     registry,

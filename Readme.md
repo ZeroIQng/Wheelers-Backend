@@ -69,13 +69,7 @@ wheleers/
 │   ├── config/               # Env validation + constants (fees, GPS, ride, DeFi)
 │   └── blockchain/           # viem, Solana, Stellar clients + contract helpers
 │
-├── infra/
-│   ├── docker-compose.yml
-│   ├── docker-compose.dev.yml
-│   └── kafka/
-│       └── topics.sh         # Creates all Kafka topics on startup
-│
-├── turbo.json
+├── ecosystem.config.cjs      # PM2 process definitions for backend services
 └── package.json
 ```
 
@@ -96,6 +90,8 @@ This is what makes the system scale: when a ride completes, `ride-service` emits
 **HTTP control plane**
 The gateway exposes a small authenticated REST surface for auth and direct Pouch ramp orchestration:
 - `POST /auth/privy` — Privy auth callback
+- `POST /auth/signup` — username/password signup, returns a backend bearer token
+- `POST /auth/signin` — username/password signin, returns a backend bearer token
 - `POST /rides/estimate` — rider-facing route and fare estimate
 - `GET /rides/history` — completed and cancelled rider ride history
 - `GET /scheduled-rides` — list rider scheduled rides
@@ -327,7 +323,7 @@ const txHash = await signer.writeContract({ ... });
 
 ## 5. Apps — services
 
-Each app is an independent Node.js process. It owns its Kafka topics, its section of the DB schema (by convention), and its Docker container. Services are started via Docker Compose and communicate exclusively through Kafka.
+Each app is an independent Node.js process. It owns its Kafka topics and its section of the DB schema by convention. Services are started with PM2 and communicate exclusively through Kafka.
 
 ### 5.1 api-gateway
 
@@ -503,9 +499,9 @@ Every other service that wants to notify a user produces a `PUSH_SEND` or `IN_AP
 ### 6.1 User registration
 
 ```
-User opens app → Privy auth (Google / Apple / Wallet)
-  → POST /auth/privy
-  → api-gateway verifies Privy JWT
+User opens app → Privy auth or username/password auth
+  → POST /auth/privy or POST /auth/signup
+  → api-gateway verifies Privy JWT or hashes local password
   → api-gateway produces USER_CREATED to user.events
 
 USER_CREATED consumed by:
@@ -677,29 +673,23 @@ GPS topics get 8 partitions because at 400 concurrent riders that's ~133 GPS eve
 
 ## 9. Infrastructure
 
-Everything runs in Docker. One `docker-compose.yml` in `infra/` starts all services plus Kafka, Postgres, and Redis.
+Backend app processes run under PM2 using `ecosystem.config.cjs`.
 
 ```
-infra/docker-compose.yml
-  kafka         # KafkaJS in KRaft mode (no Zookeeper)
-  postgres      # PostgreSQL 16
-  redis         # Redis 7 — socket registry, GPS live state, ride matching cache
-  api-gateway   # port 3000
-  ride-service
-  payment-service
-  wallet-service
-  notification-worker
-  compliance-worker
-  defi-scheduler
+npm run build
+npm run db:migrate:deploy
+npm run pm2:start
 ```
 
-To scale a service: `docker-compose up --scale ride-service=3`. Kafka's consumer groups handle the load distribution automatically — no code changes needed.
+Postgres, Redis, and Kafka are expected to run as host or managed services. Set `DATABASE_URL`, `REDIS_URL`, and `KAFKA_BROKERS` in `.env`.
+
+To scale a service: `pm2 scale ride-service 3`. Kafka's consumer groups handle the load distribution automatically; no code changes needed.
 
 ---
 
 ## 10. Getting started
 
-**Prerequisites:** Docker, Node.js 20+, npm
+**Prerequisites:** Node.js 20+, npm, PM2, Postgres, Redis, Kafka
 
 ```bash
 # Clone and install
@@ -716,26 +706,16 @@ cd ../..
 cp .env.example .env
 # Fill in your Korapay, YellowCard, Privy, and RPC URL values
 
-# Start everything
-cd infra
-docker-compose up
-
-# Create Kafka topics (first time only)
-bash kafka/topics.sh
-
-# Run DB migrations (first time only)
-cd ../packages/db
-npm run db:migrate:dev
+# Run DB migrations and start backend services with PM2
+npm run start:local
 ```
 
 **Local dev — run only what you need:**
 
 ```bash
-# Start infrastructure only
-docker-compose up kafka postgres redis
-
-# Run services individually with hot reload
-turbo dev --filter=api-gateway --filter=ride-service
+# Run services individually after Postgres, Redis, and Kafka are available
+npm run start:api-gateway
+npm run start:ride-service
 ```
 
 ---

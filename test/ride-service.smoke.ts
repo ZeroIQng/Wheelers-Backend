@@ -13,7 +13,7 @@ type Seen = {
 process.env['KAFKAJS_NO_PARTITIONER_WARNING'] ??= '1';
 process.env['DATABASE_URL'] ??= 'postgresql://postgres:postgres@localhost:5432/wheelers';
 
-// If using the repo's `infra/docker-compose.yml`, the host listener is 29092.
+// Default local Kafka broker for host-managed development.
 const brokers = (process.env['KAFKA_BROKERS'] ?? 'localhost:29092')
   .split(',')
   .map((b) => b.trim())
@@ -63,9 +63,7 @@ async function main(): Promise<void> {
     console.error('[test] Could not connect to Kafka/Postgres.');
     console.error('[test] Expected broker:', brokers.join(','));
     console.error('[test] Expected database:', process.env['DATABASE_URL']);
-    console.error('[test] If using Docker Compose, run from `infra/`:');
-    console.error('[test]   docker-compose up -d zookeeper kafka postgres');
-    console.error('[test] Then wait ~10–30s for Kafka to finish leader election.');
+    console.error('[test] Start local or managed Kafka/Postgres, then wait for Kafka to finish leader election.');
     console.error('[test] Host listener should be: localhost:29092');
     throw err;
   }

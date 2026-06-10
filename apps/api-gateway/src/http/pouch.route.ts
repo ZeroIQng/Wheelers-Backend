@@ -9,6 +9,7 @@ import { paymentClient, userClient, withdrawalClient } from '@wheleers/db';
 import type { PaymentSessionType } from '@prisma/client';
 import type { InAppSendEvent } from '@wheleers/kafka-schemas';
 import type { RidePricingDisplayProvider } from '../pricing/display';
+import { verifyLocalAccessToken } from '../auth/local';
 import { verifyPrivyAccessToken } from '../auth/privy';
 import { isRecord, pickNumber, pickString } from '../utils/object';
 import type { GatewayPublisher } from '../websocket/publisher';
@@ -235,7 +236,11 @@ export async function handlePouchOnrampRoute(
       deps.defaults,
       deps.ridePricingDisplayProvider,
     );
-    const customerEmail = resolveCustomerEmail(rawBody, auth.verifiedToken, deps.defaults.testEmail);
+    const customerEmail = resolveCustomerEmail(
+      rawBody,
+      auth.verifiedToken,
+      auth.user.email ?? deps.defaults.testEmail,
+    );
     const walletTag = payload.walletTag;
 
     console.log('[api-gateway][pouch] creating onramp', {
@@ -330,7 +335,11 @@ export async function handlePouchOfframpRoute(
     }
 
     const payload = buildOfframpPayload(rawBody, deps.defaults);
-    const customerEmail = resolveCustomerEmail(rawBody, auth.verifiedToken, deps.defaults.testEmail);
+    const customerEmail = resolveCustomerEmail(
+      rawBody,
+      auth.verifiedToken,
+      auth.user.email ?? deps.defaults.testEmail,
+    );
 
     console.log('[api-gateway][pouch] creating offramp', {
       userId: auth.user.id,
@@ -701,7 +710,7 @@ async function authenticateHttpUser(
   verificationKey: string,
 ): Promise<{
   user: NonNullable<Awaited<ReturnType<typeof userClient.findByPrivyDid>>>;
-  verifiedToken: ReturnType<typeof verifyPrivyAccessToken>;
+  verifiedToken?: ReturnType<typeof verifyPrivyAccessToken>;
 }> {
   const authorization =
     typeof req.headers.authorization === 'string' ? req.headers.authorization : undefined;
@@ -710,6 +719,19 @@ async function authenticateHttpUser(
   if (!token) {
     console.warn('[api-gateway][pouch] missing bearer token');
     throw new Error('Authorization bearer token is required');
+  }
+
+  if (process.env.JWT_SECRET) {
+    try {
+      const localToken = verifyLocalAccessToken(token, process.env.JWT_SECRET);
+      return { user: await userClient.findById(localToken.sub) };
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Local auth token')) {
+        // Fall through to Privy verification so legacy clients keep working.
+      } else {
+        throw error;
+      }
+    }
   }
 
   const verifiedToken = verifyPrivyAccessToken({
@@ -825,12 +847,12 @@ function readUserKyc(
 
 function resolveCustomerEmail(
   body: Record<string, unknown>,
-  verifiedToken: ReturnType<typeof verifyPrivyAccessToken>,
+  verifiedToken: ReturnType<typeof verifyPrivyAccessToken> | undefined,
   fallbackEmail?: string,
 ): string | undefined {
   return (
     pickString(body, ['email']) ??
-    (typeof verifiedToken.claims['email'] === 'string'
+    (verifiedToken && typeof verifiedToken.claims['email'] === 'string'
       ? verifiedToken.claims['email']
       : undefined) ??
     fallbackEmail

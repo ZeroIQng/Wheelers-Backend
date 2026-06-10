@@ -12,6 +12,7 @@ model User {
   privyDid      String         @unique
   walletAddress String?        @unique
   username      String?        @unique
+  passwordHash  String?
   role          UserRole       @default(RIDER)
   name          String?
   phone         String?

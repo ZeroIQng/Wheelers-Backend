@@ -41,9 +41,8 @@ Optional:
 
 - Set brokers: `set KAFKA_BROKERS=localhost:29092` (Windows `cmd`)
 
-## Note (Docker Compose)
+## Note (Kafka)
 
-In this repo’s `infra/docker-compose.yml`, Kafka is configured with a host listener on `localhost:29092`.
-Use `KAFKA_BROKERS=localhost:29092` when running tests/services on your host machine.
+Use `KAFKA_BROKERS=localhost:29092` when running tests/services against a local Kafka broker.
 
 The wallet/payment integration test only needs Postgres with migrations applied.

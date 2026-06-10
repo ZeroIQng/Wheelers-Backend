@@ -23,12 +23,19 @@ export const userClient = {
       include: { wallet: true },
     }),
 
+  findByUsername: (username: string) =>
+    prisma.user.findUnique({
+      where: { username: username.toLowerCase() },
+      include: { wallet: true },
+    }),
+
   // ── Writes ─────────────────────────────────────────────────────────────────
 
   create: (data: {
     privyDid:      string;
     walletAddress?: string;
     username?:     string;
+    passwordHash?: string;
     email?:        string;
     role:          UserRole;
     name?:         string;
@@ -39,6 +46,7 @@ export const userClient = {
         privyDid: data.privyDid,
         walletAddress: data.walletAddress?.toLowerCase(),
         username: data.username,
+        passwordHash: data.passwordHash,
         email: data.email,
         role: data.role,
         name: data.name,
@@ -49,6 +57,7 @@ export const userClient = {
   updateAuthIdentity: (userId: string, data: {
     walletAddress?: string;
     username?:     string;
+    passwordHash?: string;
     email?:        string;
     name?:         string;
     phone?:        string;
@@ -58,6 +67,7 @@ export const userClient = {
       data: {
         walletAddress: data.walletAddress?.toLowerCase(),
         username: data.username,
+        passwordHash: data.passwordHash,
         email: data.email,
         name: data.name,
         phone: data.phone,
