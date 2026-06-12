@@ -36,7 +36,16 @@ function normalizePemPublicKey(value: string): string {
   const trimmed = value.trim().replace(/\\n/g, '\n');
 
   if (trimmed.includes('BEGIN PUBLIC KEY')) {
-    return trimmed;
+    // Strip headers/footers, extract the raw base64 body, and re-wrap.
+    // This handles keys where newlines between the markers were lost
+    // or where the body isn't chunked into 64-char lines (both cause
+    // OpenSSL DECODER errors).
+    const body = trimmed
+      .replace(/-----BEGIN PUBLIC KEY-----/, '')
+      .replace(/-----END PUBLIC KEY-----/, '')
+      .replace(/\s+/g, '');
+    const lines = body.match(/.{1,64}/g)?.join('\n') ?? body;
+    return `-----BEGIN PUBLIC KEY-----\n${lines}\n-----END PUBLIC KEY-----`;
   }
 
   const compact = trimmed.replace(/\s+/g, '');

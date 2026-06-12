@@ -296,8 +296,13 @@ export async function handlePrivyAuthRoute(
     });
 
   } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    const isInternalCryptoError =
+      message.includes('DECODER') ||
+      message.includes('error:') ||
+      message.includes('unsupported');
     sendJson(res, 401, {
-      error: error instanceof Error ? error.message : 'Privy auth failed',
+      error: isInternalCryptoError ? 'Privy auth failed' : (message || 'Privy auth failed'),
     });
   }
 }
