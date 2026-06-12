@@ -26,6 +26,9 @@ const ROLE_MAP: Record<GatewayRole, UserRole> = {
   BOTH: UserRole.BOTH,
 };
 
+const JWT_SECRET_CONFIG_ERROR =
+  'JWT_SECRET must be set to at least 32 characters for username/password auth.';
+
 function parseRole(value: unknown): GatewayRole | undefined {
   if (value === 'RIDER' || value === 'DRIVER' || value === 'BOTH') {
     return value;
@@ -51,10 +54,14 @@ function normalizeWalletAddress(value: string | undefined): string | undefined {
 
 function requireJwtSecret(value: string | undefined): string {
   if (!value || value.length < 32) {
-    throw new Error('JWT_SECRET must be set to at least 32 characters for username/password auth.');
+    throw new Error(JWT_SECRET_CONFIG_ERROR);
   }
 
   return value;
+}
+
+function isJwtSecretConfigError(error: unknown): boolean {
+  return error instanceof Error && error.message === JWT_SECRET_CONFIG_ERROR;
 }
 
 function normalizeUsername(value: string | undefined): string {
@@ -354,6 +361,14 @@ export async function handleUsernamePasswordSignupRoute(
       user: serializeUser(created),
     });
   } catch (error) {
+    if (isJwtSecretConfigError(error)) {
+      console.error('[auth] username/password signup is not configured:', error);
+      sendJson(res, 500, {
+        error: 'Username/password auth is not configured on this server.',
+      });
+      return;
+    }
+
     if (
       error &&
       typeof error === 'object' &&
@@ -398,6 +413,14 @@ export async function handleUsernamePasswordSigninRoute(
       user: serializeUser(user),
     });
   } catch (error) {
+    if (isJwtSecretConfigError(error)) {
+      console.error('[auth] username/password signin is not configured:', error);
+      sendJson(res, 500, {
+        error: 'Username/password auth is not configured on this server.',
+      });
+      return;
+    }
+
     sendJson(res, 400, {
       error: error instanceof Error ? error.message : 'Signin failed',
     });

@@ -745,7 +745,7 @@ Every service validates its own env vars at startup using `@wheleers/config`. Be
 |----------|-------------|
 | `PORT` | HTTP/WS port (default: 3000) |
 | `PRIVY_VERIFICATION_KEY` | Privy public verification key (PEM) used for access-token signature validation |
-| `JWT_SECRET` | Legacy local JWT secret (optional; no longer used for Privy access tokens) |
+| `JWT_SECRET` | Backend JWT secret for username/password auth tokens; minimum 32 characters |
 | `PRIVY_APP_ID` | Privy application ID |
 | `WHATSAPP_GATEWAY_URL` | Base URL for the separate WhatsApp Web sender |
 | `WHATSAPP_GATEWAY_TOKEN` | Bearer token used when calling the WhatsApp gateway |

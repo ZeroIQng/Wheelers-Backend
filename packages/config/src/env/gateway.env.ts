@@ -4,7 +4,7 @@ const GatewayEnvSchema = z.object({
   PORT:               z.string().default('3000'),
   AWS_REGION:         z.string().min(1).optional(),
   STELLAR_NETWORK:    z.enum(['mainnet', 'testnet']).default('mainnet'),
-  JWT_SECRET:         z.string().min(32).optional(),
+  JWT_SECRET:         z.string().min(32),
   PRIVY_APP_ID:       z.string().min(1),
   PRIVY_VERIFICATION_KEY: z.string().min(1),
   WHATSAPP_GATEWAY_URL: z.string().url().optional(),
