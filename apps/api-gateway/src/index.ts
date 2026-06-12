@@ -1141,7 +1141,7 @@ async function bootstrap(): Promise<void> {
 
   const outboxPublisher = startOutboxPublisher({
     producer: asRawProducer(producer),
-    intervalMs: 500,
+    intervalMs: 2_000,
     batchSize: 100,
   });
 

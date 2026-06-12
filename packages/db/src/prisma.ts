@@ -11,12 +11,22 @@ function shouldLogPrismaQueries(): boolean {
   return process.env['PRISMA_LOG_QUERIES'] === 'true';
 }
 
+function buildDatasourceUrl(): string | undefined {
+  const base = process.env['DATABASE_URL'];
+  if (!base) return undefined;
+  // Append connection pool params if not already present
+  if (base.includes('connection_limit')) return base;
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}connection_limit=20&pool_timeout=30`;
+}
+
 export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
     log: shouldLogPrismaQueries()
       ? ['query', 'warn', 'error']
       : ['warn', 'error'],
+    datasourceUrl: buildDatasourceUrl(),
   });
 
 if (process.env['NODE_ENV'] !== 'production') {

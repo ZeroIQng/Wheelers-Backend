@@ -25,13 +25,23 @@ export function startOutboxPublisher(params: {
   intervalMs?: number;
   batchSize?: number;
 }): { shutdown: () => void } {
-  const { producer, intervalMs = 500, batchSize = 100 } = params;
+  const { producer, intervalMs = 2_000, batchSize = 100 } = params;
   let active = true;
+  let polling = false;
 
   async function poll(): Promise<void> {
-    if (!active) {
+    if (!active || polling) {
       return;
     }
+    polling = true;
+    try {
+      await doPoll();
+    } finally {
+      polling = false;
+    }
+  }
+
+  async function doPoll(): Promise<void> {
 
     let events: Awaited<ReturnType<typeof outboxClient.findUnpublished>>;
     try {
