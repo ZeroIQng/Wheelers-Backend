@@ -381,12 +381,24 @@ export async function handleListGroupRideMatchRequestsRoute(
   deps: GroupRideRouteDeps,
   url: URL,
 ): Promise<void> {
+  let user;
   try {
-    const user = await authenticateHttpUser(
+    user = await authenticateHttpUser(
       req,
       deps.privyAppId,
       deps.privyVerificationKey,
     );
+  } catch (error) {
+    sendJson(res, 401, {
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Authentication failed',
+    });
+    return;
+  }
+
+  try {
     const limit = parseLimit(url.searchParams.get('limit'));
     const items = await groupRideClient.listMatchRequestsByUser(user.id, limit);
 
@@ -394,7 +406,7 @@ export async function handleListGroupRideMatchRequestsRoute(
       items: items.map((item) => mapMatchRequestItem(item)),
     });
   } catch (error) {
-    sendJson(res, 401, {
+    sendJson(res, 500, {
       error:
         error instanceof Error
           ? error.message
@@ -409,12 +421,24 @@ export async function handleGetGroupRideMatchRequestRoute(
   deps: GroupRideRouteDeps,
   requestId: string,
 ): Promise<void> {
+  let user;
   try {
-    const user = await authenticateHttpUser(
+    user = await authenticateHttpUser(
       req,
       deps.privyAppId,
       deps.privyVerificationKey,
     );
+  } catch (error) {
+    sendJson(res, 401, {
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Authentication failed',
+    });
+    return;
+  }
+
+  try {
     const request = await groupRideClient.findMatchRequestByIdForUser(
       requestId,
       user.id,
@@ -430,7 +454,7 @@ export async function handleGetGroupRideMatchRequestRoute(
       matchedRiders: await buildMatchedRiders(request),
     });
   } catch (error) {
-    sendJson(res, 401, {
+    sendJson(res, 500, {
       error:
         error instanceof Error
           ? error.message
