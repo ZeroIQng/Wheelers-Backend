@@ -247,15 +247,19 @@ export async function handlePrivyAuthRoute(
         await deps.publisher.publishUserEvent(roleChangedEvent);
       }
 
+      const effectiveRole =
+        requestedRole && existing.role !== ROLE_MAP[requestedRole]
+          ? ROLE_MAP[requestedRole]
+          : user.role;
+
       sendJson(res, 200, {
         created: false,
-        user: serializeUser({
-          ...user,
-          role:
-            requestedRole && existing.role !== ROLE_MAP[requestedRole]
-              ? ROLE_MAP[requestedRole]
-              : user.role,
-        }),
+        user: {
+          ...serializeUser({ ...user, role: effectiveRole }),
+          // Returning users skip phone onboarding — surface a non-null phone
+          // so the mobile client routes straight to home.
+          phone: user.phone || user.email || user.privyDid,
+        },
       });
       return;
     }
