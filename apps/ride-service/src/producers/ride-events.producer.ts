@@ -8,6 +8,7 @@ import {
   type RideCompletedEvent,
   type RideDriverAssignedEvent,
   type RideDriverRejectedEvent,
+  type RideOfferSentEvent,
   type RideRouteUpdatedEvent,
   type RideRequestedEvent,
 } from '@wheleers/kafka-schemas';
@@ -65,6 +66,23 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
           ? `${rideRequested.pickup.address} to ${rideRequested.destination.address} with ${stopCount} stop${stopCount === 1 ? '' : 's'}`
           : `${rideRequested.pickup.address} to ${rideRequested.destination.address}`;
 
+      const offerEvent: RideOfferSentEvent = {
+        eventType: 'RIDE_OFFER_SENT',
+        rideId: rideRequested.rideId,
+        riderId: rideRequested.riderId,
+        driverId: driver.driverId,
+        driverUserId: driver.userId,
+        pickup: rideRequested.pickup,
+        destination: rideRequested.destination,
+        stops: rideRequested.stops,
+        fareEstimateNgn: rideRequested.fareEstimateNgn,
+        plannedDistanceKm: rideRequested.plannedDistanceKm,
+        plannedDurationSeconds: rideRequested.plannedDurationSeconds,
+        expiresAt: expiresAt.toISOString(),
+        route: rideRequested.route,
+        timestamp,
+      };
+
       const push: PushSendEvent = {
         eventType: 'PUSH_SEND',
         notificationId: randomUUID(),
@@ -110,6 +128,7 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
       };
 
       await producer.sendBatch([
+        { topic: TOPICS.RIDE_EVENTS, value: offerEvent as any, options: { key: rideRequested.rideId } },
         { topic: TOPICS.NOTIFICATION_EVENTS, value: push as any, options: { key: driver.driverId } },
         { topic: TOPICS.NOTIFICATION_EVENTS, value: inApp as any, options: { key: driver.driverId } },
       ]);

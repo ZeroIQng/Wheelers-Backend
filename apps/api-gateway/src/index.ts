@@ -54,6 +54,7 @@ import {
   handleGetWalletWithdrawalRoute,
   handleListWithdrawalBankNetworksRoute,
   handleListWalletWithdrawalsRoute,
+  handleProvisionVirtualAccountRoute,
   handleVerifyWithdrawalBankAccountRoute,
   handleWalletOverviewRoute,
   handleWalletTransactionsRoute,
@@ -325,6 +326,7 @@ async function bootstrap(): Promise<void> {
       await handleUsernamePasswordSignupRoute(req, res, {
         jwtSecret: gatewayEnv.JWT_SECRET,
         publisher,
+        pouchLiquifiaClient,
       });
 
       return;
@@ -696,6 +698,16 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleWalletDepositInfoRoute(req, res, walletDeps);
+      return;
+    }
+
+    if (url.pathname === "/wallet/provision-virtual-account") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleProvisionVirtualAccountRoute(req, res, walletDeps);
       return;
     }
 

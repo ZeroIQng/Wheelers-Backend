@@ -90,6 +90,22 @@ async function handleRideEvent(
     return;
   }
 
+  if (event.eventType === 'RIDE_OFFER_SENT') {
+    await registry.sendToUser(event.driverUserId, 'ride:offer', {
+      rideId: event.rideId,
+      riderId: event.riderId,
+      pickup: event.pickup,
+      destination: event.destination,
+      stops: event.stops,
+      fareEstimateNgn: event.fareEstimateNgn,
+      plannedDistanceKm: event.plannedDistanceKm,
+      plannedDurationSeconds: event.plannedDurationSeconds,
+      expiresAt: event.expiresAt,
+      route: event.route,
+    });
+    return;
+  }
+
   if (event.eventType === 'RIDE_DRIVER_ASSIGNED') {
     rideParticipants.set(event.rideId, {
       riderId: event.riderId,

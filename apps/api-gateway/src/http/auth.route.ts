@@ -4,16 +4,18 @@ import {
   UserCreatedEvent,
   UserRoleChangedEvent,
 } from '@wheleers/kafka-schemas';
-import { UserRole, userClient } from '@wheleers/db';
+import { UserRole, userClient, virtualAccountClient, walletClient } from '@wheleers/db';
 import { createLocalAccessToken, hashPassword, verifyPassword } from '../auth/local';
 import type { GatewayRole } from '../types';
 import { getString, isRecord } from '../utils/object';
 import type { GatewayPublisher } from '../websocket/publisher';
+import type { PouchLiquifiaClient } from './pouch-liquifia.client';
 import { readJsonBody, sendJson } from './utils';
 
 interface AuthRouteDeps {
   jwtSecret: string;
   publisher: GatewayPublisher;
+  pouchLiquifiaClient: PouchLiquifiaClient;
 }
 
 const ROLE_MAP: Record<GatewayRole, UserRole> = {
@@ -153,6 +155,27 @@ export async function handleUsernamePasswordSignupRoute(
 
     await deps.publisher.publishUserEvent(event);
 
+    // Create wallet + Pouch virtual account in the background.
+    // Signup succeeds even if Pouch provisioning fails — user can retry later.
+    await walletClient.create(created.id).catch((walletError) => {
+      console.warn('[auth] wallet creation failed', {
+        userId: created.id,
+        error: walletError instanceof Error ? walletError.message : String(walletError),
+      });
+    });
+
+    void provisionPouchAccount(deps.pouchLiquifiaClient, created.id, name).catch(
+      (provisionError) => {
+        console.warn('[auth] pouch provisioning failed (non-blocking)', {
+          userId: created.id,
+          error:
+            provisionError instanceof Error
+              ? provisionError.message
+              : String(provisionError),
+        });
+      },
+    );
+
     sendJson(res, 201, {
       created: true,
       accessToken: createLocalAccessToken(created.id, deps.jwtSecret),
@@ -210,4 +233,44 @@ export async function handleUsernamePasswordSigninRoute(
       error: error instanceof Error ? error.message : 'Signin failed',
     });
   }
+}
+
+async function provisionPouchAccount(
+  pouch: PouchLiquifiaClient,
+  userId: string,
+  name: string | undefined,
+): Promise<void> {
+  const nameParts = (name ?? 'Wheelers User').trim().split(/\s+/);
+  const firstName = nameParts[0] ?? 'Wheelers';
+  const lastName = nameParts.slice(1).join(' ') || 'User';
+
+  const customer = await pouch.createCustomer({
+    customerReference: userId,
+    firstName,
+    lastName,
+  });
+
+  await userClient.updatePouchCustomerId(userId, customer.id);
+
+  const va = await pouch.createVirtualAccount(customer.id, {
+    country: 'NG',
+    currency: 'NGN',
+  });
+
+  await virtualAccountClient.create({
+    userId,
+    pouchCustomerId: customer.id,
+    pouchVirtualAccountId: va.id,
+    bankName: va.bank_name,
+    accountNumber: va.account_number,
+    accountName: va.account_name,
+    currency: va.currency,
+    country: va.country,
+  });
+
+  console.info('[auth] pouch provisioning complete', {
+    userId,
+    pouchCustomerId: customer.id,
+    accountNumber: va.account_number,
+  });
 }

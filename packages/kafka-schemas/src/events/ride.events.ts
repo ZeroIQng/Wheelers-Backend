@@ -143,6 +143,23 @@ export const RideCancelledEvent = BaseRideEvent.extend({
   reason:       z.string().optional(),
 });
 
+// Fired by ride-service when it offers a ride to a specific driver.
+// Consumed by: api-gateway (relay to driver via WebSocket as ride:offer).
+export const RideOfferSentEvent = BaseRideEvent.extend({
+  eventType:             z.literal('RIDE_OFFER_SENT'),
+  riderId:               z.string().uuid(),
+  driverId:              z.string().uuid(),
+  driverUserId:          z.string().uuid(),
+  pickup:                LatLng,
+  destination:           LatLng,
+  stops:                 z.array(LatLng).max(5).default([]),
+  fareEstimateNgn:       z.number(),
+  plannedDistanceKm:     z.number().optional(),
+  plannedDurationSeconds: z.number().int().optional(),
+  expiresAt:             z.string().datetime(),
+  route:                 RouteGeometry.optional(),
+});
+
 // Fired by ride-service when driver explicitly rejects a ride request.
 // Consumed by: ride-service itself (try next nearest driver).
 export const RideDriverRejectedEvent = BaseRideEvent.extend({
@@ -162,6 +179,7 @@ export const RideEvent = z.discriminatedUnion('eventType', [
   RideCompletionRequestedEvent,
   RideCompletedEvent,
   RideCancelledEvent,
+  RideOfferSentEvent,
   RideDriverRejectedEvent,
 ]);
 
@@ -174,5 +192,6 @@ export type RideStartedEvent         = z.infer<typeof RideStartedEvent>;
 export type RideCompletionRequestedEvent = z.infer<typeof RideCompletionRequestedEvent>;
 export type RideCompletedEvent       = z.infer<typeof RideCompletedEvent>;
 export type RideCancelledEvent       = z.infer<typeof RideCancelledEvent>;
+export type RideOfferSentEvent       = z.infer<typeof RideOfferSentEvent>;
 export type RideDriverRejectedEvent  = z.infer<typeof RideDriverRejectedEvent>;
 export type RideEvent                = z.infer<typeof RideEvent>;

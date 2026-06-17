@@ -3,6 +3,7 @@ import {
   walletClient,
   withdrawalClient,
   virtualAccountClient,
+  userClient,
 } from "@wheleers/db";
 import { authenticateHttpUser } from "./authenticate";
 import { runIdempotentJsonRequest } from "./idempotency";
@@ -806,6 +807,85 @@ export async function handleWalletDepositInfoRoute(
         error instanceof Error
           ? error.message
           : "Could not load deposit information.",
+    });
+  }
+}
+
+export async function handleProvisionVirtualAccountRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: WalletRouteDeps,
+): Promise<void> {
+  try {
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
+
+    // Check if virtual account already exists
+    const existing = await virtualAccountClient.findByUserId(user.id);
+    if (existing) {
+      sendJson(res, 200, {
+        accountNumber: existing.accountNumber,
+        accountName: existing.accountName,
+        bankName: existing.bankName,
+        currency: existing.currency,
+        alreadyProvisioned: true,
+      });
+      return;
+    }
+
+    // Ensure wallet exists
+    const wallet = await walletClient.findByUserId(user.id);
+    if (!wallet) {
+      await walletClient.create(user.id);
+    }
+
+    // Fetch full user for name
+    const fullUser = await userClient.findById(user.id);
+    const nameParts = (fullUser?.name ?? "Wheelers User").trim().split(/\s+/);
+    const firstName = nameParts[0] ?? "Wheelers";
+    const lastName = nameParts.slice(1).join(" ") || "User";
+
+    // Create or retrieve Pouch customer
+    let pouchCustomerId = fullUser?.pouchCustomerId;
+    if (!pouchCustomerId) {
+      const customer = await deps.pouchLiquifiaClient.createCustomer({
+        customerReference: user.id,
+        firstName,
+        lastName,
+      });
+      pouchCustomerId = customer.id;
+      await userClient.updatePouchCustomerId(user.id, pouchCustomerId);
+    }
+
+    // Create virtual account
+    const va = await deps.pouchLiquifiaClient.createVirtualAccount(
+      pouchCustomerId,
+      { country: "NG", currency: "NGN" },
+    );
+
+    const created = await virtualAccountClient.create({
+      userId: user.id,
+      pouchCustomerId,
+      pouchVirtualAccountId: va.id,
+      bankName: va.bank_name,
+      accountNumber: va.account_number,
+      accountName: va.account_name,
+      currency: va.currency,
+      country: va.country,
+    });
+
+    sendJson(res, 201, {
+      accountNumber: created.accountNumber,
+      accountName: created.accountName,
+      bankName: created.bankName,
+      currency: created.currency,
+      alreadyProvisioned: false,
+    });
+  } catch (error) {
+    sendJson(res, 400, {
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not provision virtual account.",
     });
   }
 }
