@@ -3,7 +3,6 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { userClient } from '@wheleers/db';
 import type { RedisClient } from '../redis/client';
 import { verifyLocalAccessToken } from '../auth/local';
-import { verifyPrivyAccessToken } from '../auth/privy';
 import { getString, isRecord } from '../utils/object';
 import { readJsonBody, sendJson } from './utils';
 
@@ -12,8 +11,7 @@ const PHONE_OTP_LENGTH = 6;
 const PHONE_OTP_TTL_SECONDS = 300;
 
 interface PhoneRouteDeps {
-  privyAppId: string;
-  privyVerificationKey: string;
+  jwtSecret: string;
   redisClient: RedisClient;
   whatsappGatewayUrl?: string;
   whatsappGatewayToken?: string;
@@ -41,8 +39,7 @@ function extractBearerToken(value: string | undefined): string | undefined {
 
 async function authenticateHttpUser(
   req: IncomingMessage,
-  appId: string,
-  verificationKey: string,
+  jwtSecret: string,
 ): Promise<NonNullable<Awaited<ReturnType<typeof userClient.findByPrivyDid>>>> {
   const authorization =
     typeof req.headers.authorization === 'string' ? req.headers.authorization : undefined;
@@ -52,31 +49,8 @@ async function authenticateHttpUser(
     throw new Error('Authorization bearer token is required');
   }
 
-  if (process.env.JWT_SECRET) {
-    try {
-      const localToken = verifyLocalAccessToken(token, process.env.JWT_SECRET);
-      return await userClient.findById(localToken.sub);
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('Local auth token')) {
-        // Fall through to Privy verification so legacy clients keep working.
-      } else {
-        throw error;
-      }
-    }
-  }
-
-  const verifiedToken = verifyPrivyAccessToken({
-    accessToken: token,
-    appId,
-    verificationKey,
-  });
-
-  const user = await userClient.findByPrivyDid(verifiedToken.privyDid);
-  if (!user) {
-    throw new Error('User not registered. Call POST /auth/privy first.');
-  }
-
-  return user;
+  const localToken = verifyLocalAccessToken(token, jwtSecret);
+  return await userClient.findById(localToken.sub);
 }
 
 function normalizePhoneNumber(value: string): string {
@@ -253,7 +227,7 @@ export async function handleSendPhoneOtpRoute(
       return;
     }
 
-    const user = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const rawPhone = getString(rawBody, 'phone');
     if (!rawPhone) {
       sendJson(res, 400, { error: 'phone is required' });
@@ -332,7 +306,7 @@ export async function handleVerifyPhoneOtpRoute(
       return;
     }
 
-    const user = await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const code = getString(rawBody, 'code')?.trim();
     if (!code) {
       sendJson(res, 400, { error: 'code is required' });
@@ -362,7 +336,6 @@ export async function handleVerifyPhoneOtpRoute(
       user: {
         id: updatedUser.id,
         privyDid: updatedUser.privyDid,
-        walletAddress: updatedUser.walletAddress,
         email: updatedUser.email,
         role: updatedUser.role,
         name: updatedUser.name,

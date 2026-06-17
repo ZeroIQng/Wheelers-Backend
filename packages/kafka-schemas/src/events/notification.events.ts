@@ -41,14 +41,13 @@ export const InAppSendEvent = BaseNotificationEvent.extend({
     'ride',
     'payment',
     'wallet',
-    'defi',
     'dispute',
     'kyc',
     'system',
   ]),
   referenceId:  z.string().optional(), // rideId, paymentId etc for deep-link
   referenceType: z.enum([
-    'ride', 'payment', 'wallet', 'dispute', 'defi_position',
+    'ride', 'payment', 'wallet', 'dispute',
   ]).optional(),
   read:         z.boolean().default(false),
 });

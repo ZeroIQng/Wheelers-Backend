@@ -1,24 +1,36 @@
 import type {
-  PaymentSessionCreatedEvent,
-  PaymentSessionSyncedEvent,
+  VirtualAccountCreditedEvent,
+  PayoutCreatedEvent,
+  PayoutCompletedEvent,
+  PayoutFailedEvent,
 } from '@wheleers/kafka-schemas';
-import type { PaymentEventsProducer } from '../producers/payment-events.producer';
-import { recordPaymentIntent } from '../services/payment-intents.service';
-import { processPaymentSessionSync } from '../services/settlement.service';
 
-interface PaymentEventsHandlerDeps {
-  paymentEventsProducer: PaymentEventsProducer;
-}
+const TAG = '[payment-events-handler]';
 
-export function createPaymentEventsHandler(deps: PaymentEventsHandlerDeps) {
+export function createPaymentEventsHandler() {
   return {
-    async handlePaymentSessionCreated(event: PaymentSessionCreatedEvent): Promise<void> {
-      await recordPaymentIntent(event);
+    async handleVirtualAccountCredited(event: VirtualAccountCreditedEvent): Promise<void> {
+      console.log(
+        `${TAG} VIRTUAL_ACCOUNT_CREDITED userId=${event.userId} amount=${event.amountNgn} ref=${event.providerReference}`,
+      );
     },
 
-    async handlePaymentSessionSynced(event: PaymentSessionSyncedEvent): Promise<void> {
-      await recordPaymentIntent(event);
-      await processPaymentSessionSync(event, deps.paymentEventsProducer);
+    async handlePayoutCreated(event: PayoutCreatedEvent): Promise<void> {
+      console.log(
+        `${TAG} PAYOUT_CREATED userId=${event.userId} payoutId=${event.pouchPayoutId} amount=${event.amountNgn}`,
+      );
+    },
+
+    async handlePayoutCompleted(event: PayoutCompletedEvent): Promise<void> {
+      console.log(
+        `${TAG} PAYOUT_COMPLETED userId=${event.userId} payoutId=${event.pouchPayoutId} amount=${event.amountNgn}`,
+      );
+    },
+
+    async handlePayoutFailed(event: PayoutFailedEvent): Promise<void> {
+      console.log(
+        `${TAG} PAYOUT_FAILED userId=${event.userId} payoutId=${event.pouchPayoutId} reason=${event.failureReason}`,
+      );
     },
   };
 }

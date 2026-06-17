@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from "http";
 import { randomUUID } from "crypto";
 import {
   referralClient,
-  ScheduledRidePaymentMethod,
   scheduledRideClient,
   rideClient,
 } from "@wheleers/db";
@@ -12,31 +11,21 @@ import { authenticateHttpUser } from "./authenticate";
 import { runIdempotentJsonRequest } from "./idempotency";
 import { readJsonBody, sendJson } from "./utils";
 import { getBoolean, getNumber, getRecord, getString, isRecord } from "../utils/object";
-import {
-  convertUsdtToRideDisplayAmount,
-  type RidePricingDisplay,
-  type RidePricingDisplayProvider,
-} from "../pricing/display";
 import { buildRideEstimatePricing } from "../pricing/ride-estimate";
 import type { RedisClient } from "../redis/client";
 
 interface RideRouteDeps {
-  privyAppId: string;
-  privyVerificationKey: string;
+  jwtSecret: string;
   routePlanner: GoogleMapsRoutePlanner;
 }
 
 interface RideHistoryRouteDeps {
-  privyAppId: string;
-  privyVerificationKey: string;
-  ridePricingDisplayProvider: RidePricingDisplayProvider;
+  jwtSecret: string;
 }
 
 interface ScheduledRideRouteDeps {
-  privyAppId: string;
-  privyVerificationKey: string;
+  jwtSecret: string;
   routePlanner: GoogleMapsRoutePlanner;
-  ridePricingDisplayProvider: RidePricingDisplayProvider;
   dispatcherQueue: Queue;
   leadTimeMs: number;
   redisClient: RedisClient;
@@ -138,21 +127,15 @@ function decimalToNumber(value: unknown): number | null {
   return null;
 }
 
-function resolveNetFareUsdt(params: {
-  grossFareUsdt: number;
+function resolveNetFareNgn(params: {
   grossFareNgn: number;
   discountNgn: number;
 }): number {
-  if (
-    params.discountNgn <= 0 ||
-    params.grossFareNgn <= 0 ||
-    params.grossFareUsdt <= 0
-  ) {
-    return params.grossFareUsdt;
+  if (params.discountNgn <= 0 || params.grossFareNgn <= 0) {
+    return params.grossFareNgn;
   }
 
-  const discountRatio = Math.min(params.discountNgn / params.grossFareNgn, 1);
-  return Math.max(0, Math.round(params.grossFareUsdt * (1 - discountRatio) * 1_000_000) / 1_000_000);
+  return Math.max(0, params.grossFareNgn - params.discountNgn);
 }
 
 function parseScheduledFor(value: unknown): Date {
@@ -168,38 +151,20 @@ function parseScheduledFor(value: unknown): Date {
   return parsed;
 }
 
-function normalizeScheduledPaymentMethod(
-  value: unknown,
-): ScheduledRidePaymentMethod {
-  return value === "smart_account"
-    ? ScheduledRidePaymentMethod.SMART_ACCOUNT
-    : ScheduledRidePaymentMethod.WALLET_BALANCE;
-}
-
-function mapScheduledPaymentMethod(
-  value: ScheduledRidePaymentMethod,
-): "wallet_balance" | "smart_account" {
-  return value === ScheduledRidePaymentMethod.SMART_ACCOUNT
-    ? "smart_account"
-    : "wallet_balance";
-}
-
 function mapScheduledRideItem(
   ride: Awaited<ReturnType<typeof scheduledRideClient.findByRider>>[number],
 ) {
-  const fareEstimateUsdt = decimalToNumber(ride.fareEstimateUsdt);
   const pricing = buildRideEstimatePricing(ride.plannedDistanceKm ?? null);
   return {
     id: ride.id,
     status: ride.status,
     scheduledFor: ride.scheduledFor.toISOString(),
-    paymentMethod: mapScheduledPaymentMethod(ride.paymentMethod),
+    paymentMethod: "wallet_balance" as const,
     pickupAddress: ride.pickupAddress,
     destAddress: ride.destAddress,
     plannedDistanceKm: ride.plannedDistanceKm ?? null,
     plannedDurationSeconds: ride.plannedDurationSeconds ?? null,
-    fareEstimateUsdt,
-    fareEstimateNgn: pricing.fareEstimateNgn,
+    fareEstimateNgn: decimalToNumber(ride.fareEstimateNgn) ?? pricing.fareEstimateNgn,
     pricingCurrency: pricing.pricingCurrency,
     pricingBreakdown: pricing.pricingBreakdown,
     requestedRideId: ride.requestedRideId ?? null,
@@ -213,7 +178,7 @@ export async function handleRideEstimateRoute(
   deps: RideRouteDeps,
 ): Promise<void> {
   try {
-    await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
+    await authenticateHttpUser(req, deps.jwtSecret);
 
     const rawBody = await readJsonBody(req);
     if (!isRecord(rawBody)) {
@@ -237,7 +202,6 @@ export async function handleRideEstimateRoute(
       route: plannedRoute.geometry,
       plannedDistanceKm: plannedRoute.distanceKm,
       plannedDurationSeconds: plannedRoute.durationSeconds,
-      fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
       fareEstimateNgn: plannedRoute.ridePrice.tripPrice,
       pricingCurrency: "NGN",
       pricingBreakdown: plannedRoute.ridePrice,
@@ -259,16 +223,10 @@ export async function handleRiderRideHistoryRoute(
   url: URL,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const limit = parseLimit(url.searchParams.get("limit"));
     const cursor = url.searchParams.get("cursor") ?? undefined;
     const rides = await rideClient.findRiderHistory(user.id, limit, cursor);
-    const ridePricingDisplay =
-      await deps.ridePricingDisplayProvider.getPricingDisplay();
 
     sendJson(res, 200, {
       items: rides.map((ride) => ({
@@ -276,16 +234,8 @@ export async function handleRiderRideHistoryRoute(
         status: ride.status,
         pickupAddress: ride.pickupAddress,
         destAddress: ride.destAddress,
-        fareEstimateUsdt: decimalToNumber(ride.fareEstimateUsdt),
-        fareEstimateNgn: convertUsdtToRideDisplayAmount(
-          decimalToNumber(ride.fareEstimateUsdt),
-          ridePricingDisplay,
-        ),
-        fareFinalUsdt: decimalToNumber(ride.fareFinalUsdt),
-        fareFinalNgn: convertUsdtToRideDisplayAmount(
-          decimalToNumber(ride.fareFinalUsdt),
-          ridePricingDisplay,
-        ),
+        fareEstimateNgn: decimalToNumber(ride.fareEstimateNgn),
+        fareFinalNgn: decimalToNumber(ride.fareFinalNgn),
         distanceKm: ride.distanceKm ?? null,
         durationSeconds: ride.durationSeconds ?? null,
         cancelReason: ride.cancelReason ?? null,
@@ -294,8 +244,6 @@ export async function handleRiderRideHistoryRoute(
         completedAt: ride.completedAt?.toISOString() ?? null,
         cancelledAt: ride.cancelledAt?.toISOString() ?? null,
         createdAt: ride.createdAt.toISOString(),
-        displayCurrency: ridePricingDisplay.displayCurrency,
-        displayExchangeRate: ridePricingDisplay.displayExchangeRate,
       })),
       nextCursor:
         rides.length === limit ? (rides[rides.length - 1]?.id ?? null) : null,
@@ -314,16 +262,7 @@ export async function handleCreateScheduledRideRoute(
   deps: ScheduledRideRouteDeps,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
-    if (!user.walletAddress) {
-      sendJson(res, 400, { error: "Link a wallet before scheduling a ride." });
-      return;
-    }
-    const riderWallet = user.walletAddress.toLowerCase();
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
 
     const rawBody = await readJsonBody(req);
     if (!isRecord(rawBody)) {
@@ -355,7 +294,7 @@ export async function handleCreateScheduledRideRoute(
           "requestedReferralCashbackNgn",
         );
         let referralCashbackAppliedNgn = 0;
-        let fareEstimateUsdt = plannedRoute.fareEstimateUsdt;
+        let fareEstimateNgn = plannedRoute.ridePrice.tripPrice;
 
         if (useReferralCashback) {
           const reservation = await referralClient.reserveRideCashback({
@@ -365,8 +304,7 @@ export async function handleCreateScheduledRideRoute(
             requestedAmountNgn: requestedReferralCashbackNgn,
           });
           referralCashbackAppliedNgn = reservation.reservedCashbackNgn;
-          fareEstimateUsdt = resolveNetFareUsdt({
-            grossFareUsdt: plannedRoute.fareEstimateUsdt,
+          fareEstimateNgn = resolveNetFareNgn({
             grossFareNgn: plannedRoute.ridePrice.tripPrice,
             discountNgn: referralCashbackAppliedNgn,
           });
@@ -376,9 +314,8 @@ export async function handleCreateScheduledRideRoute(
           .create({
             id: scheduledRideId,
             riderId: user.id,
-            riderWallet,
             scheduledFor,
-            paymentMethod: normalizeScheduledPaymentMethod(rawBody["paymentMethod"]),
+            paymentMethod: "WALLET_BALANCE",
             pickupLat: pickup.lat,
             pickupLng: pickup.lng,
             pickupAddress: pickup.address,
@@ -388,7 +325,7 @@ export async function handleCreateScheduledRideRoute(
             stops,
             plannedDistanceKm: plannedRoute.distanceKm,
             plannedDurationSeconds: plannedRoute.durationSeconds,
-            fareEstimateUsdt,
+            fareEstimateNgn,
           })
           .catch(async (error) => {
             if (referralCashbackAppliedNgn > 0) {
@@ -459,11 +396,7 @@ export async function handleListScheduledRidesRoute(
   url: URL,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const limit = parseLimit(url.searchParams.get("limit"));
     const cursor = url.searchParams.get("cursor") ?? undefined;
     const rides = await scheduledRideClient.findByRider(user.id, limit, cursor);
@@ -490,11 +423,7 @@ export async function handleCancelScheduledRideRoute(
   scheduledRideId: string,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const rawBody = await readJsonBody(req).catch(() => ({}));
     const reason =
       isRecord(rawBody) && typeof rawBody["reason"] === "string"

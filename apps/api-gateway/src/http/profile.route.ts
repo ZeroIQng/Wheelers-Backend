@@ -5,14 +5,12 @@ import { readJsonBody, sendJson } from "./utils";
 import { getString, isRecord } from "../utils/object";
 
 interface ProfileRouteDeps {
-  privyAppId: string;
-  privyVerificationKey: string;
+  jwtSecret: string;
 }
 
 function serializeUser(user: {
   id: string;
   privyDid: string;
-  walletAddress: string | null;
   username?: string | null;
   email: string | null;
   role: string;
@@ -22,7 +20,6 @@ function serializeUser(user: {
   return {
     id: user.id,
     privyDid: user.privyDid,
-    walletAddress: user.walletAddress,
     username: user.username ?? null,
     email: user.email,
     role: user.role,
@@ -91,11 +88,7 @@ export async function handleGetCurrentProfileRoute(
   deps: ProfileRouteDeps,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
 
     sendJson(res, 200, {
       user: serializeUser(user),
@@ -114,11 +107,7 @@ export async function handleUpdateCurrentProfileRoute(
   deps: ProfileRouteDeps,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const rawBody = await readJsonBody(req);
 
     if (!isRecord(rawBody)) {

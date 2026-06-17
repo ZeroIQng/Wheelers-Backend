@@ -5,20 +5,15 @@ import {
   GpsProcessedEvent,
   NotificationEvent,
   RideEvent,
-  TOPICS,
   WalletEvent,
+  TOPICS,
 } from '@wheleers/kafka-schemas';
-import {
-  convertUsdtToRideDisplayAmount,
-  type RidePricingDisplayProvider,
-} from '../pricing/display';
 import { buildRideEstimatePricing } from '../pricing/ride-estimate';
 import { SocketRegistry } from '../websocket/registry';
 
 interface StartGatewayConsumerDeps {
   consumer: WheelersConsumer;
   registry: SocketRegistry;
-  ridePricingDisplayProvider: RidePricingDisplayProvider;
 }
 
 interface RideParticipantState {
@@ -43,12 +38,7 @@ export async function startGatewayKafkaConsumer(deps: StartGatewayConsumerDeps):
         if (!parsed.success) {
           throw new Error(`Invalid ride event: ${parsed.error.message}`);
         }
-        await handleRideEvent(
-          parsed.data,
-          deps.registry,
-          rideParticipants,
-          deps.ridePricingDisplayProvider,
-        );
+        await handleRideEvent(parsed.data, deps.registry, rideParticipants);
         return;
       }
 
@@ -94,7 +84,6 @@ async function handleRideEvent(
   event: RideEvent,
   registry: SocketRegistry,
   rideParticipants: Map<string, RideParticipantState>,
-  ridePricingDisplayProvider: RidePricingDisplayProvider,
 ): Promise<void> {
   if (event.eventType === 'RIDE_REQUESTED') {
     rideParticipants.set(event.rideId, { riderId: event.riderId });
@@ -102,7 +91,6 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_DRIVER_ASSIGNED') {
-    const ridePricingDisplay = await ridePricingDisplayProvider.getPricingDisplay();
     rideParticipants.set(event.rideId, {
       riderId: event.riderId,
       driverId: event.driverId,
@@ -111,16 +99,12 @@ async function handleRideEvent(
     await registry.sendToUser(event.riderId, 'ride:matched', {
       rideId: event.rideId,
       driverId: event.driverId,
-      driverWallet: event.driverWallet,
       driverName: event.driverName,
       driverRating: event.driverRating,
       vehiclePlate: event.vehiclePlate,
       vehicleModel: event.vehicleModel,
       etaSeconds: event.etaSeconds,
-      lockedFareUsdt: event.lockedFareUsdt,
-      lockedFareNgn: convertUsdtToRideDisplayAmount(event.lockedFareUsdt, ridePricingDisplay),
-      displayCurrency: ridePricingDisplay.displayCurrency,
-      displayExchangeRate: ridePricingDisplay.displayExchangeRate,
+      lockedFareNgn: event.lockedFareNgn,
     });
 
     return;
@@ -134,7 +118,6 @@ async function handleRideEvent(
       route: event.route,
       plannedDistanceKm: event.plannedDistanceKm,
       plannedDurationSeconds: event.plannedDurationSeconds,
-      fareEstimateUsdt: event.fareEstimateUsdt,
       ...buildRideEstimatePricing(event.plannedDistanceKm),
       updatedBy: event.updatedBy,
     };
@@ -172,29 +155,22 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_COMPLETED') {
-    const ridePricingDisplay = await ridePricingDisplayProvider.getPricingDisplay();
     const settledReferralUsages = await referralClient.settleRideCashback(event.rideId);
     await registry.sendToUser(event.riderId, 'ride:completed', {
       rideId: event.rideId,
-      fareUsdt: event.fareUsdt,
-      fareNgn: convertUsdtToRideDisplayAmount(event.fareUsdt, ridePricingDisplay),
+      fareNgn: event.fareNgn,
       distanceKm: event.distanceKm,
       durationSeconds: event.durationSeconds,
       completedAt: event.completedAt,
       referralCashbackSettled: settledReferralUsages > 0,
-      displayCurrency: ridePricingDisplay.displayCurrency,
-      displayExchangeRate: ridePricingDisplay.displayExchangeRate,
     });
 
     await registry.sendToUser(event.driverId, 'ride:completed', {
       rideId: event.rideId,
-      fareUsdt: event.fareUsdt,
-      fareNgn: convertUsdtToRideDisplayAmount(event.fareUsdt, ridePricingDisplay),
+      fareNgn: event.fareNgn,
       distanceKm: event.distanceKm,
       durationSeconds: event.durationSeconds,
       completedAt: event.completedAt,
-      displayCurrency: ridePricingDisplay.displayCurrency,
-      displayExchangeRate: ridePricingDisplay.displayExchangeRate,
     });
 
     rideParticipants.delete(event.rideId);
@@ -235,8 +211,8 @@ async function handleWalletEvent(event: WalletEvent, registry: SocketRegistry): 
   if (event.eventType === 'WALLET_CREDITED') {
     await registry.sendToUser(event.userId, 'wallet:updated', {
       walletId: event.walletId,
-      balanceUsdt: event.newBalanceUsdt,
-      changeUsdt: event.amountUsdt,
+      balanceNgn: event.newBalanceNgn,
+      changeNgn: event.amountNgn,
       changeType: event.creditType,
       direction: 'credit',
       referenceId: event.referenceId,
@@ -247,8 +223,8 @@ async function handleWalletEvent(event: WalletEvent, registry: SocketRegistry): 
   if (event.eventType === 'WALLET_DEBITED') {
     await registry.sendToUser(event.userId, 'wallet:updated', {
       walletId: event.walletId,
-      balanceUsdt: event.newBalanceUsdt,
-      changeUsdt: event.amountUsdt,
+      balanceNgn: event.newBalanceNgn,
+      changeNgn: event.amountNgn,
       changeType: event.debitType,
       direction: 'debit',
       referenceId: event.referenceId,
@@ -260,7 +236,7 @@ async function handleWalletEvent(event: WalletEvent, registry: SocketRegistry): 
     await registry.sendToUser(event.userId, 'wallet:updated', {
       walletId: event.walletId,
       rideId: event.rideId,
-      lockedAmountUsdt: event.lockedAmountUsdt,
+      lockedAmountNgn: event.lockedAmountNgn,
       reason: event.reason,
       direction: 'lock',
     });
@@ -271,8 +247,8 @@ async function handleWalletEvent(event: WalletEvent, registry: SocketRegistry): 
     await registry.sendToUser(event.userId, 'wallet:updated', {
       walletId: event.walletId,
       rideId: event.rideId,
-      previousLockedAmountUsdt: event.previousLockedAmountUsdt,
-      lockedAmountUsdt: event.lockedAmountUsdt,
+      previousLockedAmountNgn: event.previousLockedAmountNgn,
+      lockedAmountNgn: event.lockedAmountNgn,
       reason: event.reason,
       direction: 'lock_adjustment',
     });
@@ -282,7 +258,7 @@ async function handleWalletEvent(event: WalletEvent, registry: SocketRegistry): 
   await registry.sendToUser(event.userId, 'wallet:updated', {
     walletId: event.walletId,
     rideId: event.rideId,
-    unlockedAmountUsdt: event.unlockedAmountUsdt,
+    unlockedAmountNgn: event.unlockedAmountNgn,
     reason: event.reason,
     direction: 'unlock',
   });

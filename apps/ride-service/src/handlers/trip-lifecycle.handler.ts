@@ -46,7 +46,7 @@ export function createTripLifecycleHandler(params?: {
         });
 
         try {
-          await rideClient.start(event.rideId, event.recordingId);
+          await rideClient.start(event.rideId);
         } catch (err) {
           console.warn(`[ride-service] ride start skipped:`, (err as any)?.message ?? err);
         }
@@ -57,11 +57,11 @@ export function createTripLifecycleHandler(params?: {
           const plannedRoute =
             event.plannedDistanceKm !== undefined &&
             event.plannedDurationSeconds !== undefined &&
-            event.fareEstimateUsdt !== undefined
+            event.fareEstimateNgn !== undefined
               ? {
                   distanceKm: event.plannedDistanceKm,
                   durationSeconds: event.plannedDurationSeconds,
-                  fareEstimateUsdt: event.fareEstimateUsdt,
+                  fareEstimateNgn: event.fareEstimateNgn,
                   geometry: event.route,
                 }
               : await planUpdatedRoute(event.rideId, event.destination, event.stops);
@@ -69,7 +69,7 @@ export function createTripLifecycleHandler(params?: {
           const routeStops = await rideClient.syncRouteStops(event.rideId, {
             destination: event.destination,
             stops: event.stops,
-            fareEstimateUsdt: plannedRoute?.fareEstimateUsdt ?? event.fareEstimateUsdt,
+            fareEstimateNgn: plannedRoute?.fareEstimateNgn ?? event.fareEstimateNgn,
           });
           syncRouteState(event.rideId, routeStops);
           await publishRouteUpdatedSnapshot({
@@ -78,7 +78,7 @@ export function createTripLifecycleHandler(params?: {
             driverId: event.driverId,
             plannedDistanceKm: plannedRoute?.distanceKm ?? event.plannedDistanceKm,
             plannedDurationSeconds: plannedRoute?.durationSeconds ?? event.plannedDurationSeconds,
-            fareEstimateUsdt: plannedRoute?.fareEstimateUsdt ?? event.fareEstimateUsdt,
+            fareEstimateNgn: plannedRoute?.fareEstimateNgn ?? event.fareEstimateNgn,
             route: plannedRoute?.geometry ?? event.route,
             updatedBy: event.updatedBy,
             routeStops,
@@ -125,29 +125,28 @@ export function createTripLifecycleHandler(params?: {
             gpsState?.totalDistanceKm ?? (await estimateDistanceFromGpsLogs(event.rideId)),
           );
           const durationSeconds = resolveDurationSeconds(ride.startedAt, completedAt);
-          const fareUsdt = resolveFareUsdt({
-            requestedFareUsdt: event.fareUsdt,
-            estimatedFareUsdt:
-              ride.fareEstimateUsdt !== null && ride.fareEstimateUsdt !== undefined
-                ? Number(ride.fareEstimateUsdt)
+          const fareNgn = resolveFareNgn({
+            requestedFareNgn: event.fareNgn,
+            estimatedFareNgn:
+              ride.fareEstimateNgn !== null && ride.fareEstimateNgn !== undefined
+                ? Number(ride.fareEstimateNgn)
                 : undefined,
           });
 
           const routeStops = await rideClient.completeFinalStop(event.rideId, completedAt);
           syncRouteState(event.rideId, routeStops);
 
+          const driverUserId = await resolveDriverUserId(event.driverId);
+
           await rideEventsProducer.rideCompleted({
             eventType: 'RIDE_COMPLETED',
             rideId: event.rideId,
             riderId: event.riderId,
             driverId: event.driverId,
-            riderWallet: event.riderWallet,
-            driverWallet: event.driverWallet,
-            fareUsdt,
+            driverUserId,
+            fareNgn,
             distanceKm,
             durationSeconds,
-            recordingCid: event.recordingCid,
-            recordingHash: event.recordingHash,
             endedBy: event.endedBy,
             completedAt: completedAt.toISOString(),
             timestamp: new Date().toISOString(),
@@ -164,11 +163,9 @@ export function createTripLifecycleHandler(params?: {
 
         try {
           await rideClient.complete(event.rideId, {
-            fareFinalUsdt: event.fareUsdt,
+            fareFinalNgn: event.fareNgn,
             distanceKm: event.distanceKm,
             durationSeconds: event.durationSeconds,
-            recordingCid: event.recordingCid,
-            recordingHash: event.recordingHash,
           });
           await driverClient.updateStatus(event.driverId, DriverStatus.ONLINE);
         } catch (err) {
@@ -201,7 +198,7 @@ export function createTripLifecycleHandler(params?: {
     driverId?: string;
     plannedDistanceKm?: number;
     plannedDurationSeconds?: number;
-    fareEstimateUsdt?: number;
+    fareEstimateNgn?: number;
     route?: {
       coordinates: Array<{ lat: number; lng: number }>;
       bounds: {
@@ -262,7 +259,7 @@ export function createTripLifecycleHandler(params?: {
       })),
       plannedDistanceKm: params.plannedDistanceKm,
       plannedDurationSeconds: params.plannedDurationSeconds,
-      fareEstimateUsdt: params.fareEstimateUsdt,
+      fareEstimateNgn: params.fareEstimateNgn,
       route: params.route,
       updatedBy: params.updatedBy,
       timestamp: new Date().toISOString(),
@@ -276,7 +273,7 @@ export function createTripLifecycleHandler(params?: {
   ): Promise<{
     distanceKm: number;
     durationSeconds: number;
-    fareEstimateUsdt: number;
+    fareEstimateNgn: number;
     geometry: {
       coordinates: Array<{ lat: number; lng: number }>;
       bounds: {
@@ -355,12 +352,22 @@ function resolveDurationSeconds(startedAt: Date | null, completedAt: Date): numb
   return Math.max(0, Math.round(deltaMs / 1000));
 }
 
-function resolveFareUsdt(params: {
-  requestedFareUsdt?: number;
-  estimatedFareUsdt?: number;
+function resolveFareNgn(params: {
+  requestedFareNgn?: number;
+  estimatedFareNgn?: number;
 }): number {
-  const sourceFare = params.estimatedFareUsdt ?? params.requestedFareUsdt ?? FEES.MIN_RIDE_FARE_USDT;
-  return round2(Math.max(sourceFare, FEES.MIN_RIDE_FARE_USDT));
+  const sourceFare = params.estimatedFareNgn ?? params.requestedFareNgn ?? FEES.MIN_RIDE_FARE_NGN;
+  return round2(Math.max(sourceFare, FEES.MIN_RIDE_FARE_NGN));
+}
+
+async function resolveDriverUserId(driverId: string): Promise<string> {
+  try {
+    const driver = await driverClient.findById(driverId);
+    return driver.userId;
+  } catch {
+    // Fallback: use driverId as userId if lookup fails
+    return driverId;
+  }
 }
 
 async function estimateDistanceFromGpsLogs(rideId: string): Promise<number> {

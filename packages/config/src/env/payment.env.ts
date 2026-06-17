@@ -1,9 +1,7 @@
 import { z } from 'zod';
 
 const PaymentEnvSchema = z.object({
-  PAYMENT_PROVIDER:         z.literal('pouch').default('pouch'),
-  // Platform wallet that receives the 0.3% fee
-  PLATFORM_WALLET_ADDRESS:  z.string().min(1),
+  PAYMENT_PROVIDER: z.literal('pouch').default('pouch'),
 });
 
 export type PaymentEnv = z.infer<typeof PaymentEnvSchema>;

@@ -1,6 +1,5 @@
 import type { UserRole } from '@prisma/client';
 import type { GatewayAuthContext, GatewayRole } from '../types';
-import type { VerifiedPrivyToken } from './privy';
 
 function normalizeRole(role: UserRole): GatewayRole {
   if (role === 'DRIVER' || role === 'BOTH') return role;
@@ -10,7 +9,6 @@ function normalizeRole(role: UserRole): GatewayRole {
 interface UserSnapshot {
   id: string;
   privyDid: string;
-  walletAddress: string | null;
   role: UserRole;
   name: string | null;
   email: string | null;
@@ -18,7 +16,6 @@ interface UserSnapshot {
 
 interface BuildGatewayAuthContextInput {
   user: UserSnapshot;
-  verifiedToken?: VerifiedPrivyToken;
   driverId?: string;
 }
 
@@ -26,13 +23,9 @@ export function buildGatewayAuthContext(input: BuildGatewayAuthContextInput): Ga
   return {
     userId: input.user.id,
     privyDid: input.user.privyDid,
-    walletAddress: input.user.walletAddress?.toLowerCase(),
     role: normalizeRole(input.user.role),
     driverId: input.driverId,
     name: input.user.name ?? undefined,
-    email:
-      input.verifiedToken && typeof input.verifiedToken.claims['email'] === 'string'
-        ? input.verifiedToken.claims['email']
-        : input.user.email ?? undefined,
+    email: input.user.email ?? undefined,
   };
 }

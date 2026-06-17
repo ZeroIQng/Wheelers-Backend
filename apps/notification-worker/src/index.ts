@@ -69,8 +69,6 @@ function categoryToDb(category: string): any {
       return 'PAYMENT';
     case 'wallet':
       return 'WALLET';
-    case 'defi':
-      return 'DEFI';
     case 'dispute':
       return 'DISPUTE';
     case 'kyc':

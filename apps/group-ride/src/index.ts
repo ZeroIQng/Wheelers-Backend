@@ -85,7 +85,7 @@ async function bootstrap(): Promise<void> {
         { lat: request.pickupLat, lng: request.pickupLng },
         { lat: request.destLat, lng: request.destLng },
       ),
-      fareEstimateUsdt: Number(request.fareEstimateUsdt ?? 0),
+      fareEstimateNgn: Number(request.fareEstimateNgn ?? 0),
       requestedAt: (request.readyForMatchAt ?? request.createdAt).toISOString(),
       sourceEvent: {
         eventType: 'GROUP_RIDE_READY_FOR_MATCH',
@@ -105,17 +105,14 @@ async function bootstrap(): Promise<void> {
         stops: Array.isArray(request.stops) ? (request.stops as any) : [],
         plannedDistanceKm: request.plannedDistanceKm ?? undefined,
         plannedDurationSeconds: request.plannedDurationSeconds ?? undefined,
-        fareEstimateUsdt: Number(request.fareEstimateUsdt ?? 0),
+        fareEstimateNgn: Number(request.fareEstimateNgn ?? 0),
         genderPreference:
           request.genderPreference === 'WOMEN_ONLY'
             ? 'women_only'
             : request.genderPreference === 'MEN_ONLY'
               ? 'men_only'
               : 'any',
-        paymentMethod:
-          request.paymentMethod === 'SMART_ACCOUNT'
-            ? 'smart_account'
-            : 'wallet_balance',
+        paymentMethod: 'wallet_balance' as const,
         timestamp: (request.readyForMatchAt ?? request.createdAt).toISOString(),
       },
     });

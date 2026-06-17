@@ -89,7 +89,7 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
             rideRequested.plannedDurationSeconds === undefined
               ? ''
               : String(rideRequested.plannedDurationSeconds),
-          fareEstimateUsdt: String(rideRequested.fareEstimateUsdt),
+          fareEstimateNgn: String(rideRequested.fareEstimateNgn),
           expiresAt: expiresAt.toISOString(),
         },
         priority: 'high',

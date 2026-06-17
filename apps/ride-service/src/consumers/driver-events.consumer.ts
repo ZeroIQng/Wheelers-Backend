@@ -20,7 +20,7 @@ export function createDriverEventsConsumer(params: {
       if (event.eventType === 'DRIVER_ONLINE') {
         state.onlineDrivers.set(event.driverId, {
           driverId: event.driverId,
-          walletAddress: event.walletAddress,
+          userId: event.userId,
           lat: event.lat,
           lng: event.lng,
           vehiclePlate: event.vehiclePlate,

@@ -1,4 +1,4 @@
-import { validatePaymentEnv, validateSharedEnv } from '@wheleers/config';
+import { validateSharedEnv } from '@wheleers/config';
 import {
   createConsumer,
   createProducer,
@@ -18,7 +18,6 @@ export async function startPaymentService(): Promise<void> {
   registerShutdownHandlers(serviceId);
 
   validateSharedEnv();
-  validatePaymentEnv();
 
   const producer = await createProducer({ serviceId });
   const consumer = await createConsumer({ groupId: serviceId });
@@ -31,11 +30,11 @@ export async function startPaymentService(): Promise<void> {
     await consumer.disconnect();
   });
 
-  const paymentEventsProducer = createPaymentEventsProducer(producer);
-  const paymentEventsHandler = createPaymentEventsHandler({
-    paymentEventsProducer,
-  });
+  // Producer is wired up for other services (e.g. api-gateway) that may
+  // import it, but the handler itself only logs for now.
+  createPaymentEventsProducer(producer);
 
+  const paymentEventsHandler = createPaymentEventsHandler();
   const paymentEventsConsumer = createPaymentEventsConsumer({
     paymentEventsHandler,
   });

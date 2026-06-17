@@ -15,10 +15,4 @@ export const RIDE = {
 
   // Maximum surge multiplier on fare estimates during high demand.
   MAX_SURGE_MULTIPLIER: 3.0,
-
-  // Server-side fare estimation inputs for planned routes.
-  BASE_FARE_USDT: 0.75,
-  PER_KM_USDT: 0.28,
-  PER_MINUTE_USDT: 0.04,
-  PER_STOP_USDT: 0.2,
 } as const;

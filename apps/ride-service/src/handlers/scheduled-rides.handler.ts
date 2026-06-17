@@ -137,7 +137,6 @@ async function doDispatch(
     eventType: 'RIDE_REQUESTED',
     rideId,
     riderId: claimed.riderId,
-    riderWallet: claimed.riderWallet,
     pickup: {
       lat: claimed.pickupLat,
       lng: claimed.pickupLng,
@@ -151,9 +150,7 @@ async function doDispatch(
     stops,
     plannedDistanceKm: claimed.plannedDistanceKm ?? undefined,
     plannedDurationSeconds: claimed.plannedDurationSeconds ?? undefined,
-    fareEstimateUsdt: Number(claimed.fareEstimateUsdt ?? 0),
-    paymentMethod:
-      claimed.paymentMethod === 'SMART_ACCOUNT' ? 'smart_account' : 'wallet_balance',
+    fareEstimateNgn: Number(claimed.fareEstimateNgn ?? 0),
     timestamp: new Date().toISOString(),
   };
 

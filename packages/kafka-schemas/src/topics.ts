@@ -7,7 +7,6 @@ export const TOPICS = {
   GPS_STREAM:           'gps.stream',
   GPS_PROCESSED:        'gps.processed',
   GROUP_RIDE_EVENTS:    'group-ride.events',
-  DEFI_EVENTS:          'defi.events',
   COMPLIANCE_EVENTS:    'compliance.events',
   NOTIFICATION_EVENTS:  'notification.events',
 
@@ -20,7 +19,6 @@ export const TOPICS = {
   GPS_STREAM_DLQ:           'gps.stream.dlq',
   GPS_PROCESSED_DLQ:        'gps.processed.dlq',
   GROUP_RIDE_EVENTS_DLQ:    'group-ride.events.dlq',
-  DEFI_EVENTS_DLQ:          'defi.events.dlq',
   COMPLIANCE_EVENTS_DLQ:    'compliance.events.dlq',
   NOTIFICATION_EVENTS_DLQ:  'notification.events.dlq',
 } as const;

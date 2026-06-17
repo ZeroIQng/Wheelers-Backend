@@ -12,13 +12,19 @@ export function createPaymentEventsConsumer(deps: PaymentEventsConsumerDeps) {
       const event = safeParseKafkaEvent(TOPICS.PAYMENT_EVENTS, value);
       if (!event) return;
 
-      if (event.eventType === 'PAYMENT_SESSION_CREATED') {
-        await deps.paymentEventsHandler.handlePaymentSessionCreated(event);
-        return;
-      }
-
-      if (event.eventType === 'PAYMENT_SESSION_SYNCED') {
-        await deps.paymentEventsHandler.handlePaymentSessionSynced(event);
+      switch (event.eventType) {
+        case 'VIRTUAL_ACCOUNT_CREDITED':
+          await deps.paymentEventsHandler.handleVirtualAccountCredited(event);
+          break;
+        case 'PAYOUT_CREATED':
+          await deps.paymentEventsHandler.handlePayoutCreated(event);
+          break;
+        case 'PAYOUT_COMPLETED':
+          await deps.paymentEventsHandler.handlePayoutCompleted(event);
+          break;
+        case 'PAYOUT_FAILED':
+          await deps.paymentEventsHandler.handlePayoutFailed(event);
+          break;
       }
     },
   };

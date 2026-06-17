@@ -1,54 +1,34 @@
 import type { IncomingMessage, ServerResponse } from "http";
-import { sendTreasuryStellarUsdcPayment } from "@wheleers/blockchain";
-import { paymentClient, walletClient, withdrawalClient } from "@wheleers/db";
-import { hydrateProcessEnvWithStellarMasterWalletSecret } from "../treasury/master-wallet-secret";
+import {
+  walletClient,
+  withdrawalClient,
+  virtualAccountClient,
+} from "@wheleers/db";
 import { authenticateHttpUser } from "./authenticate";
 import { runIdempotentJsonRequest } from "./idempotency";
 import { readJsonBody, sendJson } from "./utils";
-import {
-  convertUsdtToRideDisplayAmount,
-  type RidePricingDisplayProvider,
-} from "../pricing/display";
 import { isRecord, pickNumber, pickString } from "../utils/object";
 import type { GatewayPublisher } from "../websocket/publisher";
 import {
-  buildPaymentIntentUpsertFromEvent,
-  buildPouchMetadata,
-  deriveLifecycleStatus,
-  normalizePouchTransactionCreated,
-  normalizePouchTransactionStatus,
-} from "./pouch.helpers";
-import {
-  PouchApiError,
-  type PouchBankNetwork,
-  PouchClient,
-  type PouchOfframpPayload,
-  type PouchRampStatusResponse,
-} from "./pouch.client";
+  PouchLiquifiaClient,
+  type PouchBankAccount,
+  type PouchPayout,
+} from "./pouch-liquifia.client";
 import type { RedisClient } from "../redis/client";
 
+// ─── Deps ──────────────────────────────────────────────────────────
+
 interface WalletRouteDeps {
-  privyAppId: string;
-  privyVerificationKey: string;
-  ridePricingDisplayProvider: RidePricingDisplayProvider;
-  pouchClient: PouchClient;
+  jwtSecret: string;
   publisher: GatewayPublisher;
+  pouchLiquifiaClient: PouchLiquifiaClient;
   redisClient?: RedisClient;
-  defaults: {
-    providerId: string;
-    countryCode: string;
-    currency: string;
-    cryptoCurrency: string;
-    cryptoNetwork: string;
-    chain?: string;
-    masterWalletAddress: string;
-    stellarNetwork?: "mainnet" | "testnet";
-    testEmail?: string;
-    userKycDefaults?: Record<string, string>;
-  };
 }
 
-const POUCH_BANK_NETWORKS_CACHE_TTL_SECONDS = 6 * 60 * 60;
+// ─── Constants ─────────────────────────────────────────────────────
+
+const BANK_NETWORKS_CACHE_TTL_SECONDS = 6 * 60 * 60;
+
 const PREFERRED_BANK_TERMS = [
   "opay",
   "palmpay",
@@ -79,6 +59,7 @@ const PREFERRED_BANK_TERMS = [
   "jaiz bank",
   "taj bank",
 ];
+
 const BANK_SEARCH_ALIASES: Record<string, string[]> = {
   opay: ["opay"],
   palmpay: ["palmpay"],
@@ -100,9 +81,7 @@ const BANK_SEARCH_ALIASES: Record<string, string[]> = {
   paga: ["paga"],
 };
 
-function getPouchBankNetworksCacheKey(country: string): string {
-  return `pouch:bank-networks:${country.toUpperCase()}`;
-}
+// ─── Helpers ───────────────────────────────────────────────────────
 
 function parseLimit(value: string | null): number {
   if (!value) {
@@ -120,6 +99,39 @@ function parseLimit(value: string | null): number {
 function parseCountryCode(value: string | null | undefined, fallback: string): string {
   const normalized = value?.trim().toUpperCase();
   return normalized && normalized.length >= 2 ? normalized : fallback;
+}
+
+function decimalToNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  if (
+    value &&
+    typeof value === "object" &&
+    "toNumber" in value &&
+    typeof value.toNumber === "function"
+  ) {
+    const parsed = value.toNumber();
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function roundNgn(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+// ─── Bank network helpers ──────────────────────────────────────────
+
+function getBankCacheKey(country: string): string {
+  return `pouch-liquifia:banks:${country.toUpperCase()}`;
 }
 
 function normalizeBankTerm(value: string): string {
@@ -146,27 +158,27 @@ function getBankSearchNeedles(query: string): string[] {
   return [...aliases];
 }
 
-function dedupeBankNetworks(networks: PouchBankNetwork[]): PouchBankNetwork[] {
+function dedupeBanks(banks: PouchBankAccount[]): PouchBankAccount[] {
   const seen = new Set<string>();
-  const deduped: PouchBankNetwork[] = [];
+  const deduped: PouchBankAccount[] = [];
 
-  for (const network of networks) {
-    const name = typeof network.name === "string" ? normalizeBankTerm(network.name) : "";
-    const code = typeof network.code === "string" ? normalizeBankTerm(network.code) : "";
+  for (const bank of banks) {
+    const name = typeof bank.name === "string" ? normalizeBankTerm(bank.name) : "";
+    const code = typeof bank.code === "string" ? normalizeBankTerm(bank.code) : "";
     const key = `${name}|${code}`;
     if (!key || seen.has(key)) {
       continue;
     }
 
     seen.add(key);
-    deduped.push(network);
+    deduped.push(bank);
   }
 
   return deduped;
 }
 
-function getPreferredBankPriority(network: PouchBankNetwork): number {
-  const name = typeof network.name === "string" ? normalizeBankTerm(network.name) : "";
+function getPreferredBankPriority(bank: PouchBankAccount): number {
+  const name = typeof bank.name === "string" ? normalizeBankTerm(bank.name) : "";
   if (!name) {
     return Number.MAX_SAFE_INTEGER;
   }
@@ -175,9 +187,9 @@ function getPreferredBankPriority(network: PouchBankNetwork): number {
   return index === -1 ? Number.MAX_SAFE_INTEGER : index;
 }
 
-function scoreBankMatch(network: PouchBankNetwork, query: string): number {
-  const name = typeof network.name === "string" ? normalizeBankTerm(network.name) : "";
-  const code = typeof network.code === "string" ? normalizeBankTerm(network.code) : "";
+function scoreBankMatch(bank: PouchBankAccount, query: string): number {
+  const name = typeof bank.name === "string" ? normalizeBankTerm(bank.name) : "";
+  const code = typeof bank.code === "string" ? normalizeBankTerm(bank.code) : "";
   const needles = getBankSearchNeedles(query);
 
   if (!needles.length) {
@@ -209,10 +221,10 @@ function scoreBankMatch(network: PouchBankNetwork, query: string): number {
   return best;
 }
 
-function sortBankNetworks(networks: PouchBankNetwork[], query: string): PouchBankNetwork[] {
+function sortBanks(banks: PouchBankAccount[], query: string): PouchBankAccount[] {
   const normalizedQuery = query.trim();
 
-  return [...networks].sort((left, right) => {
+  return [...banks].sort((left, right) => {
     const leftName = typeof left.name === "string" ? left.name : "";
     const rightName = typeof right.name === "string" ? right.name : "";
 
@@ -234,150 +246,25 @@ function sortBankNetworks(networks: PouchBankNetwork[], query: string): PouchBan
   });
 }
 
-async function ensureUserWallet(
-  user: Awaited<ReturnType<typeof authenticateHttpUser>>,
-) {
-  if (user.wallet) {
-    return user.wallet;
-  }
-
-  if (!user.walletAddress) {
-    throw new Error("No linked wallet address found for this user.");
-  }
-
-  try {
-    return await walletClient.create(user.id, user.walletAddress);
-  } catch {
-    return walletClient.findByUserId(user.id);
-  }
-}
-
-function decimalToNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  if (
-    value &&
-    typeof value === "object" &&
-    "toNumber" in value &&
-    typeof value.toNumber === "function"
-  ) {
-    const parsed = value.toNumber();
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  return null;
-}
-
-function roundNgn(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
-function roundUsdt(value: number): number {
-  return Math.round(value * 1_000_000) / 1_000_000;
-}
-
-function mapWithdrawalRequest(
-  request: {
-    id: string;
-    status: string;
-    requestedAmountNgn: unknown;
-    quotedAmountNgn: unknown;
-    reservedAmountUsdt: unknown;
-    quotedAmountUsd: unknown;
-    quotedCryptoAmount: unknown;
-    displayCurrency: string;
-    displayExchangeRate: unknown;
-    payoutCurrency: string;
-    cryptoCurrency: string;
-    cryptoNetwork: string;
-    bankAccountNumber: string;
-    bankAccountName: string;
-    bankNetworkId: string;
-    providerReference: string | null;
-    paymentId: string | null;
-    failureReason: string | null;
-    expiresAt: Date | null;
-    createdAt: Date;
-    updatedAt: Date;
-    settledAt?: Date | null;
-    failedAt?: Date | null;
-    releasedAt?: Date | null;
-  },
-) {
-  return {
-    id: request.id,
-    status: request.status,
-    requestedAmountNgn: decimalToNumber(request.requestedAmountNgn) ?? 0,
-    quotedAmountNgn: decimalToNumber(request.quotedAmountNgn),
-    reservedAmountUsdt: decimalToNumber(request.reservedAmountUsdt) ?? 0,
-    quotedAmountUsd: decimalToNumber(request.quotedAmountUsd),
-    quotedCryptoAmount: decimalToNumber(request.quotedCryptoAmount),
-    displayCurrency: request.displayCurrency,
-    displayExchangeRate: decimalToNumber(request.displayExchangeRate) ?? 0,
-    payoutCurrency: request.payoutCurrency,
-    cryptoCurrency: request.cryptoCurrency,
-    cryptoNetwork: request.cryptoNetwork,
-    bankAccount: {
-      accountNumber: request.bankAccountNumber,
-      accountName: request.bankAccountName,
-      networkId: request.bankNetworkId,
-    },
-    providerReference: request.providerReference,
-    paymentId: request.paymentId,
-    failureReason: request.failureReason,
-    expiresAt: request.expiresAt?.toISOString() ?? null,
-    createdAt: request.createdAt.toISOString(),
-    updatedAt: request.updatedAt.toISOString(),
-    settledAt: request.settledAt?.toISOString() ?? null,
-    failedAt: request.failedAt?.toISOString() ?? null,
-    releasedAt: request.releasedAt?.toISOString() ?? null,
-  };
-}
-
-function mapBankNetwork(network: PouchBankNetwork) {
-  return {
-    id: typeof network.id === "string" ? network.id : "",
-    name: typeof network.name === "string" ? network.name : "",
-    code: typeof network.code === "string" ? network.code : null,
-    country: typeof network.country === "string" ? network.country : null,
-    accountNumberType:
-      typeof network.accountNumberType === "string"
-        ? network.accountNumberType
-        : null,
-    type: typeof network.type === "string" ? network.type : null,
-  };
-}
-
-async function getBankNetworksFromCacheOrProvider(
+async function getBanksFromCacheOrProvider(
   deps: WalletRouteDeps,
   country: string,
-): Promise<PouchBankNetwork[]> {
-  const cacheKey = getPouchBankNetworksCacheKey(country);
+  currency: string,
+): Promise<PouchBankAccount[]> {
+  const cacheKey = getBankCacheKey(country);
 
   if (deps.redisClient) {
     const cached = await deps.redisClient.get(cacheKey).catch(() => null);
     if (cached) {
       try {
-        const parsed = JSON.parse(cached) as { networks?: PouchBankNetwork[] };
-        if (Array.isArray(parsed.networks)) {
-          console.log("[api-gateway][wallet-withdrawal] bank cache hit", {
+        const parsed = JSON.parse(cached) as { banks?: PouchBankAccount[] };
+        if (Array.isArray(parsed.banks)) {
+          console.log("[api-gateway][wallet] bank cache hit", {
             country,
             cacheKey,
-            count: parsed.networks.length,
-            hasOpay: parsed.networks.some(
-              (network) =>
-                typeof network.name === "string" &&
-                network.name.toLowerCase() === "opay",
-            ),
+            count: parsed.banks.length,
           });
-          return parsed.networks;
+          return parsed.banks;
         }
       } catch {
         // ignore bad cache payload and fall through to provider
@@ -385,185 +272,107 @@ async function getBankNetworksFromCacheOrProvider(
     }
   }
 
-  const response = await deps.pouchClient.getCryptoBankNetworks(country);
-  const networks = dedupeBankNetworks(
-    Array.isArray(response.networks) ? response.networks : [],
+  const banks = dedupeBanks(
+    await deps.pouchLiquifiaClient.listBanks(country, currency),
   );
 
-  console.log("[api-gateway][wallet-withdrawal] bank cache miss", {
+  console.log("[api-gateway][wallet] bank cache miss", {
     country,
     cacheKey,
-    count: networks.length,
-    hasOpay: networks.some(
-      (network) =>
-        typeof network.name === "string" &&
-        network.name.toLowerCase() === "opay",
-    ),
+    count: banks.length,
   });
 
   if (deps.redisClient) {
     await deps.redisClient
       .set(
         cacheKey,
-        JSON.stringify({ networks }),
-        POUCH_BANK_NETWORKS_CACHE_TTL_SECONDS,
+        JSON.stringify({ banks }),
+        BANK_NETWORKS_CACHE_TTL_SECONDS,
       )
       .catch(() => undefined);
   }
 
-  return networks;
+  return banks;
 }
 
-function readUserKyc(
-  value: unknown,
-  defaults?: Record<string, string>,
-): Record<string, unknown> | null {
-  const mergedDefaults =
-    defaults && Object.keys(defaults).length > 0 ? defaults : undefined;
+// ─── Mapping helpers ───────────────────────────────────────────────
 
-  if (isRecord(value)) {
-    const normalizedInput = normalizePouchUserKyc(value);
-    return mergedDefaults
-      ? {
-          ...mergedDefaults,
-          ...normalizedInput,
-        }
-      : normalizedInput;
-  }
-
-  return mergedDefaults ?? null;
-}
-
-function normalizePouchUserKyc(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entryValue]) => {
-      const normalizedKey = normalizePouchUserKycKey(key);
-      const normalizedValue =
-        normalizedKey === "DOB" && typeof entryValue === "string"
-          ? normalizePouchDob(entryValue)
-          : entryValue;
-
-      return [normalizedKey, normalizedValue];
-    }),
-  );
-}
-
-function normalizePouchUserKycKey(key: string): string {
-  const compact = key.replace(/[\s-]+/g, "_");
-  const upper = compact.toUpperCase();
-  return upper === "FULLNAME" ? "FULL_NAME" : upper;
-}
-
-function normalizePouchDob(value: string): string {
-  const trimmed = value.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    return trimmed;
-  }
-
-  const slashMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!slashMatch) {
-    return trimmed;
-  }
-
-  const [, month, day, year] = slashMatch;
-  return `${year}-${month}-${day}`;
-}
-
-function parseRequestedWithdrawalAmount(body: Record<string, unknown>): number {
-  const amountNgn = pickNumber(body, ["amountNgn", "amountLocal", "amount"]);
-  if (!amountNgn || amountNgn <= 0) {
-    throw new Error("amountNgn must be a positive number.");
-  }
-
-  return roundNgn(amountNgn);
-}
-
-function buildWalletWithdrawalOfframpPayload(
-  body: Record<string, unknown>,
-  deps: WalletRouteDeps["defaults"],
-  reservedAmountUsdt: number,
-): PouchOfframpPayload {
-  const bankAccount = isRecord(body["bankAccount"]) ? body["bankAccount"] : null;
-  if (!bankAccount) {
-    throw new Error("bankAccount is required.");
-  }
-
-  const accountNumber = pickString(bankAccount, ["accountNumber"]);
-  const accountName = pickString(bankAccount, ["accountName"]);
-  const networkId = pickString(bankAccount, ["networkId"]);
-
-  if (!accountNumber || !accountName || !networkId) {
-    throw new Error(
-      "bankAccount.accountNumber, accountName, and networkId are required.",
-    );
-  }
-
+function mapBankAccount(bank: PouchBankAccount) {
   return {
-    cryptoAmount: roundUsdt(reservedAmountUsdt),
-    cryptoCurrency:
-      pickString(body, ["cryptoCurrency"])?.toUpperCase() ?? deps.cryptoCurrency,
-    cryptoNetwork:
-      pickString(body, ["cryptoNetwork"])?.toUpperCase() ?? deps.cryptoNetwork,
-    countryCode:
-      pickString(body, ["countryCode"])?.toUpperCase() ?? deps.countryCode,
-    currency: pickString(body, ["currency"])?.toUpperCase() ?? deps.currency,
-    providerId: pickString(body, ["providerId"]) ?? deps.providerId,
-    bankAccount: {
-      accountNumber,
-      accountName,
-      networkId,
-    },
-    userKyc: readUserKyc(body["userKyc"], deps.userKycDefaults) ?? undefined,
+    uuid: typeof bank.uuid === "string" ? bank.uuid : "",
+    name: typeof bank.name === "string" ? bank.name : "",
+    code: typeof bank.code === "string" ? bank.code : null,
+    country: typeof bank.country === "string" ? bank.country : null,
+    currency: typeof bank.currency === "string" ? bank.currency : null,
+    provider: typeof bank.provider === "string" ? bank.provider : null,
   };
 }
 
-async function syncWithdrawalLifecycle(
+function mapWithdrawalRequest(
+  request: {
+    id: string;
+    status: string;
+    requestedAmountNgn: unknown;
+    reservedAmountNgn?: unknown;
+    bankAccountNumber: string;
+    bankAccountName: string;
+    bankNetworkId: string;
+    providerReference: string | null;
+    failureReason: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    settledAt?: Date | null;
+    failedAt?: Date | null;
+  },
+) {
+  return {
+    id: request.id,
+    status: request.status,
+    amountNgn: decimalToNumber(request.requestedAmountNgn) ?? 0,
+    bankAccount: {
+      accountNumber: request.bankAccountNumber,
+      accountName: request.bankAccountName,
+      networkId: request.bankNetworkId,
+    },
+    providerReference: request.providerReference,
+    failureReason: request.failureReason,
+    createdAt: request.createdAt.toISOString(),
+    updatedAt: request.updatedAt.toISOString(),
+    settledAt: request.settledAt?.toISOString() ?? null,
+    failedAt: request.failedAt?.toISOString() ?? null,
+  };
+}
+
+// ─── Payout status sync ────────────────────────────────────────────
+
+async function syncPayoutStatus(
+  deps: WalletRouteDeps,
+  pouchPayoutId: string,
   providerReference: string,
-  statusResponse: PouchRampStatusResponse,
-): Promise<void> {
-  const lifecycleStatus = deriveLifecycleStatus(statusResponse.status ?? "");
-  const failureReason =
-    typeof statusResponse.failureReason === "string" &&
-    statusResponse.failureReason.trim().length > 0
-      ? statusResponse.failureReason
-      : statusResponse.status ?? "Withdrawal failed";
+): Promise<PouchPayout> {
+  const payout = await deps.pouchLiquifiaClient.getPayout(pouchPayoutId);
+  const status = (payout.status ?? "").toUpperCase();
 
-  if (lifecycleStatus === "SETTLED") {
+  if (status === "SUCCESSFUL" || status === "COMPLETED") {
     await withdrawalClient.settle(providerReference);
-    return;
-  }
-
-  if (
-    lifecycleStatus === "FAILED" ||
-    lifecycleStatus === "EXPIRED" ||
-    lifecycleStatus === "CANCELLED"
+  } else if (
+    status === "FAILED" ||
+    status === "REVERSED" ||
+    status === "CANCELLED"
   ) {
     await withdrawalClient.releaseFailedRequest({
       providerReference,
-      failureReason,
-      status: lifecycleStatus,
+      failureReason: `Payout ${status.toLowerCase()}`,
+      status: "FAILED",
     });
-    return;
+  } else if (status === "PROCESSING" || status === "PENDING") {
+    await withdrawalClient.markProcessing(providerReference);
   }
 
-  await withdrawalClient.markProcessing(providerReference);
+  return payout;
 }
 
-function maskWalletAddress(value: string): string {
-  if (value.length <= 10) {
-    return value;
-  }
-
-  return `${value.slice(0, 6)}...${value.slice(-4)}`;
-}
-
-function maskTransactionHash(value: string): string {
-  if (value.length <= 10) {
-    return value;
-  }
-
-  return `${value.slice(0, 6)}...${value.slice(-4)}`;
-}
+// ─── Route handlers ────────────────────────────────────────────────
 
 export async function handleWalletOverviewRoute(
   req: IncomingMessage,
@@ -571,30 +380,26 @@ export async function handleWalletOverviewRoute(
   deps: WalletRouteDeps,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
-    const wallet = await ensureUserWallet(user);
-    const pricing = await deps.ridePricingDisplayProvider.getPricingDisplay();
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
+    const wallet = await walletClient.findByUserId(user.id);
 
-    const balanceUsdt = decimalToNumber(wallet.balanceUsdt) ?? 0;
-    const lockedUsdt = decimalToNumber(wallet.lockedUsdt) ?? 0;
-    const stakedUsdt = decimalToNumber(wallet.stakedUsdt) ?? 0;
+    if (!wallet) {
+      sendJson(res, 200, {
+        walletId: null,
+        balanceNgn: 0,
+        lockedNgn: 0,
+        updatedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    const balanceNgn = decimalToNumber(wallet.balanceNgn) ?? 0;
+    const lockedNgn = decimalToNumber(wallet.lockedNgn) ?? 0;
 
     sendJson(res, 200, {
       walletId: wallet.id,
-      walletAddress: wallet.address,
-      chain: wallet.chain,
-      balanceUsdt,
-      lockedUsdt,
-      stakedUsdt,
-      balanceNgn: convertUsdtToRideDisplayAmount(balanceUsdt, pricing) ?? 0,
-      lockedNgn: convertUsdtToRideDisplayAmount(lockedUsdt, pricing) ?? 0,
-      stakedNgn: convertUsdtToRideDisplayAmount(stakedUsdt, pricing) ?? 0,
-      displayCurrency: pricing.displayCurrency,
-      displayExchangeRate: pricing.displayExchangeRate,
+      balanceNgn,
+      lockedNgn,
       updatedAt: wallet.updatedAt.toISOString(),
     });
   } catch (error) {
@@ -605,126 +410,47 @@ export async function handleWalletOverviewRoute(
   }
 }
 
-export async function handleListWithdrawalBankNetworksRoute(
+export async function handleWalletTransactionsRoute(
   req: IncomingMessage,
   res: ServerResponse,
   deps: WalletRouteDeps,
   url: URL,
 ): Promise<void> {
   try {
-    await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
-    const country = parseCountryCode(
-      url.searchParams.get("country"),
-      deps.defaults.countryCode,
-    );
-    const query = url.searchParams.get("query")?.trim().toLowerCase() ?? "";
-    const limit = parseLimit(url.searchParams.get("limit"));
-    const networks = await getBankNetworksFromCacheOrProvider(deps, country);
-    const needles = getBankSearchNeedles(query);
-    const filtered = query
-      ? networks.filter((network) => scoreBankMatch(network, query) !== Number.MAX_SAFE_INTEGER)
-      : networks;
-    const ranked = sortBankNetworks(filtered, query);
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
+    const wallet = await walletClient.findByUserId(user.id);
 
-    console.log("[api-gateway][wallet-withdrawal] bank search", {
-      country,
-      query,
-      total: networks.length,
-      matched: filtered.length,
-      limit,
-      needles,
-      includesOpay:
-        filtered.find(
-          (network) =>
-            typeof network.name === "string" &&
-            network.name.toLowerCase() === "opay",
-        ) != null,
-    });
-
-    sendJson(res, 200, {
-      country,
-      items: ranked
-        .slice(0, limit)
-        .map(mapBankNetwork)
-        .filter((item) => item.id && item.name),
-    });
-  } catch (error) {
-    if (error instanceof PouchApiError) {
-      sendJson(res, error.statusCode, {
-        error: "Could not load Pouch bank networks.",
-        details: error.responseBody,
-      });
+    if (!wallet) {
+      sendJson(res, 200, { items: [], nextCursor: null });
       return;
     }
 
+    const limit = parseLimit(url.searchParams.get("limit"));
+    const cursor = url.searchParams.get("cursor") ?? undefined;
+    const transactions = await walletClient.findTransactions(wallet.id, limit, cursor);
+
+    sendJson(res, 200, {
+      items: transactions.map((transaction) => ({
+        id: transaction.id,
+        type: transaction.type,
+        direction: transaction.direction,
+        amountNgn: decimalToNumber(transaction.amountNgn) ?? 0,
+        balanceAfterNgn: decimalToNumber(transaction.balanceAfterNgn) ?? 0,
+        referenceId: transaction.referenceId,
+        metadata: transaction.metadata ?? null,
+        createdAt: transaction.createdAt.toISOString(),
+      })),
+      nextCursor:
+        transactions.length === limit
+          ? (transactions[transactions.length - 1]?.id ?? null)
+          : null,
+    });
+  } catch (error) {
     sendJson(res, 401, {
       error:
         error instanceof Error
           ? error.message
-          : "Could not load withdrawal bank networks.",
-    });
-  }
-}
-
-export async function handleVerifyWithdrawalBankAccountRoute(
-  req: IncomingMessage,
-  res: ServerResponse,
-  deps: WalletRouteDeps,
-): Promise<void> {
-  try {
-    await authenticateHttpUser(req, deps.privyAppId, deps.privyVerificationKey);
-    const rawBody = await readJsonBody(req);
-    if (!isRecord(rawBody)) {
-      sendJson(res, 400, { error: "Body must be a JSON object" });
-      return;
-    }
-
-    const accountNumber = pickString(rawBody, ["accountNumber"])?.replace(/\D/g, "");
-    const networkId = pickString(rawBody, ["networkId"]);
-
-    if (!accountNumber || !networkId) {
-      sendJson(res, 400, {
-        error: "accountNumber and networkId are required.",
-      });
-      return;
-    }
-
-    const countryCode =
-      pickString(rawBody, ["countryCode"])?.toUpperCase() ?? deps.defaults.countryCode;
-    const providerId = pickString(rawBody, ["providerId"]) ?? deps.defaults.providerId;
-
-    const verified = await deps.pouchClient.verifySharedKycBankAccount({
-      accountNumber,
-      networkId,
-      countryCode,
-      providerId,
-    });
-
-    sendJson(res, 200, {
-      bankAccount: {
-        accountNumber:
-          typeof verified.accountNumber === "string" ? verified.accountNumber : accountNumber,
-        accountName:
-          typeof verified.accountName === "string" ? verified.accountName : null,
-        bankName: typeof verified.bankName === "string" ? verified.bankName : null,
-        networkId,
-      },
-      verificationSessionId: null,
-    });
-  } catch (error) {
-    if (error instanceof PouchApiError) {
-      sendJson(res, error.statusCode, {
-        error: "Could not verify the bank account.",
-        details: error.responseBody,
-      });
-      return;
-    }
-
-    sendJson(res, 400, {
-      error:
-        error instanceof Error
-          ? error.message
-          : "Could not verify withdrawal bank account.",
+          : "Could not load wallet transactions",
     });
   }
 }
@@ -735,50 +461,71 @@ export async function handleCreateWalletWithdrawalRoute(
   deps: WalletRouteDeps,
 ): Promise<void> {
   let reservedRequestId: string | undefined;
-  let treasurySubmitted = false;
 
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const rawBody = await readJsonBody(req);
     if (!isRecord(rawBody)) {
       sendJson(res, 400, { error: "Body must be a JSON object" });
       return;
     }
 
-    const wallet = await ensureUserWallet(user);
-    const pricing = await deps.ridePricingDisplayProvider.getPricingDisplay();
-    const requestedAmountNgn = parseRequestedWithdrawalAmount(rawBody);
-    const availableBalanceUsdt = decimalToNumber(wallet.balanceUsdt) ?? 0;
-    const availableBalanceNgn =
-      convertUsdtToRideDisplayAmount(availableBalanceUsdt, pricing) ?? 0;
+    const wallet = await walletClient.findByUserId(user.id);
 
-    if (availableBalanceNgn < requestedAmountNgn) {
+    if (!wallet) {
+      sendJson(res, 400, { error: "No wallet found. Fund your account first." });
+      return;
+    }
+
+    // Parse amount
+    const amountNgn = pickNumber(rawBody, ["amountNgn", "amountLocal", "amount"]);
+    if (!amountNgn || amountNgn <= 0) {
+      sendJson(res, 400, { error: "amountNgn must be a positive number." });
+      return;
+    }
+
+    const requestedAmountNgn = roundNgn(amountNgn);
+
+    // Check balance
+    const balanceNgn = decimalToNumber(wallet.balanceNgn) ?? 0;
+    if (balanceNgn < requestedAmountNgn) {
       sendJson(res, 400, {
         error: "Insufficient balance for this withdrawal.",
-        availableBalanceNgn: roundNgn(availableBalanceNgn),
+        availableBalanceNgn: roundNgn(balanceNgn),
         requestedAmountNgn,
       });
       return;
     }
 
-    const reservedAmountUsdt = roundUsdt(
-      requestedAmountNgn / pricing.displayExchangeRate,
-    );
-
-    if (!Number.isFinite(reservedAmountUsdt) || reservedAmountUsdt <= 0) {
-      sendJson(res, 400, { error: "Could not compute a withdrawal quote." });
+    // Parse bank account
+    const bankAccountBody = isRecord(rawBody["bankAccount"])
+      ? rawBody["bankAccount"]
+      : null;
+    if (!bankAccountBody) {
+      sendJson(res, 400, { error: "bankAccount is required." });
       return;
     }
 
-    const payload = buildWalletWithdrawalOfframpPayload(
-      rawBody,
-      deps.defaults,
-      reservedAmountUsdt,
-    );
+    const accountNumber = pickString(bankAccountBody, ["accountNumber"]);
+    const accountName = pickString(bankAccountBody, ["accountName"]);
+    const bankUuid = pickString(bankAccountBody, ["bankUuid", "networkId"]);
+
+    if (!accountNumber || !accountName || !bankUuid) {
+      sendJson(res, 400, {
+        error:
+          "bankAccount.accountNumber, accountName, and bankUuid are required.",
+      });
+      return;
+    }
+
+    // Look up user's virtual account for the payout source
+    const virtualAccount = await virtualAccountClient.findByUserId(user.id);
+    if (!virtualAccount) {
+      sendJson(res, 400, {
+        error: "No virtual account found. Please set up deposits first.",
+      });
+      return;
+    }
 
     const result = await runIdempotentJsonRequest({
       req,
@@ -787,133 +534,50 @@ export async function handleCreateWalletWithdrawalRoute(
       routeKey: "wallet:withdrawals:create",
       requestBody: rawBody,
       execute: async () => {
+        // Reserve funds on the wallet
         const reserveResult = await withdrawalClient.reserve({
           userId: user.id,
           walletId: wallet.id,
-          requestedAmountNgn,
-          reservedAmountUsdt,
-          displayCurrency: pricing.displayCurrency,
-          displayExchangeRate: pricing.displayExchangeRate,
-          payoutCurrency: deps.defaults.currency,
-          cryptoCurrency: payload.cryptoCurrency,
-          cryptoNetwork: payload.cryptoNetwork,
-          bankAccountNumber: payload.bankAccount.accountNumber,
-          bankAccountName: payload.bankAccount.accountName,
-          bankNetworkId: payload.bankAccount.networkId,
+          amountNgn: requestedAmountNgn,
+          bankAccountNumber: accountNumber,
+          bankAccountName: accountName,
+          bankNetworkId: bankUuid,
         });
         reservedRequestId = reserveResult.request.id;
 
-        const response = await deps.pouchClient.createSharedKycOfframp(payload);
-        const createdEvent = normalizePouchTransactionCreated({
-          type: "OFFRAMP",
-          payload: response,
-          metadata: buildPouchMetadata({
-            userId: user.id,
-            walletAddress: wallet.address,
-          }),
-          chain: deps.defaults.chain,
-          customerEmail: user.email ?? deps.defaults.testEmail,
+        // Create payout via Pouch Liquifia
+        const payout = await deps.pouchLiquifiaClient.createPayout({
+          virtualAccountId: virtualAccount.pouchVirtualAccountId,
+          reference: reserveResult.request.id,
+          amount: requestedAmountNgn,
+          destinationAccount: accountNumber,
+          destinationBankUuid: bankUuid,
         });
 
-        if (!createdEvent) {
-          throw new Error("Pouch offramp response could not be normalized.");
-        }
+        // Attach the payout to the withdrawal request
+        await withdrawalClient.attachPayout({
+          withdrawalRequestId: reserveResult.request.id,
+          pouchPayoutId: payout.id,
+          providerReference: payout.reference,
+        });
 
-        await paymentClient.upsertPaymentIntent(
-          buildPaymentIntentUpsertFromEvent(createdEvent, response),
+        console.log("[api-gateway][wallet-withdrawal] payout created", {
+          withdrawalRequestId: reserveResult.request.id,
+          pouchPayoutId: payout.id,
+          providerReference: payout.reference,
+          amountNgn: requestedAmountNgn,
+        });
+
+        const createdRequest = await withdrawalClient.findById(
+          reserveResult.request.id,
         );
-        await withdrawalClient.attachOfframp({
-          withdrawalRequestId: reserveResult.request.id,
-          paymentId: createdEvent.paymentId,
-          providerReference: createdEvent.providerReference,
-          quotedAmountNgn:
-            pickNumber(response, ["cryptoInstruction.amountLocal"]) ?? undefined,
-          quotedAmountUsd:
-            pickNumber(response, ["cryptoInstruction.amountUsd"]) ?? undefined,
-          quotedCryptoAmount:
-            pickNumber(response, ["cryptoInstruction.cryptoAmount"]) ??
-            createdEvent.amountUsd,
-          providerPayload: response,
-          expiresAt:
-            typeof response.cryptoInstruction?.expiresAt === "string"
-              ? new Date(response.cryptoInstruction.expiresAt)
-              : undefined,
-        });
-        await deps.publisher.publishPaymentEvent(createdEvent);
-
-        const treasuryDestinationAddress =
-          typeof response.cryptoInstruction?.walletAddress === "string"
-            ? response.cryptoInstruction.walletAddress.trim()
-            : "";
-        const treasuryCryptoAmount =
-          pickNumber(response, ["cryptoInstruction.cryptoAmount"]) ??
-          createdEvent.amountUsd;
-
-        if (!treasuryDestinationAddress) {
-          throw new Error("Pouch offramp did not return a Stellar destination address.");
-        }
-
-        if (payload.cryptoCurrency !== "USDC" || payload.cryptoNetwork !== "XLM") {
-          throw new Error(
-            `Automated treasury payout only supports USDC on XLM right now. Received ${payload.cryptoCurrency} on ${payload.cryptoNetwork}.`,
-          );
-        }
-
-        console.log("[api-gateway][wallet-withdrawal] sending treasury payout", {
-          withdrawalRequestId: reserveResult.request.id,
-          providerReference: createdEvent.providerReference,
-          destinationAddress: maskWalletAddress(treasuryDestinationAddress),
-          cryptoAmount: treasuryCryptoAmount,
-          cryptoCurrency: payload.cryptoCurrency,
-          cryptoNetwork: payload.cryptoNetwork,
-          stellarNetwork: deps.defaults.stellarNetwork ?? "mainnet",
-        });
-
-        await hydrateProcessEnvWithStellarMasterWalletSecret({
-          AWS_REGION: process.env["AWS_REGION"],
-          STELLAR_MASTER_WALLET_SECRET_NAME:
-            process.env["STELLAR_MASTER_WALLET_SECRET_NAME"],
-          STELLAR_SECRET_KEY: process.env["STELLAR_SECRET_KEY"],
-          POUCH_MASTER_WALLET_ADDRESS: deps.defaults.masterWalletAddress,
-        });
-
-        const treasurySendResult = await sendTreasuryStellarUsdcPayment({
-          destinationAddress: treasuryDestinationAddress,
-          amount: treasuryCryptoAmount,
-          network: deps.defaults.stellarNetwork ?? "mainnet",
-        });
-        treasurySubmitted = true;
-
-        await withdrawalClient.recordTreasurySubmission({
-          withdrawalRequestId: reserveResult.request.id,
-          transactionHash: treasurySendResult.hash,
-          senderAddress: treasurySendResult.sourceAddress,
-          destinationAddress: treasurySendResult.destinationAddress,
-          amount: treasurySendResult.amount,
-          assetCode: treasurySendResult.assetCode,
-          assetIssuer: treasurySendResult.assetIssuer,
-          network: treasurySendResult.network,
-        });
-
-        console.log("[api-gateway][wallet-withdrawal] treasury payout submitted", {
-          withdrawalRequestId: reserveResult.request.id,
-          providerReference: createdEvent.providerReference,
-          transactionHash: maskTransactionHash(treasurySendResult.hash),
-          senderAddress: maskWalletAddress(treasurySendResult.sourceAddress),
-          destinationAddress: maskWalletAddress(treasurySendResult.destinationAddress),
-          amount: treasurySendResult.amount,
-          assetCode: treasurySendResult.assetCode,
-        });
-
-        const createdRequest = await withdrawalClient.findById(reserveResult.request.id);
 
         return {
           statusCode: 200,
           body: {
-            withdrawal: createdRequest ? mapWithdrawalRequest(createdRequest) : null,
-            provider: "pouch",
-            type: "OFFRAMP",
-            cryptoInstruction: response.cryptoInstruction,
+            withdrawal: createdRequest
+              ? mapWithdrawalRequest(createdRequest)
+              : null,
           },
         };
       },
@@ -921,7 +585,7 @@ export async function handleCreateWalletWithdrawalRoute(
 
     sendJson(res, result.statusCode, result.body);
   } catch (error) {
-    if (reservedRequestId && !treasurySubmitted) {
+    if (reservedRequestId) {
       await withdrawalClient
         .releaseFailedRequest({
           withdrawalRequestId: reservedRequestId,
@@ -932,14 +596,6 @@ export async function handleCreateWalletWithdrawalRoute(
           status: "FAILED",
         })
         .catch(() => undefined);
-    }
-
-    if (error instanceof PouchApiError) {
-      sendJson(res, error.statusCode, {
-        error: "Failed to create withdrawal payout.",
-        details: error.responseBody,
-      });
-      return;
     }
 
     sendJson(res, 400, {
@@ -958,18 +614,15 @@ export async function handleListWalletWithdrawalsRoute(
   url: URL,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const limit = parseLimit(url.searchParams.get("limit"));
     const cursor = url.searchParams.get("cursor") ?? undefined;
     const items = await withdrawalClient.listByUser(user.id, limit, cursor);
 
     sendJson(res, 200, {
       items: items.map(mapWithdrawalRequest),
-      nextCursor: items.length === limit ? (items[items.length - 1]?.id ?? null) : null,
+      nextCursor:
+        items.length === limit ? (items[items.length - 1]?.id ?? null) : null,
     });
   } catch (error) {
     sendJson(res, 401, {
@@ -988,11 +641,7 @@ export async function handleGetWalletWithdrawalRoute(
   withdrawalRequestId: string,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const request = await withdrawalClient.findById(withdrawalRequestId);
 
     if (!request || request.userId !== user.id) {
@@ -1000,30 +649,13 @@ export async function handleGetWalletWithdrawalRoute(
       return;
     }
 
-    if (request.providerReference) {
-      const statusResponse = await deps.pouchClient.getRampStatus(
-        request.providerReference,
-        "OFFRAMP",
-      );
-      await syncWithdrawalLifecycle(request.providerReference, statusResponse);
-
-      const syncedIntent = await paymentClient.findPaymentIntentByProviderReference(
+    // If a payout was attached, check its latest status from the provider
+    if (request.pouchPayoutId && request.providerReference) {
+      await syncPayoutStatus(
+        deps,
+        request.pouchPayoutId,
         request.providerReference,
       );
-
-      if (syncedIntent) {
-        const syncedEvent = normalizePouchTransactionStatus({
-          payload: statusResponse,
-          intent: syncedIntent,
-        });
-
-        if (syncedEvent) {
-          await paymentClient.upsertPaymentIntent(
-            buildPaymentIntentUpsertFromEvent(syncedEvent, statusResponse),
-          );
-          await deps.publisher.publishPaymentEvent(syncedEvent);
-        }
-      }
     }
 
     const latestRequest = await withdrawalClient.findById(withdrawalRequestId);
@@ -1031,14 +663,6 @@ export async function handleGetWalletWithdrawalRoute(
       withdrawal: latestRequest ? mapWithdrawalRequest(latestRequest) : null,
     });
   } catch (error) {
-    if (error instanceof PouchApiError) {
-      sendJson(res, error.statusCode, {
-        error: "Could not refresh withdrawal status.",
-        details: error.responseBody,
-      });
-      return;
-    }
-
     sendJson(res, 400, {
       error:
         error instanceof Error
@@ -1048,56 +672,140 @@ export async function handleGetWalletWithdrawalRoute(
   }
 }
 
-export async function handleWalletTransactionsRoute(
+export async function handleListWithdrawalBankNetworksRoute(
   req: IncomingMessage,
   res: ServerResponse,
   deps: WalletRouteDeps,
   url: URL,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
-    const wallet = await ensureUserWallet(user);
+    await authenticateHttpUser(req, deps.jwtSecret);
+
+    const country = parseCountryCode(url.searchParams.get("country"), "NG");
+    const currency = url.searchParams.get("currency")?.toUpperCase() ?? "NGN";
+    const query = url.searchParams.get("query")?.trim().toLowerCase() ?? "";
     const limit = parseLimit(url.searchParams.get("limit"));
-    const cursor = url.searchParams.get("cursor") ?? undefined;
-    const transactions = await walletClient.findTransactions(wallet.id, limit, cursor);
-    const pricing = await deps.ridePricingDisplayProvider.getPricingDisplay();
+
+    const banks = await getBanksFromCacheOrProvider(deps, country, currency);
+    const needles = getBankSearchNeedles(query);
+    const filtered = query
+      ? banks.filter(
+          (bank) => scoreBankMatch(bank, query) !== Number.MAX_SAFE_INTEGER,
+        )
+      : banks;
+    const ranked = sortBanks(filtered, query);
+
+    console.log("[api-gateway][wallet] bank search", {
+      country,
+      currency,
+      query,
+      total: banks.length,
+      matched: filtered.length,
+      limit,
+      needles,
+    });
 
     sendJson(res, 200, {
-      items: transactions.map((transaction) => {
-        const amountUsdt = decimalToNumber(transaction.amountUsdt) ?? 0;
-        const balanceAfterUsdt = decimalToNumber(transaction.balanceAfter) ?? 0;
-
-        return {
-          id: transaction.id,
-          type: transaction.type,
-          direction: transaction.direction,
-          amountUsdt,
-          amountNgn: convertUsdtToRideDisplayAmount(amountUsdt, pricing) ?? 0,
-          balanceAfterUsdt,
-          balanceAfterNgn:
-            convertUsdtToRideDisplayAmount(balanceAfterUsdt, pricing) ?? 0,
-          referenceId: transaction.referenceId,
-          metadata: transaction.metadata ?? null,
-          createdAt: transaction.createdAt.toISOString(),
-          displayCurrency: pricing.displayCurrency,
-          displayExchangeRate: pricing.displayExchangeRate,
-        };
-      }),
-      nextCursor:
-        transactions.length === limit
-          ? (transactions[transactions.length - 1]?.id ?? null)
-          : null,
+      country,
+      items: ranked
+        .slice(0, limit)
+        .map(mapBankAccount)
+        .filter((item) => item.uuid && item.name),
     });
   } catch (error) {
     sendJson(res, 401, {
       error:
         error instanceof Error
           ? error.message
-          : "Could not load wallet transactions",
+          : "Could not load withdrawal bank networks.",
+    });
+  }
+}
+
+export async function handleVerifyWithdrawalBankAccountRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: WalletRouteDeps,
+): Promise<void> {
+  try {
+    await authenticateHttpUser(req, deps.jwtSecret);
+    const rawBody = await readJsonBody(req);
+    if (!isRecord(rawBody)) {
+      sendJson(res, 400, { error: "Body must be a JSON object" });
+      return;
+    }
+
+    const accountNumber = pickString(rawBody, ["accountNumber"])?.replace(
+      /\D/g,
+      "",
+    );
+    const bankUuid = pickString(rawBody, ["bankUuid", "networkId"]);
+
+    if (!accountNumber || !bankUuid) {
+      sendJson(res, 400, {
+        error: "accountNumber and bankUuid are required.",
+      });
+      return;
+    }
+
+    const verified = await deps.pouchLiquifiaClient.validateBankAccount({
+      accountNumber,
+      bankUuid,
+    });
+
+    sendJson(res, 200, {
+      bankAccount: {
+        accountNumber:
+          typeof verified.account_number === "string"
+            ? verified.account_number
+            : accountNumber,
+        accountName:
+          typeof verified.account_name === "string"
+            ? verified.account_name
+            : null,
+        bankName:
+          typeof verified.bank_name === "string" ? verified.bank_name : null,
+        bankUuid,
+      },
+    });
+  } catch (error) {
+    sendJson(res, 400, {
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not verify withdrawal bank account.",
+    });
+  }
+}
+
+export async function handleWalletDepositInfoRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: WalletRouteDeps,
+): Promise<void> {
+  try {
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
+    const virtualAccount = await virtualAccountClient.findByUserId(user.id);
+
+    if (!virtualAccount) {
+      sendJson(res, 404, {
+        error: "No virtual account found. Please complete onboarding first.",
+      });
+      return;
+    }
+
+    sendJson(res, 200, {
+      accountNumber: virtualAccount.accountNumber,
+      accountName: virtualAccount.accountName,
+      bankName: virtualAccount.bankName,
+      currency: virtualAccount.currency,
+    });
+  } catch (error) {
+    sendJson(res, 401, {
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not load deposit information.",
     });
   }
 }

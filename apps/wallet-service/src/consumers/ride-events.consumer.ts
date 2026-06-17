@@ -23,11 +23,17 @@ export function createRideEventsConsumer(params: {
       if (event.eventType === 'RIDE_DRIVER_ASSIGNED') {
         try {
           const wallet = await walletRepository.findByUserId(event.riderId);
+          if (!wallet) {
+            console.warn(`[${serviceId}] no wallet found for rider ${event.riderId}`);
+            return;
+          }
+
           const holdResult = await walletRepository.createRideHold({
             rideId: event.rideId,
             walletId: wallet.id,
             riderId: event.riderId,
-            amountUsdt: event.lockedFareUsdt,
+            driverUserId: event.driverUserId,
+            amountNgn: event.lockedFareNgn,
           });
 
           if (!holdResult.applied) {
@@ -37,8 +43,7 @@ export function createRideEventsConsumer(params: {
           await walletEventsProducer.publishLocked({
             walletId: holdResult.wallet.id,
             userId: holdResult.wallet.userId,
-            walletAddress: holdResult.wallet.address,
-            lockedAmountUsdt: event.lockedFareUsdt,
+            lockedAmountNgn: event.lockedFareNgn,
             rideId: event.rideId,
             reason: 'ride_fare_hold',
           }, { key: event.rideId });
@@ -50,14 +55,14 @@ export function createRideEventsConsumer(params: {
       }
 
       if (event.eventType === 'RIDE_ROUTE_UPDATED') {
-        if (event.fareEstimateUsdt === undefined) {
+        if (event.fareEstimateNgn === undefined) {
           return;
         }
 
         try {
           const holdResult = await walletRepository.adjustRideHold({
             rideId: event.rideId,
-            targetAmountUsdt: event.fareEstimateUsdt,
+            targetAmountNgn: event.fareEstimateNgn,
           });
 
           if (!holdResult || !holdResult.applied) {
@@ -67,9 +72,8 @@ export function createRideEventsConsumer(params: {
           await walletEventsProducer.publishHoldAdjusted({
             walletId: holdResult.wallet.id,
             userId: holdResult.wallet.userId,
-            walletAddress: holdResult.wallet.address,
-            previousLockedAmountUsdt: holdResult.previousHoldAmountUsdt,
-            lockedAmountUsdt: holdResult.holdAmountUsdt,
+            previousLockedAmountNgn: holdResult.previousHoldAmountNgn,
+            lockedAmountNgn: holdResult.holdAmountNgn,
             rideId: event.rideId,
             reason: 'ride_route_updated',
           }, { key: event.rideId });
@@ -82,26 +86,37 @@ export function createRideEventsConsumer(params: {
 
       if (event.eventType === 'RIDE_COMPLETED') {
         try {
-          const holdResult = await walletRepository.completeRideHold({
+          const result = await walletRepository.completeRideHoldWithDriverPayout({
             rideId: event.rideId,
-            fareUsdt: event.fareUsdt,
+            fareNgn: event.fareNgn,
+            driverUserId: event.driverUserId,
           });
 
-          if (!holdResult || !holdResult.applied) {
+          if (!result || !result.applied) {
             return;
           }
 
+          // Publish rider debit event
           await walletEventsProducer.publishDebited({
-            walletId: holdResult.wallet.id,
-            userId: holdResult.wallet.userId,
-            walletAddress: holdResult.wallet.address,
-            amountUsdt: event.fareUsdt,
-            newBalanceUsdt: Number(holdResult.wallet.balanceUsdt),
+            walletId: result.riderWallet.id,
+            userId: result.riderWallet.userId,
+            amountNgn: event.fareNgn,
+            newBalanceNgn: Number(result.riderWallet.balanceNgn),
             debitType: 'ride_payment',
             referenceId: event.rideId,
           }, { key: event.rideId });
+
+          // Publish driver credit event
+          await walletEventsProducer.publishCredited({
+            walletId: result.driverWallet.id,
+            userId: result.driverWallet.userId,
+            amountNgn: event.fareNgn,
+            newBalanceNgn: Number(result.driverWallet.balanceNgn),
+            creditType: 'driver_payout',
+            referenceId: event.rideId,
+          }, { key: event.rideId });
         } catch (error) {
-          console.warn(`[${serviceId}] ride debit failed:`, getErrorMessage(error));
+          console.warn(`[${serviceId}] ride settlement failed:`, getErrorMessage(error));
         }
 
         return;
@@ -117,8 +132,7 @@ export function createRideEventsConsumer(params: {
           await walletEventsProducer.publishUnlocked({
             walletId: holdResult.wallet.id,
             userId: holdResult.wallet.userId,
-            walletAddress: holdResult.wallet.address,
-            unlockedAmountUsdt: holdResult.holdAmountUsdt,
+            unlockedAmountNgn: holdResult.holdAmountNgn,
             rideId: event.rideId,
             reason: 'ride_cancelled',
           }, { key: event.rideId });

@@ -20,7 +20,7 @@ export const groupRideClient = {
     stops?: unknown[];
     plannedDistanceKm?: number;
     plannedDurationSeconds?: number;
-    fareEstimateUsdt?: number;
+    fareEstimateNgn?: number;
     paymentMethod?: ScheduledRidePaymentMethod;
   }) =>
     prisma.groupRideMatchRequest.create({
@@ -39,7 +39,7 @@ export const groupRideClient = {
           : undefined,
         plannedDistanceKm: data.plannedDistanceKm,
         plannedDurationSeconds: data.plannedDurationSeconds,
-        fareEstimateUsdt: data.fareEstimateUsdt,
+        fareEstimateNgn: data.fareEstimateNgn,
         paymentMethod: data.paymentMethod,
       },
       include: {

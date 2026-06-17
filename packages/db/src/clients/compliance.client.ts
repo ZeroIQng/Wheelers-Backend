@@ -3,23 +3,6 @@ import type { DisputeStatus, DisputeResolution } from '@prisma/client';
 
 export const complianceClient = {
 
-  // ── Recordings ─────────────────────────────────────────────────────────────
-
-  createRecording: (data: {
-    id?:             string;
-    rideId:          string;
-    ipfsCid:         string;
-    sha256Hash:      string;
-    onchainTxHash?:  string;
-    consentTxHash:   string;
-    encryptedWith:   string;
-    durationSeconds: number;
-  }) =>
-    prisma.recording.create({ data }),
-
-  findRecordingByRide: (rideId: string) =>
-    prisma.recording.findUnique({ where: { rideId } }),
-
   // ── Disputes ───────────────────────────────────────────────────────────────
 
   createDispute: (data: {
@@ -55,8 +38,8 @@ export const complianceClient = {
     resolution:  DisputeResolution;
     resolvedBy:  string;
     notes?:      string;
-    refundUsdt?: number;
-    bonusUsdt?:  number;
+    refundNgn?:  number;
+    bonusNgn?:   number;
   }) =>
     prisma.dispute.update({
       where: { id: disputeId },
@@ -75,24 +58,10 @@ export const complianceClient = {
     reviewerId:     string;
     reviewerRole:   string;
     revieweeId:     string;
-    revieweeWallet: string;
     rating:         number;
     comment?:       string;
-    commentHash?:   string;
   }) =>
     prisma.feedback.create({ data }),
-
-  updateFeedbackOnchainTx: (feedbackId: string, onchainTxHash: string) =>
-    prisma.feedback.update({
-      where: { id: feedbackId },
-      data:  { onchainTxHash },
-    }),
-
-  updateRecordingOnchainTx: (recordingId: string, onchainTxHash: string) =>
-    prisma.recording.update({
-      where: { id: recordingId },
-      data: { onchainTxHash },
-    }),
 
   findFeedbackForRide: (rideId: string) =>
     prisma.feedback.findMany({ where: { rideId } }),

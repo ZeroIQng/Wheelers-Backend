@@ -42,9 +42,9 @@ export const GroupRideReadyForMatchEvent = z.object({
   stops: z.array(LatLng).max(5).default([]),
   plannedDistanceKm: z.number().optional(),
   plannedDurationSeconds: z.number().int().optional(),
-  fareEstimateUsdt: z.number().optional(),
+  fareEstimateNgn: z.number().optional(),
   genderPreference: GroupRideGenderPreference.default('any'),
-  paymentMethod: z.enum(['wallet_balance', 'smart_account']),
+  paymentMethod: z.literal('wallet_balance'),
   timestamp: z.string().datetime(),
 });
 

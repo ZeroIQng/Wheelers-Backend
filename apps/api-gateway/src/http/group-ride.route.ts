@@ -17,8 +17,7 @@ import type { GroupRideFaceStorage } from '../storage/group-ride-face-storage';
 import type { RedisClient } from '../redis/client';
 
 interface GroupRideRouteDeps {
-  privyAppId: string;
-  privyVerificationKey: string;
+  jwtSecret: string;
   routePlanner: GoogleMapsRoutePlanner;
   publisher: GatewayPublisher;
   redisClient: RedisClient;
@@ -82,10 +81,6 @@ function parseStops(record: Record<string, unknown>, key: string): LatLngAddress
 
     return { lat, lng, address };
   });
-}
-
-function normalizePaymentMethod(value: unknown): 'wallet_balance' | 'smart_account' {
-  return value === 'smart_account' ? 'smart_account' : 'wallet_balance';
 }
 
 function normalizeGenderPreference(value: unknown): GroupRideGenderPreference {
@@ -189,12 +184,9 @@ function mapMatchRequestItem(
     stops: Array.isArray(request.stops) ? request.stops : [],
     plannedDistanceKm: request.plannedDistanceKm ?? null,
     plannedDurationSeconds: request.plannedDurationSeconds ?? null,
-    fareEstimateUsdt: decimalToNumber(request.fareEstimateUsdt),
+    fareEstimateNgn: decimalToNumber(request.fareEstimateNgn),
     genderPreference: serializeGenderPreference(request.genderPreference),
-    paymentMethod:
-      request.paymentMethod === 'SMART_ACCOUNT'
-        ? 'smart_account'
-        : 'wallet_balance',
+    paymentMethod: 'wallet_balance',
     readyForMatchAt: request.readyForMatchAt?.toISOString() ?? null,
     matchingStartedAt: request.matchingStartedAt?.toISOString() ?? null,
     groupedAt: request.groupedAt?.toISOString() ?? null,
@@ -270,12 +262,9 @@ function buildReadyForMatchEvent(
     stops: Array.isArray(request.stops) ? (request.stops as any) : [],
     plannedDistanceKm: request.plannedDistanceKm ?? undefined,
     plannedDurationSeconds: request.plannedDurationSeconds ?? undefined,
-    fareEstimateUsdt: decimalToNumber(request.fareEstimateUsdt) ?? undefined,
+    fareEstimateNgn: decimalToNumber(request.fareEstimateNgn) ?? undefined,
     genderPreference: serializeGenderPreference(request.genderPreference),
-    paymentMethod:
-      request.paymentMethod === 'SMART_ACCOUNT'
-        ? 'smart_account'
-        : 'wallet_balance',
+    paymentMethod: 'wallet_balance',
     timestamp: new Date().toISOString(),
   };
 }
@@ -308,11 +297,7 @@ export async function handleCreateGroupRideMatchRequestRoute(
   deps: GroupRideRouteDeps,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const rawBody = await readJsonBody(req);
     if (!isRecord(rawBody)) {
       sendJson(res, 400, { error: 'Body must be a JSON object' });
@@ -347,11 +332,8 @@ export async function handleCreateGroupRideMatchRequestRoute(
           stops,
           plannedDistanceKm: plannedRoute.distanceKm,
           plannedDurationSeconds: plannedRoute.durationSeconds,
-          fareEstimateUsdt: plannedRoute.fareEstimateUsdt,
-          paymentMethod:
-            normalizePaymentMethod(rawBody['paymentMethod']) === 'smart_account'
-              ? 'SMART_ACCOUNT'
-              : 'WALLET_BALANCE',
+          fareEstimateNgn: plannedRoute.fareEstimateNgn,
+          paymentMethod: 'WALLET_BALANCE',
         });
 
         return {
@@ -383,11 +365,7 @@ export async function handleListGroupRideMatchRequestsRoute(
 ): Promise<void> {
   let user;
   try {
-    user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    user = await authenticateHttpUser(req, deps.jwtSecret);
   } catch (error) {
     sendJson(res, 401, {
       error:
@@ -423,11 +401,7 @@ export async function handleGetGroupRideMatchRequestRoute(
 ): Promise<void> {
   let user;
   try {
-    user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    user = await authenticateHttpUser(req, deps.jwtSecret);
   } catch (error) {
     sendJson(res, 401, {
       error:
@@ -471,11 +445,7 @@ export async function handleCreateGroupRideFaceUploadUrlRoute(
 ): Promise<void> {
   try {
     const storage = ensureFaceStorage(deps);
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const request = await groupRideClient.findMatchRequestByIdForUser(
       requestId,
       user.id,
@@ -547,11 +517,7 @@ export async function handleCompleteGroupRideFaceUploadRoute(
 ): Promise<void> {
   try {
     const storage = ensureFaceStorage(deps);
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const request = await groupRideClient.findMatchRequestByIdForUser(
       requestId,
       user.id,
@@ -633,11 +599,7 @@ export async function handleCancelGroupRideMatchRequestRoute(
   requestId: string,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const rawBody = await readJsonBody(req).catch(() => ({}));
     const reason =
       isRecord(rawBody) && typeof rawBody['reason'] === 'string'

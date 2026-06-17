@@ -14,19 +14,12 @@ export function createUserEventsConsumer(params: {
       const event = safeParseKafkaEvent(TOPICS.USER_EVENTS, value);
       if (!event) return;
 
-      if (
-        event.eventType !== 'USER_CREATED' &&
-        event.eventType !== 'USER_WALLET_LINKED'
-      ) {
-        return;
-      }
-
-      if (!event.walletAddress) {
+      if (event.eventType !== 'USER_CREATED') {
         return;
       }
 
       try {
-        await walletRepository.create(event.userId, event.walletAddress);
+        await walletRepository.create(event.userId);
       } catch (error) {
         if (isUniqueConstraintError(error)) {
           return;

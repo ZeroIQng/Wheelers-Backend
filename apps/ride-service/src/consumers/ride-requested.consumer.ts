@@ -103,7 +103,7 @@ export function createRideRequestedConsumer(params: {
         destLng: event.destination.lng,
         destAddress: event.destination.address,
         stops: event.stops,
-        fareEstimateUsdt: event.fareEstimateUsdt,
+        fareEstimateNgn: event.fareEstimateNgn,
         status: 'MATCHING',
       });
     } catch (err) {
@@ -167,7 +167,7 @@ export function createRideRequestedConsumer(params: {
       plannedDistanceKm: event.plannedDistanceKm ?? pending.rideRequested.plannedDistanceKm,
       plannedDurationSeconds:
         event.plannedDurationSeconds ?? pending.rideRequested.plannedDurationSeconds,
-      fareEstimateUsdt: event.fareEstimateUsdt ?? pending.rideRequested.fareEstimateUsdt,
+      fareEstimateNgn: event.fareEstimateNgn ?? pending.rideRequested.fareEstimateNgn,
       timestamp: event.timestamp,
     };
   }
@@ -249,7 +249,6 @@ export function createRideRequestedConsumer(params: {
       eventType: 'RIDE_CANCELLED',
       rideId: event.rideId,
       riderId: event.riderId,
-      riderWallet: event.riderWallet,
       reason: 'no_drivers_available',
       timestamp: new Date().toISOString(),
     });

@@ -2,18 +2,17 @@
 export { prisma } from './prisma';
 
 // Scoped clients — import only the one your service owns
-export { userClient }       from './clients/user.client';
-export { driverClient }     from './clients/driver.client';
-export { rideClient }       from './clients/rider.client';
-export { scheduledRideClient } from './clients/scheduled-ride.client';
-export { outboxClient }     from './clients/outbox.client';
-export { paymentClient }    from './clients/payment.client';
-export { walletClient }     from './clients/wallet.client';
-export { withdrawalClient } from './clients/withdrawal.client';
-export { groupRideClient }  from './clients/group-ride.client';
-export { complianceClient } from './clients/compliance.client';
-export { defiClient }       from './clients/defi.client';
-export { referralClient }   from './clients/referral.client';
+export { userClient }           from './clients/user.client';
+export { driverClient }         from './clients/driver.client';
+export { rideClient }           from './clients/rider.client';
+export { scheduledRideClient }  from './clients/scheduled-ride.client';
+export { outboxClient }         from './clients/outbox.client';
+export { walletClient }         from './clients/wallet.client';
+export { withdrawalClient }     from './clients/withdrawal.client';
+export { virtualAccountClient } from './clients/virtual-account.client';
+export { groupRideClient }      from './clients/group-ride.client';
+export { complianceClient }     from './clients/compliance.client';
+export { referralClient }       from './clients/referral.client';
 
 // Re-export Prisma types so services don't need to install @prisma/client directly
 export type {
@@ -24,15 +23,11 @@ export type {
   ScheduledRide,
   Wallet,
   VirtualAccount,
-  PaymentIntent,
   RideHold,
   Transaction,
   GpsLog,
-  Recording,
   Dispute,
   Feedback,
-  DefiPosition,
-  YieldHarvest,
   UserConsent,
   Notification,
   NotificationDevice,
@@ -56,15 +51,10 @@ export {
   CancelStage,
   TransactionDirection,
   TransactionType,
-  DefiTier,
-  DefiProtocol,
-  DefiPositionStatus,
   DisputeStatus,
   DisputeResolution,
   ConsentType,
   NotificationCategory,
-  PaymentIntentStatus,
-  PaymentSessionType,
   WalletReservationKind,
   WalletReservationStatus,
   WithdrawalRequestStatus,

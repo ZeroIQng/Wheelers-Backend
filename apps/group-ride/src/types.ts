@@ -20,7 +20,7 @@ export type GroupRideRequest = {
   destination: AddressPoint;
   genderPreference: GroupRideReadyForMatchEvent['genderPreference'];
   headingDeg: number;
-  fareEstimateUsdt: number;
+  fareEstimateNgn: number;
   requestedAt: string;
   sourceEvent: GroupRideReadyForMatchEvent;
 };

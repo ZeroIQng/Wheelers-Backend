@@ -9,7 +9,7 @@ const BaseDriverEvent = z.object({
 // Consumed by: ride-service (add to available driver pool in Redis).
 export const DriverOnlineEvent = BaseDriverEvent.extend({
   eventType:     z.literal('DRIVER_ONLINE'),
-  walletAddress: z.string(),
+  userId:        z.string().uuid(),
   lat:           z.number(),
   lng:           z.number(),
   vehiclePlate:  z.string(),
@@ -24,29 +24,25 @@ export const DriverOfflineEvent = BaseDriverEvent.extend({
 });
 
 // Fired by api-gateway when driver submits KYC documents.
-// Consumed by: compliance-worker (trigger manual review, store docs on IPFS).
+// Consumed by: compliance-worker (trigger manual review).
 export const DriverKycSubmittedEvent = BaseDriverEvent.extend({
   eventType:       z.literal('DRIVER_KYC_SUBMITTED'),
   userId:          z.string().uuid(),
-  walletAddress:   z.string(),
-  licenceCid:      z.string(),       // IPFS CID of licence image
-  selfieHash:      z.string(),       // SHA-256 of face verification photo
+  licenceCid:      z.string(),
+  selfieHash:      z.string(),
   vehicleMake:     z.string(),
   vehicleModel:    z.string(),
   vehiclePlate:    z.string(),
   vehicleYear:     z.number().int(),
-  insuranceCid:    z.string(),       // IPFS CID of insurance document
-  consentTxHash:   z.string(),       // On-chain recording consent already logged
+  insuranceCid:    z.string(),
 });
 
 // Fired by compliance-worker after KYC is verified.
 // Consumed by: notification-worker (send approval push).
-// Note: USER_KYC_APPROVED on user.events is for ride-service eligibility,
-// this event is specifically for the compliance audit trail.
 export const DriverKycApprovedEvent = BaseDriverEvent.extend({
   eventType:    z.literal('DRIVER_KYC_APPROVED'),
   userId:       z.string().uuid(),
-  reviewedBy:   z.string(),          // Admin user ID
+  reviewedBy:   z.string(),
   approvedAt:   z.string().datetime(),
 });
 

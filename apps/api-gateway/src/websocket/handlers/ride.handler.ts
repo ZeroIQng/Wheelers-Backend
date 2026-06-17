@@ -37,19 +37,6 @@ function requireNumber(payload: Record<string, unknown>, key: string): number {
   return value;
 }
 
-function requireAuthWalletAddress(
-  payload: Record<string, unknown>,
-  auth: GatewayAuthContext,
-  key: 'riderWallet' | 'driverWallet',
-): string {
-  const walletAddress = getString(payload, key) ?? auth.walletAddress;
-  if (!walletAddress) {
-    throw new Error(`${key} is required`);
-  }
-
-  return walletAddress.toLowerCase();
-}
-
 function parseLatLng(payload: Record<string, unknown>, key: string): LatLngAddress {
   const value = getRecord(payload, key);
   if (!value) {
@@ -86,10 +73,6 @@ function parseStopList(payload: Record<string, unknown>, key: string): LatLngAdd
   });
 }
 
-function normalizePaymentMethod(value: unknown): 'wallet_balance' | 'smart_account' {
-  return value === 'smart_account' ? 'smart_account' : 'wallet_balance';
-}
-
 function normalizeEndedBy(value: unknown): 'both_confirmed' | 'auto_gps' | 'admin' {
   if (value === 'auto_gps' || value === 'admin') return value;
   return 'both_confirmed';
@@ -103,27 +86,6 @@ function normalizeReviewerRole(value: unknown): 'rider' | 'driver' {
 function normalizeOpenedByRole(value: unknown): 'rider' | 'driver' {
   if (value === 'driver') return 'driver';
   return 'rider';
-}
-
-function resolveNetFareUsdt(params: {
-  grossFareUsdt: number;
-  grossFareNgn: number;
-  discountNgn: number;
-}): number {
-  if (
-    params.discountNgn <= 0 ||
-    params.grossFareNgn <= 0 ||
-    params.grossFareUsdt <= 0
-  ) {
-    return params.grossFareUsdt;
-  }
-
-  const discountRatio = Math.min(params.discountNgn / params.grossFareNgn, 1);
-  return Math.max(0, round6(params.grossFareUsdt * (1 - discountRatio)));
-}
-
-function round6(value: number): number {
-  return Math.round(value * 1_000_000) / 1_000_000;
 }
 
 export async function handleRideMessage(
@@ -152,7 +114,7 @@ export async function handleRideMessage(
       'requestedReferralCashbackNgn',
     );
     let referralCashbackAppliedNgn = 0;
-    let fareEstimateUsdt = plannedRoute.fareEstimateUsdt;
+    let fareEstimateNgn = plannedRoute.fareEstimateNgn;
 
     if (useReferralCashback) {
       const reservation = await referralClient.reserveRideCashback({
@@ -162,32 +124,29 @@ export async function handleRideMessage(
         requestedAmountNgn: requestedReferralCashbackNgn,
       });
       referralCashbackAppliedNgn = reservation.reservedCashbackNgn;
-      fareEstimateUsdt = resolveNetFareUsdt({
-        grossFareUsdt: plannedRoute.fareEstimateUsdt,
-        grossFareNgn: plannedRoute.ridePrice.tripPrice,
-        discountNgn: referralCashbackAppliedNgn,
-      });
+      fareEstimateNgn = Math.max(
+        0,
+        plannedRoute.fareEstimateNgn - referralCashbackAppliedNgn,
+      );
     }
 
     const event = RideRequestedEvent.parse({
       eventType: 'RIDE_REQUESTED',
       rideId,
       riderId: auth.userId,
-      riderWallet: requireAuthWalletAddress(payload, auth, 'riderWallet'),
       pickup,
       destination,
       stops,
       plannedDistanceKm: plannedRoute.distanceKm,
       plannedDurationSeconds: plannedRoute.durationSeconds,
-      fareEstimateUsdt,
-      fareBeforeCashbackUsdt:
+      fareEstimateNgn,
+      fareBeforeCashbackNgn:
         referralCashbackAppliedNgn > 0
-          ? plannedRoute.fareEstimateUsdt
+          ? plannedRoute.fareEstimateNgn
           : undefined,
       referralCashbackAppliedNgn:
         referralCashbackAppliedNgn > 0 ? referralCashbackAppliedNgn : undefined,
       route: plannedRoute.geometry,
-      paymentMethod: normalizePaymentMethod(payload['paymentMethod']),
       timestamp,
     });
 
@@ -208,10 +167,6 @@ export async function handleRideMessage(
       throw error;
     }
 
-    const payableFareNgn = Math.max(
-      0,
-      plannedRoute.ridePrice.tripPrice - referralCashbackAppliedNgn,
-    );
     return {
       type: 'ride:request:accepted',
       payload: {
@@ -223,15 +178,13 @@ export async function handleRideMessage(
         route: plannedRoute.geometry,
         plannedDistanceKm: event.plannedDistanceKm,
         plannedDurationSeconds: event.plannedDurationSeconds,
-        fareEstimateUsdt: event.fareEstimateUsdt,
-        fareBeforeCashbackUsdt: event.fareBeforeCashbackUsdt,
-        fareEstimateNgn: payableFareNgn,
-        fareBeforeCashbackNgn: plannedRoute.ridePrice.tripPrice,
+        fareEstimateNgn: event.fareEstimateNgn,
+        fareBeforeCashbackNgn: event.fareBeforeCashbackNgn,
         referralCashbackAppliedNgn,
         pricingCurrency: 'NGN',
         pricingBreakdown: {
           ...plannedRoute.ridePrice,
-          tripPrice: payableFareNgn,
+          tripPrice: fareEstimateNgn,
           originalTripPrice: plannedRoute.ridePrice.tripPrice,
           referralCashbackAppliedNgn,
         },
@@ -260,7 +213,7 @@ export async function handleRideMessage(
       stops,
       plannedDistanceKm: plannedRoute?.distanceKm,
       plannedDurationSeconds: plannedRoute?.durationSeconds,
-      fareEstimateUsdt: plannedRoute?.fareEstimateUsdt,
+      fareEstimateNgn: plannedRoute?.fareEstimateNgn,
       route: plannedRoute?.geometry,
       updatedBy: auth.driverId ? 'driver' : 'rider',
       timestamp,
@@ -276,7 +229,6 @@ export async function handleRideMessage(
         route: plannedRoute?.geometry,
         plannedDistanceKm: event.plannedDistanceKm,
         plannedDurationSeconds: event.plannedDurationSeconds,
-        fareEstimateUsdt: event.fareEstimateUsdt,
         ...buildRideEstimatePricing(event.plannedDistanceKm),
       },
     };
@@ -307,8 +259,6 @@ export async function handleRideMessage(
       rideId: requireString(payload, 'rideId'),
       riderId: auth.userId,
       driverId: getString(payload, 'driverId'),
-      riderWallet: requireAuthWalletAddress(payload, auth, 'riderWallet'),
-      driverWallet: getString(payload, 'driverWallet')?.toLowerCase(),
       reason: getString(payload, 'reason'),
       timestamp,
     });
@@ -327,11 +277,7 @@ export async function handleRideMessage(
       rideId: requireString(payload, 'rideId'),
       riderId: requireString(payload, 'riderId'),
       driverId: requireString(payload, 'driverId'),
-      riderWallet: requireString(payload, 'riderWallet').toLowerCase(),
-      driverWallet: requireString(payload, 'driverWallet').toLowerCase(),
-      lockedFareUsdt: requireNumber(payload, 'lockedFareUsdt'),
-      recordingConsentVerified: getBoolean(payload, 'recordingConsentVerified') ?? false,
-      recordingId: getString(payload, 'recordingId'),
+      lockedFareNgn: requireNumber(payload, 'lockedFareNgn'),
       startedAt: getString(payload, 'startedAt') ?? timestamp,
       timestamp,
     });
@@ -350,11 +296,7 @@ export async function handleRideMessage(
       rideId: requireString(payload, 'rideId'),
       riderId: requireString(payload, 'riderId'),
       driverId: requireString(payload, 'driverId'),
-      riderWallet: requireString(payload, 'riderWallet').toLowerCase(),
-      driverWallet: requireString(payload, 'driverWallet').toLowerCase(),
-      fareUsdt: getNumber(payload, 'fareUsdt'),
-      recordingCid: getString(payload, 'recordingCid'),
-      recordingHash: getString(payload, 'recordingHash'),
+      fareNgn: getNumber(payload, 'fareNgn'),
       endedBy: normalizeEndedBy(payload['endedBy']),
       completedAt: getString(payload, 'completedAt'),
       timestamp,
@@ -383,13 +325,13 @@ export async function handleRideMessage(
       rideId: requireString(payload, 'rideId'),
       riderId: requireString(payload, 'riderId'),
       driverId: getString(payload, 'driverId') ?? auth.driverId ?? auth.userId,
-      driverWallet: requireString(payload, 'driverWallet').toLowerCase(),
+      driverUserId: auth.userId,
       driverName: requireString(payload, 'driverName'),
       driverRating: requireNumber(payload, 'driverRating'),
       vehiclePlate: requireString(payload, 'vehiclePlate'),
       vehicleModel: requireString(payload, 'vehicleModel'),
       etaSeconds: requireNumber(payload, 'etaSeconds'),
-      lockedFareUsdt: requireNumber(payload, 'lockedFareUsdt'),
+      lockedFareNgn: requireNumber(payload, 'lockedFareNgn'),
       timestamp,
     });
 
@@ -432,11 +374,8 @@ export async function handleRideMessage(
       reviewerId: auth.userId,
       reviewerRole: normalizeReviewerRole(payload['reviewerRole']),
       revieweeId: requireString(payload, 'revieweeId'),
-      revieweeWallet: requireString(payload, 'revieweeWallet').toLowerCase(),
       rating: requireNumber(payload, 'rating'),
       comment: getString(payload, 'comment'),
-      commentHash: getString(payload, 'commentHash'),
-      onchainTxHash: getString(payload, 'onchainTxHash'),
       timestamp,
     });
 
@@ -460,7 +399,6 @@ export async function handleRideMessage(
       openedByRole: normalizeOpenedByRole(payload['openedByRole']),
       againstId: requireString(payload, 'againstId'),
       reason: requireString(payload, 'reason'),
-      recordingCid: getString(payload, 'recordingCid'),
       timestamp,
     });
 

@@ -8,7 +8,6 @@ import { WalletEvent }       from './events/wallet.events';
 import { GpsUpdateEvent, GpsProcessedEvent } from './events/gps.events';
 import { GroupRideEvent }    from './events/group-ride.events';
 import { ComplianceEvent }   from './events/compliance.events';
-import { DefiEvent }         from './events/defi.events';
 import { NotificationEvent } from './events/notification.events';
 
 // Maps every live topic to its Zod discriminated union schema.
@@ -24,7 +23,6 @@ const TOPIC_SCHEMAS = {
   [TOPICS.GPS_PROCESSED]:       GpsProcessedEvent,
   [TOPICS.GROUP_RIDE_EVENTS]:   GroupRideEvent,
   [TOPICS.COMPLIANCE_EVENTS]:   ComplianceEvent,
-  [TOPICS.DEFI_EVENTS]:         DefiEvent,
   [TOPICS.NOTIFICATION_EVENTS]: NotificationEvent,
 } as const;
 

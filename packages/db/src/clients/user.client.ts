@@ -17,12 +17,6 @@ export const userClient = {
       include: { wallet: true },
     }),
 
-  findByWallet: (walletAddress: string) =>
-    prisma.user.findUnique({
-      where: { walletAddress: walletAddress.toLowerCase() },
-      include: { wallet: true },
-    }),
-
   findByUsername: (username: string) =>
     prisma.user.findUnique({
       where: { username: username.toLowerCase() },
@@ -33,7 +27,6 @@ export const userClient = {
 
   create: (data: {
     privyDid:      string;
-    walletAddress?: string;
     username?:     string;
     passwordHash?: string;
     email?:        string;
@@ -44,7 +37,6 @@ export const userClient = {
     prisma.user.create({
       data: {
         privyDid: data.privyDid,
-        walletAddress: data.walletAddress?.toLowerCase(),
         username: data.username,
         passwordHash: data.passwordHash,
         email: data.email,
@@ -55,7 +47,6 @@ export const userClient = {
     }),
 
   updateAuthIdentity: (userId: string, data: {
-    walletAddress?: string;
     username?:     string;
     passwordHash?: string;
     email?:        string;
@@ -65,7 +56,6 @@ export const userClient = {
     prisma.user.update({
       where: { id: userId },
       data: {
-        walletAddress: data.walletAddress?.toLowerCase(),
         username: data.username,
         passwordHash: data.passwordHash,
         email: data.email,
@@ -86,6 +76,18 @@ export const userClient = {
       where: { id: userId },
       data,
       include: { wallet: true },
+    }),
+
+  updatePouchCustomerId: (userId: string, pouchCustomerId: string) =>
+    prisma.user.update({
+      where: { id: userId },
+      data: { pouchCustomerId },
+    }),
+
+  updateBvn: (userId: string, bvn: string) =>
+    prisma.user.update({
+      where: { id: userId },
+      data: { bvn },
     }),
 
   upsertNotificationDevice: (userId: string, data: {
@@ -149,7 +151,6 @@ export const userClient = {
 
   // ── Consent ────────────────────────────────────────────────────────────────
 
-  // Returns the active consent record if it exists, null if not yet granted.
   findActiveConsent: (userId: string, consentType: ConsentType, consentVersion: string) =>
     prisma.userConsent.findFirst({
       where: {
@@ -160,7 +161,6 @@ export const userClient = {
       },
     }),
 
-  // Returns true if the user has given recording consent for the current version.
   hasRecordingConsent: async (userId: string, consentVersion = 'v1.0') => {
     const consent = await prisma.userConsent.findFirst({
       where: {
@@ -177,7 +177,6 @@ export const userClient = {
     userId:          string;
     consentType:     ConsentType;
     consentVersion:  string;
-    consentTxHash:   string;
   }) =>
     prisma.userConsent.create({ data }),
 

@@ -5,8 +5,7 @@ import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
 import type { WalletRepository } from '../types';
 import type { WalletEventsProducer } from '../producers/wallet-events.producer';
 
-const FIAT_ONRAMP_TYPE = 'CRYPTO_DEPOSIT' as TransactionType;
-const CRYPTO_DEPOSIT_TYPE = 'CRYPTO_DEPOSIT' as TransactionType;
+const DEPOSIT_TYPE = 'DEPOSIT' as TransactionType;
 
 export function createPaymentEventsConsumer(params: {
   walletRepository: WalletRepository;
@@ -24,23 +23,24 @@ export function createPaymentEventsConsumer(params: {
       const event = safeParseKafkaEvent(TOPICS.PAYMENT_EVENTS, value);
       if (!event) return;
 
-      if (event.eventType === 'ONRAMP_SETTLED') {
+      if (event.eventType === 'VIRTUAL_ACCOUNT_CREDITED') {
         try {
-          const wallet = await walletRepository.findByAddress(event.userWallet);
+          const wallet = await walletRepository.findByUserId(event.userId);
+          if (!wallet) {
+            console.warn(`[${serviceId}] no wallet found for user ${event.userId}`);
+            return;
+          }
+
           const creditResult = await walletRepository.credit({
             walletId: wallet.id,
-            amountUsdt: event.amountUsdt,
-            type: FIAT_ONRAMP_TYPE,
+            amountNgn: event.amountNgn,
+            type: DEPOSIT_TYPE,
             referenceId: event.providerReference,
             metadata: {
-              paymentId: event.paymentId,
-              paymentProvider: event.paymentProvider,
-              amountUsd: event.amountUsd,
-              localCurrency: event.localCurrency,
-              amountLocal: event.amountLocal,
-              cryptoCurrency: event.cryptoCurrency,
-              cryptoNetwork: event.cryptoNetwork,
-              settlementReference: event.settlementReference,
+              pouchVirtualAccountId: event.pouchVirtualAccountId,
+              bankName: event.bankName,
+              senderAccountNumber: event.senderAccountNumber,
+              senderAccountName: event.senderAccountName,
             },
           });
 
@@ -51,48 +51,34 @@ export function createPaymentEventsConsumer(params: {
           await walletEventsProducer.publishCredited({
             walletId: creditResult.wallet.id,
             userId: creditResult.wallet.userId,
-            walletAddress: creditResult.wallet.address,
-            amountUsdt: event.amountUsdt,
-            newBalanceUsdt: Number(creditResult.wallet.balanceUsdt),
-            creditType: 'fiat_onramp',
+            amountNgn: event.amountNgn,
+            newBalanceNgn: Number(creditResult.wallet.balanceNgn),
+            creditType: 'deposit',
             referenceId: event.providerReference,
           }, { key: event.userId });
         } catch (error) {
-          console.warn(`[${serviceId}] credit failed:`, getErrorMessage(error));
+          console.warn(`[${serviceId}] deposit credit failed:`, getErrorMessage(error));
           throw error;
         }
 
         return;
       }
 
-      if (event.eventType === 'CRYPTO_DEPOSIT_RECEIVED') {
-        try {
-          const wallet = await walletRepository.findByAddress(event.userWallet);
-          const creditResult = await walletRepository.credit({
-            walletId: wallet.id,
-            amountUsdt: event.amountUsdt,
-            type: CRYPTO_DEPOSIT_TYPE,
-            referenceId: event.paymentId,
-            metadata: { txHash: event.txHash, chainId: event.chainId },
-          });
+      if (event.eventType === 'PAYOUT_COMPLETED') {
+        console.log(
+          `[${serviceId}] PAYOUT_COMPLETED for user ${event.userId}, ` +
+          `pouchPayoutId=${event.pouchPayoutId} — already settled by webhook handler`,
+        );
+        return;
+      }
 
-          if (!creditResult.applied) {
-            return;
-          }
-
-          await walletEventsProducer.publishCredited({
-            walletId: creditResult.wallet.id,
-            userId: creditResult.wallet.userId,
-            walletAddress: creditResult.wallet.address,
-            amountUsdt: event.amountUsdt,
-            newBalanceUsdt: Number(creditResult.wallet.balanceUsdt),
-            creditType: 'crypto_deposit',
-            referenceId: event.paymentId,
-          }, { key: event.userId });
-        } catch (error) {
-          console.warn(`[${serviceId}] crypto credit failed:`, getErrorMessage(error));
-          throw error;
-        }
+      if (event.eventType === 'PAYOUT_FAILED') {
+        console.log(
+          `[${serviceId}] PAYOUT_FAILED for user ${event.userId}, ` +
+          `pouchPayoutId=${event.pouchPayoutId}, reason=${event.failureReason} — ` +
+          `already handled by webhook handler`,
+        );
+        return;
       }
     },
   };

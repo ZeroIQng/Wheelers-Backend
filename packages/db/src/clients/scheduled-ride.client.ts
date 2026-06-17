@@ -42,7 +42,6 @@ export const scheduledRideClient = {
   create: (data: {
     id?: string;
     riderId: string;
-    riderWallet: string;
     scheduledFor: Date;
     paymentMethod?: ScheduledRidePaymentMethod;
     pickupLat: number;
@@ -54,13 +53,12 @@ export const scheduledRideClient = {
     stops?: ScheduledStopInput[];
     plannedDistanceKm?: number;
     plannedDurationSeconds?: number;
-    fareEstimateUsdt?: number;
+    fareEstimateNgn?: number;
   }) =>
     prisma.scheduledRide.create({
       data: {
         id: data.id,
         riderId: data.riderId,
-        riderWallet: data.riderWallet,
         scheduledFor: data.scheduledFor,
         paymentMethod: data.paymentMethod ?? ScheduledRidePaymentMethod.WALLET_BALANCE,
         pickupLat: data.pickupLat,
@@ -72,7 +70,7 @@ export const scheduledRideClient = {
         stops: serializeStops(data.stops ?? []),
         plannedDistanceKm: data.plannedDistanceKm,
         plannedDurationSeconds: data.plannedDurationSeconds,
-        fareEstimateUsdt: data.fareEstimateUsdt,
+        fareEstimateNgn: data.fareEstimateNgn,
       },
     }),
 

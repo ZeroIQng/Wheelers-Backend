@@ -1,4 +1,4 @@
 export const FEES = {
-  // Minimum ride fare — no ride settles below this.
-  MIN_RIDE_FARE_USDT: 0.50,
+  // Minimum ride fare in NGN — no ride settles below this.
+  MIN_RIDE_FARE_NGN: 500,
 } as const;

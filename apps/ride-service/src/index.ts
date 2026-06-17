@@ -16,7 +16,7 @@ import type { RideRequestedEvent } from '@wheleers/kafka-schemas';
 
 export type OnlineDriver = {
   driverId: string;
-  walletAddress: string;
+  userId: string;
   lat: number;
   lng: number;
   vehiclePlate: string;

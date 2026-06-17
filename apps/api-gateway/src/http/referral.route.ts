@@ -5,8 +5,7 @@ import { readJsonBody, sendJson } from "./utils";
 import { getNumber, getString, isRecord } from "../utils/object";
 
 interface ReferralRouteDeps {
-  privyAppId: string;
-  privyVerificationKey: string;
+  jwtSecret: string;
 }
 
 function decimalToNumber(value: unknown): number | null {
@@ -82,11 +81,7 @@ export async function handleGetReferralSummaryRoute(
   deps: ReferralRouteDeps,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const summary = await referralClient.findSummary(user.id);
 
     sendJson(res, 200, summary);
@@ -106,11 +101,7 @@ export async function handleApplyReferralCodeRoute(
   deps: ReferralRouteDeps,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const rawBody = await readJsonBody(req);
     if (!isRecord(rawBody)) {
       sendJson(res, 400, { error: "Body must be a JSON object" });
@@ -155,11 +146,7 @@ export async function handleListReferralReferralsRoute(
   deps: ReferralRouteDeps,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const items = await referralClient.listReferrals(user.id);
 
     sendJson(res, 200, {
@@ -179,11 +166,7 @@ export async function handleListReferralCashbackRoute(
   deps: ReferralRouteDeps,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const items = await referralClient.listCashback(user.id);
 
     sendJson(res, 200, {
@@ -203,11 +186,7 @@ export async function handlePreviewReferralRideCashbackRoute(
   deps: ReferralRouteDeps,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const rawBody = await readJsonBody(req);
     if (!isRecord(rawBody)) {
       sendJson(res, 400, { error: "Body must be a JSON object" });

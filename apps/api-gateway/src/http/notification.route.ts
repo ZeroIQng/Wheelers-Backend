@@ -5,8 +5,7 @@ import { readJsonBody, sendJson } from './utils';
 import { getString, isRecord } from '../utils/object';
 
 interface NotificationRouteDeps {
-  privyAppId: string;
-  privyVerificationKey: string;
+  jwtSecret: string;
 }
 
 function parseLimit(value: string | null): number {
@@ -65,11 +64,7 @@ export async function handleListNotificationsRoute(
   url: URL,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const limit = parseLimit(url.searchParams.get('limit'));
     const items = await complianceClient.listNotifications(user.id, limit);
 
@@ -92,11 +87,7 @@ export async function handleMarkNotificationsReadRoute(
   deps: NotificationRouteDeps,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const rawBody = await readJsonBody(req).catch(() => ({}));
     const notificationIds = isRecord(rawBody)
       ? getNotificationIds(rawBody['notificationIds'])
@@ -126,11 +117,7 @@ export async function handleRegisterPushTokenRoute(
   deps: NotificationRouteDeps,
 ): Promise<void> {
   try {
-    const user = await authenticateHttpUser(
-      req,
-      deps.privyAppId,
-      deps.privyVerificationKey,
-    );
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
     const rawBody = await readJsonBody(req);
 
     if (!isRecord(rawBody)) {

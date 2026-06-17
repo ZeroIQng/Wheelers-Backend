@@ -42,10 +42,6 @@ async function main(): Promise<void> {
   const riderId = randomUUID();
   const driverId = randomUUID();
   const secondDriverId = randomUUID();
-  const riderWallet = walletAddressFromUuid(riderId);
-  const driverWallet = walletAddressFromUuid(driverId);
-  const secondDriverWallet = walletAddressFromUuid(secondDriverId);
-
   const seen: Seen = {
     rideOffersByDriverId: new Map(),
     rideAssigned: null,
@@ -70,11 +66,8 @@ async function main(): Promise<void> {
 
   await seedDbFixtures(prisma, {
     riderId,
-    riderWallet,
     driverId,
-    driverWallet,
     secondDriverId,
-    secondDriverWallet,
   });
 
   await ensureTopics(admin);
@@ -152,7 +145,7 @@ async function main(): Promise<void> {
         value: JSON.stringify({
           eventType: 'DRIVER_ONLINE',
           driverId,
-          walletAddress: driverWallet,
+          userId: `user-${driverId}`,
           lat: 6.5244,
           lng: 3.3792,
           vehiclePlate: 'TEST-123',
@@ -165,7 +158,7 @@ async function main(): Promise<void> {
         value: JSON.stringify({
           eventType: 'DRIVER_ONLINE',
           driverId: secondDriverId,
-          walletAddress: secondDriverWallet,
+          userId: `user-${secondDriverId}`,
           lat: 6.5245,
           lng: 3.3793,
           vehiclePlate: 'TEST-456',
@@ -187,12 +180,10 @@ async function main(): Promise<void> {
           eventType: 'RIDE_REQUESTED',
           rideId,
           riderId,
-          riderWallet,
           pickup: { lat: 6.5244, lng: 3.3792, address: 'Pickup' },
           destination: { lat: 6.535, lng: 3.4, address: 'Destination' },
           stops: [{ lat: 6.53, lng: 3.39, address: 'Coffee stop' }],
-          fareEstimateUsdt: 2.5,
-          paymentMethod: 'wallet_balance',
+          fareEstimateNgn: 2500,
           timestamp: nowIso(),
         }),
       },
@@ -243,13 +234,13 @@ async function main(): Promise<void> {
           rideId,
           riderId,
           driverId: secondDriverId,
-          driverWallet: secondDriverWallet,
+          driverUserId: `user-${secondDriverId}`,
           driverName: 'Retry Driver',
           driverRating: 5,
           vehiclePlate: 'TEST-456',
           vehicleModel: 'Retry Model',
           etaSeconds: 120,
-          lockedFareUsdt: 2.5,
+          lockedFareNgn: 2500,
           timestamp: nowIso(),
         }),
       },
@@ -285,7 +276,7 @@ async function main(): Promise<void> {
             { lat: 6.53, lng: 3.39, address: 'Coffee stop' },
             { lat: 6.536, lng: 3.397, address: 'Fuel stop' },
           ],
-          fareEstimateUsdt: 3.1,
+          fareEstimateNgn: 3100,
           updatedBy: 'rider',
           timestamp: nowIso(),
         }),
@@ -381,9 +372,7 @@ async function main(): Promise<void> {
           rideId,
           riderId,
           driverId: secondDriverId,
-          riderWallet,
-          driverWallet: secondDriverWallet,
-          fareUsdt: 2.5,
+          fareNgn: 2500,
           endedBy: 'both_confirmed',
           completedAt: nowIso(),
           timestamp: nowIso(),
@@ -401,7 +390,7 @@ async function main(): Promise<void> {
       const driver = await prisma.driver.findUnique({ where: { id: secondDriverId } });
       return (
         ride?.status === 'COMPLETED' &&
-        ride.fareFinalUsdt?.toNumber() === 2.5 &&
+        ride.fareFinalNgn?.toNumber() === 2500 &&
         ride.distanceKm !== null &&
         ride.durationSeconds !== null &&
         driver?.status === 'ONLINE'
@@ -479,10 +468,6 @@ function waitForDb(predicate: () => Promise<boolean>, timeoutMs: number, label: 
   });
 }
 
-function walletAddressFromUuid(id: string): string {
-  return `0x${id.replace(/-/g, '').padEnd(40, '0').slice(0, 40)}`;
-}
-
 process.on('unhandledRejection', (err) => {
   console.error('[test] unhandledRejection', err);
   process.exit(1);
@@ -544,11 +529,8 @@ async function seedDbFixtures(
   prisma: PrismaClient,
   fixtures: {
     riderId: string;
-    riderWallet: string;
     driverId: string;
-    driverWallet: string;
     secondDriverId: string;
-    secondDriverWallet: string;
   },
 ): Promise<void> {
   await cleanupDbFixtures(prisma, {
@@ -562,7 +544,6 @@ async function seedDbFixtures(
     data: {
       id: fixtures.riderId,
       privyDid: `test-rider-${fixtures.riderId}`,
-      walletAddress: fixtures.riderWallet,
       role: 'RIDER',
       name: 'Smoke Rider',
     },
@@ -572,7 +553,6 @@ async function seedDbFixtures(
     data: {
       id: `user-${fixtures.driverId}`,
       privyDid: `test-driver-${fixtures.driverId}`,
-      walletAddress: fixtures.driverWallet,
       role: 'DRIVER',
       name: 'Smoke Driver',
       driver: {
@@ -593,7 +573,6 @@ async function seedDbFixtures(
     data: {
       id: `user-${fixtures.secondDriverId}`,
       privyDid: `test-driver-${fixtures.secondDriverId}`,
-      walletAddress: fixtures.secondDriverWallet,
       role: 'DRIVER',
       name: 'Retry Driver',
       driver: {

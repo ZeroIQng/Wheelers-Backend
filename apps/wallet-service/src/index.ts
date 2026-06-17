@@ -1,11 +1,9 @@
-import { loadWorkspaceEnv, validateSharedEnv, validateWalletEnv } from '@wheleers/config';
+import { loadWorkspaceEnv, validateSharedEnv } from '@wheleers/config';
 import { walletClient } from '@wheleers/db';
 import { createConsumer, createProducer } from '@wheleers/kafka-client';
 import { TOPICS } from '@wheleers/kafka-schemas';
 
-import { createDefiEventsProducer } from './producers/defi-events.producer';
 import { createWalletEventsProducer } from './producers/wallet-events.producer';
-import { createDefiEventsConsumer } from './consumers/defi-events.consumer';
 import { createPaymentEventsConsumer } from './consumers/payment-events.consumer';
 import { createRideEventsConsumer } from './consumers/ride-events.consumer';
 import { createUserEventsConsumer } from './consumers/user-events.consumer';
@@ -25,17 +23,12 @@ async function bootstrap(): Promise<void> {
   process.env['DATABASE_URL'] ??= 'postgresql://postgres:postgres@localhost:5432/wheelers';
   process.env['REDIS_URL'] ??= 'redis://localhost:6379';
 
-  process.env['PLATFORM_PRIVATE_KEY'] ??= 'dev';
-  process.env['RPC_URL_BASE'] ??= 'http://localhost:8545';
-
   validateSharedEnv();
-  validateWalletEnv();
 
   const producer = await createProducer({ serviceId: SERVICE_ID });
   const consumer = await createConsumer({ groupId: SERVICE_ID });
 
   const walletEventsProducer = createWalletEventsProducer(producer);
-  const defiEventsProducer = createDefiEventsProducer(producer);
 
   const userEventsConsumer = createUserEventsConsumer({
     walletRepository: walletClient,
@@ -50,14 +43,9 @@ async function bootstrap(): Promise<void> {
     walletEventsProducer,
     serviceId: SERVICE_ID,
   });
-  const defiEventsConsumer = createDefiEventsConsumer({
-    walletRepository: walletClient,
-    defiEventsProducer,
-    serviceId: SERVICE_ID,
-  });
 
   await consumer.subscribe(
-    [TOPICS.USER_EVENTS, TOPICS.RIDE_EVENTS, TOPICS.PAYMENT_EVENTS, TOPICS.DEFI_EVENTS],
+    [TOPICS.USER_EVENTS, TOPICS.RIDE_EVENTS, TOPICS.PAYMENT_EVENTS],
     async (value, ctx) => {
       if (ctx.topic === TOPICS.USER_EVENTS) {
         await userEventsConsumer.handle(value, ctx);
@@ -72,10 +60,6 @@ async function bootstrap(): Promise<void> {
       if (ctx.topic === TOPICS.PAYMENT_EVENTS) {
         await paymentEventsConsumer.handle(value, ctx);
         return;
-      }
-
-      if (ctx.topic === TOPICS.DEFI_EVENTS) {
-        await defiEventsConsumer.handle(value, ctx);
       }
     },
   );

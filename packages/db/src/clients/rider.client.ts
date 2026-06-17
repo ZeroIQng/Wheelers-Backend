@@ -143,7 +143,7 @@ export const rideClient = {
     destLng:          number;
     destAddress:      string;
     stops?:           RouteStopInput[];
-    fareEstimateUsdt: number;
+    fareEstimateNgn: number;
     status?:          RideStatus;
   }) =>
     prisma.$transaction(async (tx) => {
@@ -192,22 +192,19 @@ export const rideClient = {
       data:  { status: 'ARRIVED', arrivedAt: new Date() },
     }),
 
-  start: (rideId: string, recordingId?: string) =>
+  start: (rideId: string) =>
     prisma.ride.update({
       where: { id: rideId },
       data: {
-        status:      'IN_PROGRESS',
-        startedAt:   new Date(),
-        recordingId: recordingId ?? null,
+        status:    'IN_PROGRESS',
+        startedAt: new Date(),
       },
     }),
 
   complete: (rideId: string, data: {
-    fareFinalUsdt:   number;
+    fareFinalNgn:    number;
     distanceKm:      number;
     durationSeconds: number;
-    recordingCid?:   string;
-    recordingHash?:  string;
   }) =>
     prisma.ride.update({
       where: { id: rideId },
@@ -245,7 +242,7 @@ export const rideClient = {
   syncRouteStops: (rideId: string, data: {
     destination: RouteDestinationInput;
     stops?: RouteStopInput[];
-    fareEstimateUsdt?: number;
+    fareEstimateNgn?: number;
   }) =>
     prisma.$transaction(async (tx) => {
       const existingCompletedStops = await tx.rideStop.findMany({
@@ -262,7 +259,7 @@ export const rideClient = {
           destLat: data.destination.lat,
           destLng: data.destination.lng,
           destAddress: data.destination.address,
-          ...(data.fareEstimateUsdt !== undefined ? { fareEstimateUsdt: data.fareEstimateUsdt } : {}),
+          ...(data.fareEstimateNgn !== undefined ? { fareEstimateNgn: data.fareEstimateNgn } : {}),
         },
       });
 

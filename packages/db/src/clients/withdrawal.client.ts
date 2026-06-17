@@ -12,13 +12,7 @@ export const withdrawalClient = {
   reserve: async (input: {
     userId: string;
     walletId: string;
-    requestedAmountNgn: number;
-    reservedAmountUsdt: number;
-    displayCurrency: string;
-    displayExchangeRate: number;
-    payoutCurrency: string;
-    cryptoCurrency: string;
-    cryptoNetwork: string;
+    amountNgn: number;
     bankAccountNumber: string;
     bankAccountName: string;
     bankNetworkId: string;
@@ -28,8 +22,8 @@ export const withdrawalClient = {
         where: { id: input.walletId },
       });
 
-      const availableUsdt = Number(wallet.balanceUsdt);
-      if (availableUsdt < input.reservedAmountUsdt) {
+      const availableNgn = Number(wallet.balanceNgn);
+      if (availableNgn < input.amountNgn) {
         throw new Error('You have insufficient balance for this withdrawal.');
       }
 
@@ -39,8 +33,8 @@ export const withdrawalClient = {
       const updatedWallet = await tx.wallet.update({
         where: { id: input.walletId },
         data: {
-          balanceUsdt: { decrement: input.reservedAmountUsdt },
-          lockedUsdt: { increment: input.reservedAmountUsdt },
+          balanceNgn: { decrement: input.amountNgn },
+          lockedNgn: { increment: input.amountNgn },
         },
       });
 
@@ -51,7 +45,7 @@ export const withdrawalClient = {
           userId: input.userId,
           kind: 'WITHDRAWAL',
           status: 'ACTIVE',
-          amountUsdt: input.reservedAmountUsdt,
+          amountNgn: input.amountNgn,
           referenceId: withdrawalId,
         },
       });
@@ -63,13 +57,8 @@ export const withdrawalClient = {
           walletId: input.walletId,
           reservationId,
           status: 'FUNDS_RESERVED',
-          requestedAmountNgn: input.requestedAmountNgn,
-          reservedAmountUsdt: input.reservedAmountUsdt,
-          displayCurrency: input.displayCurrency,
-          displayExchangeRate: input.displayExchangeRate,
-          payoutCurrency: input.payoutCurrency,
-          cryptoCurrency: input.cryptoCurrency,
-          cryptoNetwork: input.cryptoNetwork,
+          requestedAmountNgn: input.amountNgn,
+          reservedAmountNgn: input.amountNgn,
           bankAccountNumber: input.bankAccountNumber,
           bankAccountName: input.bankAccountName,
           bankNetworkId: input.bankNetworkId,
@@ -83,79 +72,30 @@ export const withdrawalClient = {
       };
     }),
 
-  attachOfframp: async (input: {
+  attachPayout: async (input: {
     withdrawalRequestId: string;
-    paymentId: string;
+    pouchPayoutId: string;
     providerReference: string;
-    quotedAmountNgn?: number;
-    quotedAmountUsd?: number;
-    quotedCryptoAmount?: number;
     providerPayload?: Record<string, unknown>;
     expiresAt?: Date;
   }) =>
     prisma.withdrawalRequest.update({
       where: { id: input.withdrawalRequestId },
       data: {
-        paymentId: input.paymentId,
+        pouchPayoutId: input.pouchPayoutId,
         providerReference: input.providerReference,
-        quotedAmountNgn: input.quotedAmountNgn,
-        quotedAmountUsd: input.quotedAmountUsd,
-        quotedCryptoAmount: input.quotedCryptoAmount,
         providerPayload: asJson(input.providerPayload),
         expiresAt: input.expiresAt,
-        status: 'OFFRAMP_CREATED',
+        status: 'PAYOUT_CREATED',
       },
     }),
-
-  recordTreasurySubmission: async (input: {
-    withdrawalRequestId: string;
-    transactionHash: string;
-    senderAddress: string;
-    destinationAddress: string;
-    amount: string;
-    assetCode: string;
-    assetIssuer: string;
-    network: string;
-  }) => {
-    const request = await prisma.withdrawalRequest.findUnique({
-      where: { id: input.withdrawalRequestId },
-      select: {
-        providerPayload: true,
-      },
-    });
-
-    const currentPayload =
-      request?.providerPayload && typeof request.providerPayload === 'object' && !Array.isArray(request.providerPayload)
-        ? (request.providerPayload as Record<string, unknown>)
-        : {};
-
-    return prisma.withdrawalRequest.update({
-      where: { id: input.withdrawalRequestId },
-      data: {
-        status: 'PROCESSING',
-        providerPayload: asJson({
-          ...currentPayload,
-          treasurySubmission: {
-            transactionHash: input.transactionHash,
-            senderAddress: input.senderAddress,
-            destinationAddress: input.destinationAddress,
-            amount: input.amount,
-            assetCode: input.assetCode,
-            assetIssuer: input.assetIssuer,
-            network: input.network,
-            submittedAt: new Date().toISOString(),
-          },
-        }),
-      },
-    });
-  },
 
   markProcessing: async (providerReference: string) =>
     prisma.withdrawalRequest.updateMany({
       where: {
         providerReference,
         status: {
-          in: ['FUNDS_RESERVED', 'OFFRAMP_CREATED', 'PENDING'],
+          in: ['FUNDS_RESERVED', 'PAYOUT_CREATED', 'PENDING'],
         },
       },
       data: {
@@ -192,8 +132,8 @@ export const withdrawalClient = {
         await tx.wallet.update({
           where: { id: request.walletId },
           data: {
-            balanceUsdt: { increment: Number(request.reservedAmountUsdt) },
-            lockedUsdt: { decrement: Number(request.reservedAmountUsdt) },
+            balanceNgn: { increment: Number(request.reservedAmountNgn) },
+            lockedNgn: { decrement: Number(request.reservedAmountNgn) },
           },
         });
 
@@ -242,7 +182,7 @@ export const withdrawalClient = {
       const wallet = await tx.wallet.update({
         where: { id: request.walletId },
         data: {
-          lockedUsdt: { decrement: request.reservedAmountUsdt },
+          lockedNgn: { decrement: request.reservedAmountNgn },
         },
       });
 
@@ -251,14 +191,12 @@ export const withdrawalClient = {
           walletId: request.walletId,
           type: 'WITHDRAWAL',
           direction: 'DEBIT',
-          amountUsdt: request.reservedAmountUsdt,
-          balanceAfter: wallet.balanceUsdt,
+          amountNgn: request.reservedAmountNgn,
+          balanceAfterNgn: wallet.balanceNgn,
           referenceId: request.id,
           metadata: asJson({
             providerReference: request.providerReference,
-            paymentId: request.paymentId,
-            quotedAmountNgn: Number(request.quotedAmountNgn ?? request.requestedAmountNgn),
-            payoutCurrency: request.payoutCurrency,
+            pouchPayoutId: request.pouchPayoutId,
             bankNetworkId: request.bankNetworkId,
           }),
         },

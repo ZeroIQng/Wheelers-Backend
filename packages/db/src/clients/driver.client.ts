@@ -24,7 +24,6 @@ export const driverClient = {
     prisma.$queryRaw<Array<{
       id:           string;
       userId:       string;
-      walletAddress: string;
       lat:          number;
       lng:          number;
       rating:       number;
@@ -35,7 +34,6 @@ export const driverClient = {
       SELECT
         d.id,
         d."userId",
-        u."walletAddress",
         d.lat,
         d.lng,
         d.rating,

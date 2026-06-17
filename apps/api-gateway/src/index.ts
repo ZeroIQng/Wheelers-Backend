@@ -19,7 +19,6 @@ import { Queue } from "bullmq";
 import IORedis from "ioredis";
 
 import {
-  handlePrivyAuthRoute,
   handleUsernamePasswordSigninRoute,
   handleUsernamePasswordSignupRoute,
 } from "./http/auth.route";
@@ -48,10 +47,6 @@ import {
   handleListGroupRideMatchRequestsRoute,
 } from "./http/group-ride.route";
 import {
-  handlePouchHealthRoute,
-  handlePouchOfframpRoute,
-  handlePouchOnrampRoute,
-  handlePouchStatusRoute,
   handlePouchWebhookRoute,
 } from "./http/pouch.route";
 import {
@@ -62,7 +57,9 @@ import {
   handleVerifyWithdrawalBankAccountRoute,
   handleWalletOverviewRoute,
   handleWalletTransactionsRoute,
+  handleWalletDepositInfoRoute,
 } from "./http/wallet.route";
+import { PouchLiquifiaClient } from "./http/pouch-liquifia.client";
 import {
   handleSendPhoneOtpRoute,
   handleVerifyPhoneOtpRoute,
@@ -74,10 +71,8 @@ import {
   handleListReferralReferralsRoute,
   handlePreviewReferralRideCashbackRoute,
 } from "./http/referral.route";
-import { PouchClient } from "./http/pouch.client";
 import { applyCorsHeaders, sendJson } from "./http/utils";
 import { startGatewayKafkaConsumer } from "./kafka/consumer";
-import { CoinGeckoRidePricingDisplayProvider } from "./pricing/display";
 import { RedisClient } from "./redis/client";
 import { asRawProducer, startOutboxPublisher } from "./outbox/outbox-publisher";
 import { GatewayPublisher } from "./websocket/publisher";
@@ -170,51 +165,6 @@ function attachHttpResponseLogger(
   });
 }
 
-function buildPouchUserKycDefaults(env: {
-  POUCH_FULL_NAME?: string;
-  POUCH_PHONE?: string;
-  POUCH_ADDRESS?: string;
-  POUCH_DOB?: string;
-  POUCH_NIN?: string;
-  POUCH_BVN?: string;
-  POUCH_TEST_EMAIL?: string;
-}): Record<string, string> | undefined {
-  const entries = Object.entries({
-    FULL_NAME: env.POUCH_FULL_NAME,
-    PHONE: env.POUCH_PHONE,
-    ADDRESS: env.POUCH_ADDRESS,
-    DOB: normalizePouchDob(env.POUCH_DOB),
-    NIN: env.POUCH_NIN,
-    BVN: env.POUCH_BVN,
-    EMAIL: env.POUCH_TEST_EMAIL,
-  }).filter(([, value]) => typeof value === "string" && value.trim().length > 0);
-
-  if (entries.length === 0) {
-    return undefined;
-  }
-
-  return Object.fromEntries(entries) as Record<string, string>;
-}
-
-function normalizePouchDob(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    return trimmed;
-  }
-
-  const slashMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (slashMatch) {
-    const [, month, day, year] = slashMatch;
-    return `${year}-${month}-${day}`;
-  }
-
-  return trimmed;
-}
-
 async function bootstrap(): Promise<void> {
   loadWorkspaceEnv();
 
@@ -287,9 +237,9 @@ async function bootstrap(): Promise<void> {
 
   const publisher = new GatewayPublisher(producer);
 
-  const pouchClient = new PouchClient(
-    gatewayEnv.POUCH_BASE_URL,
-    gatewayEnv.POUCH_API_KEY,
+  const pouchLiquifiaClient = new PouchLiquifiaClient(
+    gatewayEnv.POUCH_LIQUIFIA_BASE_URL,
+    gatewayEnv.POUCH_LIQUIFIA_API_KEY,
   );
 
   const routePlanner = new GoogleMapsRoutePlanner(
@@ -307,12 +257,6 @@ async function bootstrap(): Promise<void> {
         })
       : undefined;
 
-  const ridePricingDisplayProvider = new CoinGeckoRidePricingDisplayProvider(
-    gatewayEnv.COINGECKO_BASE_URL,
-    gatewayEnv.RIDE_DISPLAY_RATE_TTL_MS,
-    gatewayEnv.RIDE_DISPLAY_NGN_PER_USDT_FALLBACK,
-  );
-
   const registry = new SocketRegistry({
     instanceId: `${sharedEnv.KAFKA_CLIENT_ID}-${process.pid}-${Math.random()
       .toString(16)
@@ -324,25 +268,28 @@ async function bootstrap(): Promise<void> {
   await registry.start();
 
   const allowedOrigins = parseAllowedOrigins(gatewayEnv.CORS_ORIGINS);
-  const pouchUserKycDefaults = buildPouchUserKycDefaults(gatewayEnv);
 
   const scheduledRideDeps = {
-    privyAppId: gatewayEnv.PRIVY_APP_ID,
-    privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+    jwtSecret: gatewayEnv.JWT_SECRET,
     routePlanner,
-    ridePricingDisplayProvider,
     dispatcherQueue,
     leadTimeMs,
     redisClient: redisCommandClient,
   };
 
   const groupRideDeps = {
-    privyAppId: gatewayEnv.PRIVY_APP_ID,
-    privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+    jwtSecret: gatewayEnv.JWT_SECRET,
     routePlanner,
     publisher,
     redisClient: redisCommandClient,
     faceStorage: groupRideFaceStorage,
+  };
+
+  const walletDeps = {
+    jwtSecret: gatewayEnv.JWT_SECRET,
+    publisher,
+    pouchLiquifiaClient,
+    redisClient: redisCommandClient,
   };
 
   const server = createServer(async (req, res) => {
@@ -369,22 +316,6 @@ async function bootstrap(): Promise<void> {
         return;
       }
 
-    if (url.pathname === "/auth/privy") {
-      if (req.method !== "POST") {
-        sendMethodNotAllowed(res);
-        return;
-      }
-
-      await handlePrivyAuthRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-        jwtSecret: gatewayEnv.JWT_SECRET,
-        publisher,
-      });
-
-      return;
-    }
-
     if (url.pathname === "/auth/signup") {
       if (req.method !== "POST") {
         sendMethodNotAllowed(res);
@@ -392,8 +323,6 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleUsernamePasswordSignupRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
         jwtSecret: gatewayEnv.JWT_SECRET,
         publisher,
       });
@@ -421,8 +350,7 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleGetCurrentProfileRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        jwtSecret: gatewayEnv.JWT_SECRET,
       });
       return;
     }
@@ -434,8 +362,7 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleUpdateCurrentProfileRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        jwtSecret: gatewayEnv.JWT_SECRET,
       });
       return;
     }
@@ -447,8 +374,7 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleGetReferralSummaryRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        jwtSecret: gatewayEnv.JWT_SECRET,
       });
       return;
     }
@@ -460,8 +386,7 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleApplyReferralCodeRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        jwtSecret: gatewayEnv.JWT_SECRET,
       });
       return;
     }
@@ -473,8 +398,7 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleListReferralReferralsRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        jwtSecret: gatewayEnv.JWT_SECRET,
       });
       return;
     }
@@ -486,8 +410,7 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleListReferralCashbackRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        jwtSecret: gatewayEnv.JWT_SECRET,
       });
       return;
     }
@@ -499,8 +422,7 @@ async function bootstrap(): Promise<void> {
       }
 
       await handlePreviewReferralRideCashbackRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        jwtSecret: gatewayEnv.JWT_SECRET,
       });
       return;
     }
@@ -508,8 +430,7 @@ async function bootstrap(): Promise<void> {
     if (url.pathname === "/notifications") {
       if (req.method === "GET") {
         await handleListNotificationsRoute(req, res, {
-          privyAppId: gatewayEnv.PRIVY_APP_ID,
-          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+          jwtSecret: gatewayEnv.JWT_SECRET,
         }, url);
         return;
       }
@@ -525,8 +446,7 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleMarkNotificationsReadRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        jwtSecret: gatewayEnv.JWT_SECRET,
       });
       return;
     }
@@ -538,8 +458,7 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleRegisterPushTokenRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        jwtSecret: gatewayEnv.JWT_SECRET,
       });
       return;
     }
@@ -551,8 +470,7 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleSendPhoneOtpRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        jwtSecret: gatewayEnv.JWT_SECRET,
         redisClient: redisCommandClient,
         whatsappGatewayUrl: gatewayEnv.WHATSAPP_GATEWAY_URL,
         whatsappGatewayToken: gatewayEnv.WHATSAPP_GATEWAY_TOKEN,
@@ -572,8 +490,7 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleVerifyPhoneOtpRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        jwtSecret: gatewayEnv.JWT_SECRET,
         redisClient: redisCommandClient,
         whatsappGatewayUrl: gatewayEnv.WHATSAPP_GATEWAY_URL,
         whatsappGatewayToken: gatewayEnv.WHATSAPP_GATEWAY_TOKEN,
@@ -593,8 +510,7 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleRideEstimateRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
+        jwtSecret: gatewayEnv.JWT_SECRET,
         routePlanner,
       });
 
@@ -611,9 +527,7 @@ async function bootstrap(): Promise<void> {
         req,
         res,
         {
-          privyAppId: gatewayEnv.PRIVY_APP_ID,
-          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-          ridePricingDisplayProvider,
+          jwtSecret: gatewayEnv.JWT_SECRET,
         },
         url,
       );
@@ -751,19 +665,6 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname === "/payments/pouch/health") {
-      if (req.method !== "GET") {
-        sendMethodNotAllowed(res);
-        return;
-      }
-
-      await handlePouchHealthRoute(req, res, {
-        pouchClient,
-      });
-
-      return;
-    }
-
     if (url.pathname === "/webhooks/pouchpay") {
       if (req.method !== "POST") {
         sendMethodNotAllowed(res);
@@ -778,141 +679,23 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname === "/payments/pouch/onramp") {
-      if (req.method !== "POST") {
-        sendMethodNotAllowed(res);
-        return;
-      }
-
-      await handlePouchOnrampRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-        pouchClient,
-        publisher,
-        ridePricingDisplayProvider,
-        redisClient: redisCommandClient,
-        defaults: {
-          providerId: gatewayEnv.POUCH_PROVIDER_ID,
-          countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
-          currency: gatewayEnv.POUCH_FIAT_CURRENCY,
-          cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
-          cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
-          chain: gatewayEnv.POUCH_CHAIN,
-          masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
-          walletTag: gatewayEnv.POUCH_WALLET_TAG,
-          testEmail: gatewayEnv.POUCH_TEST_EMAIL,
-          userKycDefaults: pouchUserKycDefaults,
-        },
-      });
-
-      return;
-    }
-
-    if (url.pathname === "/payments/pouch/offramp") {
-      if (req.method !== "POST") {
-        sendMethodNotAllowed(res);
-        return;
-      }
-
-      await handlePouchOfframpRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-        pouchClient,
-        publisher,
-        ridePricingDisplayProvider,
-        redisClient: redisCommandClient,
-        defaults: {
-          providerId: gatewayEnv.POUCH_PROVIDER_ID,
-          countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
-          currency: gatewayEnv.POUCH_FIAT_CURRENCY,
-          cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
-          cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
-          chain: gatewayEnv.POUCH_CHAIN,
-          masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
-          walletTag: gatewayEnv.POUCH_WALLET_TAG,
-          testEmail: gatewayEnv.POUCH_TEST_EMAIL,
-          userKycDefaults: pouchUserKycDefaults,
-        },
-      });
-
-      return;
-    }
-
-    if (url.pathname.startsWith("/payments/pouch/status/")) {
-      const statusMatch = url.pathname.match(/^\/payments\/pouch\/status\/([^/]+)$/);
-
-      if (!statusMatch) {
-        sendJson(res, 404, { error: "Not found" });
-        return;
-      }
-
-      if (req.method !== "GET") {
-        sendMethodNotAllowed(res);
-        return;
-      }
-
-      const requestedType =
-        url.searchParams.get("type")?.toUpperCase() === "ONRAMP" ||
-        url.searchParams.get("type")?.toUpperCase() === "OFFRAMP"
-          ? (url.searchParams.get("type")?.toUpperCase() as "ONRAMP" | "OFFRAMP")
-          : undefined;
-
-      await handlePouchStatusRoute(
-        req,
-        res,
-        {
-          privyAppId: gatewayEnv.PRIVY_APP_ID,
-          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-          pouchClient,
-          publisher,
-          ridePricingDisplayProvider,
-          redisClient: redisCommandClient,
-          defaults: {
-            providerId: gatewayEnv.POUCH_PROVIDER_ID,
-            countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
-            currency: gatewayEnv.POUCH_FIAT_CURRENCY,
-            cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
-            cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
-            chain: gatewayEnv.POUCH_CHAIN,
-            masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
-            walletTag: gatewayEnv.POUCH_WALLET_TAG,
-            testEmail: gatewayEnv.POUCH_TEST_EMAIL,
-            userKycDefaults: pouchUserKycDefaults,
-          },
-        },
-        decodeURIComponent(statusMatch[1]),
-        requestedType,
-      );
-
-      return;
-    }
-
     if (url.pathname === "/wallet/overview") {
       if (req.method !== "GET") {
         sendMethodNotAllowed(res);
         return;
       }
 
-      await handleWalletOverviewRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-        ridePricingDisplayProvider,
-        pouchClient,
-        publisher,
-        defaults: {
-          providerId: gatewayEnv.POUCH_PROVIDER_ID,
-          countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
-          currency: gatewayEnv.POUCH_FIAT_CURRENCY,
-          cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
-          cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
-          chain: gatewayEnv.POUCH_CHAIN,
-          masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
-          stellarNetwork: gatewayEnv.STELLAR_NETWORK,
-          testEmail: gatewayEnv.POUCH_TEST_EMAIL,
-          userKycDefaults: pouchUserKycDefaults,
-        },
-      });
+      await handleWalletOverviewRoute(req, res, walletDeps);
+      return;
+    }
 
+    if (url.pathname === "/wallet/deposit-info") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleWalletDepositInfoRoute(req, res, walletDeps);
       return;
     }
 
@@ -922,32 +705,7 @@ async function bootstrap(): Promise<void> {
         return;
       }
 
-      await handleWalletTransactionsRoute(
-        req,
-        res,
-        {
-          privyAppId: gatewayEnv.PRIVY_APP_ID,
-          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-          ridePricingDisplayProvider,
-          pouchClient,
-          publisher,
-          redisClient: redisCommandClient,
-          defaults: {
-            providerId: gatewayEnv.POUCH_PROVIDER_ID,
-            countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
-            currency: gatewayEnv.POUCH_FIAT_CURRENCY,
-            cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
-            cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
-            chain: gatewayEnv.POUCH_CHAIN,
-            masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
-            stellarNetwork: gatewayEnv.STELLAR_NETWORK,
-            testEmail: gatewayEnv.POUCH_TEST_EMAIL,
-            userKycDefaults: pouchUserKycDefaults,
-          },
-        },
-        url,
-      );
-
+      await handleWalletTransactionsRoute(req, res, walletDeps, url);
       return;
     }
 
@@ -957,31 +715,7 @@ async function bootstrap(): Promise<void> {
         return;
       }
 
-      await handleListWithdrawalBankNetworksRoute(
-        req,
-        res,
-        {
-          privyAppId: gatewayEnv.PRIVY_APP_ID,
-          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-          ridePricingDisplayProvider,
-          pouchClient,
-          publisher,
-          redisClient: redisCommandClient,
-          defaults: {
-            providerId: gatewayEnv.POUCH_PROVIDER_ID,
-            countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
-            currency: gatewayEnv.POUCH_FIAT_CURRENCY,
-            cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
-            cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
-            chain: gatewayEnv.POUCH_CHAIN,
-            masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
-            stellarNetwork: gatewayEnv.STELLAR_NETWORK,
-            testEmail: gatewayEnv.POUCH_TEST_EMAIL,
-            userKycDefaults: pouchUserKycDefaults,
-          },
-        },
-        url,
-      );
+      await handleListWithdrawalBankNetworksRoute(req, res, walletDeps, url);
       return;
     }
 
@@ -991,78 +725,18 @@ async function bootstrap(): Promise<void> {
         return;
       }
 
-      await handleVerifyWithdrawalBankAccountRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-        ridePricingDisplayProvider,
-        pouchClient,
-        publisher,
-        redisClient: redisCommandClient,
-        defaults: {
-          providerId: gatewayEnv.POUCH_PROVIDER_ID,
-          countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
-          currency: gatewayEnv.POUCH_FIAT_CURRENCY,
-          cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
-          cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
-          chain: gatewayEnv.POUCH_CHAIN,
-          masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
-          stellarNetwork: gatewayEnv.STELLAR_NETWORK,
-          testEmail: gatewayEnv.POUCH_TEST_EMAIL,
-          userKycDefaults: pouchUserKycDefaults,
-        },
-      });
+      await handleVerifyWithdrawalBankAccountRoute(req, res, walletDeps);
       return;
     }
 
     if (url.pathname === "/wallet/withdrawals") {
       if (req.method === "GET") {
-        await handleListWalletWithdrawalsRoute(
-          req,
-          res,
-          {
-            privyAppId: gatewayEnv.PRIVY_APP_ID,
-            privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-            ridePricingDisplayProvider,
-            pouchClient,
-            publisher,
-            defaults: {
-              providerId: gatewayEnv.POUCH_PROVIDER_ID,
-              countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
-              currency: gatewayEnv.POUCH_FIAT_CURRENCY,
-              cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
-              cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
-              chain: gatewayEnv.POUCH_CHAIN,
-              masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
-              testEmail: gatewayEnv.POUCH_TEST_EMAIL,
-              userKycDefaults: pouchUserKycDefaults,
-            },
-          },
-          url,
-        );
+        await handleListWalletWithdrawalsRoute(req, res, walletDeps, url);
         return;
       }
 
       if (req.method === "POST") {
-        await handleCreateWalletWithdrawalRoute(req, res, {
-          privyAppId: gatewayEnv.PRIVY_APP_ID,
-          privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-          ridePricingDisplayProvider,
-          pouchClient,
-          publisher,
-          redisClient: redisCommandClient,
-          defaults: {
-            providerId: gatewayEnv.POUCH_PROVIDER_ID,
-            countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
-            currency: gatewayEnv.POUCH_FIAT_CURRENCY,
-            cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
-            cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
-            chain: gatewayEnv.POUCH_CHAIN,
-            masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
-            stellarNetwork: gatewayEnv.STELLAR_NETWORK,
-            testEmail: gatewayEnv.POUCH_TEST_EMAIL,
-            userKycDefaults: pouchUserKycDefaults,
-          },
-        });
+        await handleCreateWalletWithdrawalRoute(req, res, walletDeps);
         return;
       }
 
@@ -1083,25 +757,9 @@ async function bootstrap(): Promise<void> {
         return;
       }
 
-      await handleGetWalletWithdrawalRoute(req, res, {
-        privyAppId: gatewayEnv.PRIVY_APP_ID,
-        privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
-        ridePricingDisplayProvider,
-        pouchClient,
-        publisher,
-        defaults: {
-          providerId: gatewayEnv.POUCH_PROVIDER_ID,
-          countryCode: gatewayEnv.POUCH_COUNTRY_CODE,
-          currency: gatewayEnv.POUCH_FIAT_CURRENCY,
-          cryptoCurrency: gatewayEnv.POUCH_CRYPTO_CURRENCY,
-          cryptoNetwork: gatewayEnv.POUCH_CRYPTO_NETWORK,
-          chain: gatewayEnv.POUCH_CHAIN,
-          masterWalletAddress: gatewayEnv.POUCH_MASTER_WALLET_ADDRESS,
-          stellarNetwork: gatewayEnv.STELLAR_NETWORK,
-          testEmail: gatewayEnv.POUCH_TEST_EMAIL,
-          userKycDefaults: pouchUserKycDefaults,
-        },
-      }, decodeURIComponent(withdrawalMatch[1]));
+      await handleGetWalletWithdrawalRoute(
+        req, res, walletDeps, decodeURIComponent(withdrawalMatch[1]),
+      );
       return;
     }
 
@@ -1129,8 +787,6 @@ async function bootstrap(): Promise<void> {
 
   createGatewayWebSocketServer({
     server,
-    privyAppId: gatewayEnv.PRIVY_APP_ID,
-    privyVerificationKey: gatewayEnv.PRIVY_VERIFICATION_KEY,
     jwtSecret: gatewayEnv.JWT_SECRET,
     allowedOrigins,
     idleTimeoutMs: Number(gatewayEnv.WS_IDLE_TIMEOUT_MS),
@@ -1150,7 +806,6 @@ async function bootstrap(): Promise<void> {
   await startGatewayKafkaConsumer({
     consumer,
     registry,
-    ridePricingDisplayProvider,
   });
 
   const port = Number(gatewayEnv.PORT);

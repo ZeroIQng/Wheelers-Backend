@@ -214,7 +214,7 @@ function mapReadyForMatchEvent(event: GroupRideReadyForMatchEvent): GroupRideReq
     destination: event.destination,
     genderPreference: event.genderPreference,
     headingDeg: bearingDegrees(event.pickup, event.destination),
-    fareEstimateUsdt: event.fareEstimateUsdt ?? 0,
+    fareEstimateNgn: event.fareEstimateNgn ?? 0,
     requestedAt: event.timestamp,
     sourceEvent: event,
   };
