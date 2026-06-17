@@ -2,6 +2,7 @@ import type { WheelersConsumer } from '@wheleers/kafka-client';
 import { referralClient } from '@wheleers/db';
 import {
   ComplianceEvent,
+  GroupRideEvent,
   GpsProcessedEvent,
   NotificationEvent,
   RideEvent,
@@ -31,6 +32,7 @@ export async function startGatewayKafkaConsumer(deps: StartGatewayConsumerDeps):
       TOPICS.NOTIFICATION_EVENTS,
       TOPICS.GPS_PROCESSED,
       TOPICS.COMPLIANCE_EVENTS,
+      TOPICS.GROUP_RIDE_EVENTS,
     ],
     async (value, context) => {
       if (context.topic === TOPICS.RIDE_EVENTS) {
@@ -75,6 +77,15 @@ export async function startGatewayKafkaConsumer(deps: StartGatewayConsumerDeps):
           throw new Error(`Invalid compliance event: ${parsed.error.message}`);
         }
         await handleComplianceEvent(parsed.data, deps.registry);
+        return;
+      }
+
+      if (context.topic === TOPICS.GROUP_RIDE_EVENTS) {
+        const parsed = GroupRideEvent.safeParse(value);
+        if (!parsed.success) {
+          throw new Error(`Invalid group ride event: ${parsed.error.message}`);
+        }
+        await handleGroupRideEvent(parsed.data, deps.registry);
       }
     },
   );
@@ -220,6 +231,27 @@ async function handleRideEvent(
       rideId: event.rideId,
       reason: event.reason,
     });
+    return;
+  }
+
+  if (event.eventType === 'CHAT_MESSAGE_SENT') {
+    const chatPayload = {
+      messageId: event.messageId,
+      rideId: event.rideId,
+      senderId: event.senderId,
+      senderRole: event.senderRole,
+      content: event.content,
+      createdAt: event.timestamp,
+    };
+
+    // Send to both participants — the rideParticipants map has riderId + driverId
+    const participants = rideParticipants.get(event.rideId);
+    if (participants?.riderId) {
+      await registry.sendToUser(participants.riderId, 'chat:message', chatPayload);
+    }
+    if (participants?.driverId) {
+      await registry.sendToUser(participants.driverId, 'chat:message', chatPayload);
+    }
   }
 }
 
@@ -332,4 +364,28 @@ async function handleComplianceEvent(event: ComplianceEvent, registry: SocketReg
     lastKnownLat: event.lastKnownLat,
     lastKnownLng: event.lastKnownLng,
   });
+}
+
+async function handleGroupRideEvent(
+  event: GroupRideEvent,
+  registry: SocketRegistry,
+): Promise<void> {
+  if (event.eventType === 'GROUP_RIDE_DRIVER_ASSIGNED') {
+    const payload = {
+      groupId: event.groupId,
+      rideIds: event.rideIds,
+      driverId: event.driverId,
+      driverUserId: event.driverUserId,
+      driverName: event.driverName,
+      driverRating: event.driverRating,
+      vehiclePlate: event.vehiclePlate,
+      vehicleModel: event.vehicleModel,
+      etaSeconds: event.etaSeconds,
+    };
+
+    // Notify ALL riders in the group
+    for (const riderId of event.riderIds) {
+      await registry.sendToUser(riderId, 'group-ride:driver-assigned', payload);
+    }
+  }
 }

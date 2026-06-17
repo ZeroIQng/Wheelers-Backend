@@ -13,6 +13,7 @@ export { virtualAccountClient } from './clients/virtual-account.client';
 export { groupRideClient }      from './clients/group-ride.client';
 export { complianceClient }     from './clients/compliance.client';
 export { referralClient }       from './clients/referral.client';
+export { chatClient }           from './clients/chat.client';
 
 // Re-export Prisma types so services don't need to install @prisma/client directly
 export type {
@@ -40,6 +41,7 @@ export type {
   ReferralCashback,
   ReferralCashbackUsage,
   ReferralCashbackUnlock,
+  ChatMessage,
   Prisma,
 } from '@prisma/client';
 
@@ -70,4 +72,5 @@ export {
   ReferralCashbackType,
   ReferralCashbackStatus,
   ReferralCashbackUsageStatus,
+  ChatSenderRole,
 } from '@prisma/client';

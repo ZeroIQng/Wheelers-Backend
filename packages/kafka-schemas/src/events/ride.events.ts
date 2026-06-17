@@ -169,6 +169,16 @@ export const RideDriverRejectedEvent = BaseRideEvent.extend({
   reason:     z.enum(['timeout', 'manual_reject']),
 });
 
+// Fired by api-gateway when a rider or driver sends a chat message during a ride.
+// Consumed by: api-gateway (relay to both rider and driver via WebSocket as chat:message).
+export const ChatMessageSentEvent = BaseRideEvent.extend({
+  eventType:  z.literal('CHAT_MESSAGE_SENT'),
+  messageId:  z.string().uuid(),
+  senderId:   z.string().uuid(),
+  senderRole: z.enum(['RIDER', 'DRIVER']),
+  content:    z.string().min(1).max(1000),
+});
+
 export const RideEvent = z.discriminatedUnion('eventType', [
   RideRequestedEvent,
   RideRouteUpdateRequestedEvent,
@@ -181,6 +191,7 @@ export const RideEvent = z.discriminatedUnion('eventType', [
   RideCancelledEvent,
   RideOfferSentEvent,
   RideDriverRejectedEvent,
+  ChatMessageSentEvent,
 ]);
 
 export type RideRequestedEvent       = z.infer<typeof RideRequestedEvent>;
@@ -194,4 +205,5 @@ export type RideCompletedEvent       = z.infer<typeof RideCompletedEvent>;
 export type RideCancelledEvent       = z.infer<typeof RideCancelledEvent>;
 export type RideOfferSentEvent       = z.infer<typeof RideOfferSentEvent>;
 export type RideDriverRejectedEvent  = z.infer<typeof RideDriverRejectedEvent>;
+export type ChatMessageSentEvent     = z.infer<typeof ChatMessageSentEvent>;
 export type RideEvent                = z.infer<typeof RideEvent>;

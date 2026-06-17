@@ -303,9 +303,23 @@ model Ride {
   routeStops       RideStop[]
   referralQualifications Referral[] @relation("ReferralFirstRide")
 
+  chatMessages ChatMessage[]
+
   @@index([riderId, createdAt])
   @@index([driverId, status])
   @@index([status])
+}
+
+model ChatMessage {
+  id         String         @id @default(uuid())
+  rideId     String
+  senderId   String
+  senderRole ChatSenderRole
+  content    String
+  createdAt  DateTime       @default(now())
+  ride       Ride           @relation(fields: [rideId], references: [id])
+
+  @@index([rideId, createdAt])
 }
 
 model RideStop {
@@ -715,4 +729,9 @@ enum ReferralCashbackUsageStatus {
   RESERVED
   SETTLED
   RELEASED
+}
+
+enum ChatSenderRole {
+  RIDER
+  DRIVER
 }

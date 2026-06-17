@@ -39,6 +39,11 @@ import {
   handleRiderRideHistoryRoute,
 } from "./http/ride.route";
 import {
+  handleGetDriverStatsRoute,
+  handleGetDriverEarningsRoute,
+  handleGetDriverRideHistoryRoute,
+} from "./http/driver.route";
+import {
   handleCancelGroupRideMatchRequestRoute,
   handleCompleteGroupRideFaceUploadRoute,
   handleCreateGroupRideFaceUploadUrlRoute,
@@ -72,6 +77,7 @@ import {
   handleListReferralReferralsRoute,
   handlePreviewReferralRideCashbackRoute,
 } from "./http/referral.route";
+import { handleGetRideChatMessagesRoute } from "./http/chat.route";
 import { applyCorsHeaders, sendJson } from "./http/utils";
 import { startGatewayKafkaConsumer } from "./kafka/consumer";
 import { RedisClient } from "./redis/client";
@@ -503,6 +509,59 @@ async function bootstrap(): Promise<void> {
       });
 
       return;
+    }
+
+    if (url.pathname === "/drivers/me/stats") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleGetDriverStatsRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+      });
+      return;
+    }
+
+    if (url.pathname === "/drivers/me/earnings") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleGetDriverEarningsRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+      }, url);
+      return;
+    }
+
+    if (url.pathname === "/drivers/me/rides/history") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleGetDriverRideHistoryRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+      }, url);
+      return;
+    }
+
+    // GET /rides/:rideId/messages — chat history
+    if (url.pathname.startsWith("/rides/") && url.pathname.endsWith("/messages")) {
+      const chatMatch = url.pathname.match(/^\/rides\/([^/]+)\/messages$/);
+      if (chatMatch) {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+
+        const handler = handleGetRideChatMessagesRoute({
+          jwtSecret: gatewayEnv.JWT_SECRET,
+        });
+        await handler(req, res, { rideId: chatMatch[1] });
+        return;
+      }
     }
 
     if (url.pathname === "/rides/estimate") {

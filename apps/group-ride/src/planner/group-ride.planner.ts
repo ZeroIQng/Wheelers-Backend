@@ -139,6 +139,24 @@ export function createGroupRidePlanner(params: {
             `stops=${event.stops.length} distanceKm=${event.totalDistanceKm} ` +
             `durationS=${event.totalDurationSeconds}`,
         );
+
+        // Trigger driver dispatch — first pickup stop becomes the driver's target
+        const firstPickup = event.stops.find((s) => s.kind === 'pickup');
+        if (firstPickup) {
+          await params.groupRideEventsProducer.publish({
+            eventType: 'GROUP_RIDE_DRIVER_DISPATCH_REQUESTED',
+            groupId: event.groupId,
+            anchorRideId: event.anchorRideId,
+            rideIds: event.rideIds,
+            riderIds: event.riderIds,
+            firstPickup: { lat: firstPickup.lat, lng: firstPickup.lng, address: firstPickup.address },
+            totalDistanceKm: event.totalDistanceKm,
+            totalDurationSeconds: event.totalDurationSeconds,
+            fareEstimateNgn: event.totalDistanceKm * 100, // rough per-km estimate
+            route: event.route,
+            timestamp: new Date().toISOString(),
+          });
+        }
       }
     },
 

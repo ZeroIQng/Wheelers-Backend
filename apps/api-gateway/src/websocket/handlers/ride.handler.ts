@@ -1,7 +1,8 @@
 import { randomUUID } from 'crypto';
 import { GoogleMapsRoutePlanner } from '@wheleers/config';
-import { referralClient } from '@wheleers/db';
+import { chatClient, referralClient } from '@wheleers/db';
 import {
+  ChatMessageSentEvent,
   DisputeOpenedEvent,
   FeedbackLoggedEvent,
   RideCancelledEvent,
@@ -386,6 +387,40 @@ export async function handleRideMessage(
       payload: {
         feedbackId: event.feedbackId,
         rideId: event.rideId,
+      },
+    };
+  }
+
+  if (type === 'chat:send') {
+    const rideId = requireString(payload, 'rideId');
+    const content = requireString(payload, 'content');
+    if (content.length > 1000) throw new Error('Message too long (max 1000 chars).');
+
+    const senderRole = auth.driverId ? 'DRIVER' : 'RIDER';
+    const message = await chatClient.create({
+      rideId,
+      senderId: auth.userId,
+      senderRole: senderRole as 'RIDER' | 'DRIVER',
+      content,
+    });
+
+    const event = ChatMessageSentEvent.parse({
+      eventType: 'CHAT_MESSAGE_SENT',
+      rideId,
+      messageId: message.id,
+      senderId: auth.userId,
+      senderRole,
+      content,
+      timestamp,
+    });
+
+    await publisher.publishRideEvent(event);
+
+    return {
+      type: 'chat:send:accepted',
+      payload: {
+        messageId: message.id,
+        rideId,
       },
     };
   }

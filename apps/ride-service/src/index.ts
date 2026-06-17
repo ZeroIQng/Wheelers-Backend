@@ -8,6 +8,7 @@ import { createGpsProcessedProducer } from './producers/gps-processed.producer';
 import { createDriverEventsConsumer } from './consumers/driver-events.consumer';
 import { createRideRequestedConsumer } from './consumers/ride-requested.consumer';
 import { createGpsUpdateConsumer } from './consumers/gps-update.consumer';
+import { createGroupRideDispatchConsumer } from './consumers/group-ride-dispatch.consumer';
 
 import { startGpsMonitor } from './handlers/gps-monitor.handler';
 import { startScheduledRideDispatcher } from './handlers/scheduled-rides.handler';
@@ -135,8 +136,14 @@ async function bootstrap(): Promise<void> {
     rideEventsProducer,
   });
 
+  const groupRideDispatchConsumer = createGroupRideDispatchConsumer({
+    state,
+    rideEnv,
+    rideEventsProducer,
+  });
+
   await consumer.subscribe(
-    [TOPICS.DRIVER_EVENTS, TOPICS.RIDE_EVENTS, TOPICS.GPS_STREAM],
+    [TOPICS.DRIVER_EVENTS, TOPICS.RIDE_EVENTS, TOPICS.GPS_STREAM, TOPICS.GROUP_RIDE_EVENTS],
     async (value, ctx) => {
       if (ctx.topic === TOPICS.DRIVER_EVENTS) {
         await driverEventsConsumer.handle(value, ctx);
@@ -151,6 +158,11 @@ async function bootstrap(): Promise<void> {
 
       if (ctx.topic === TOPICS.GPS_STREAM) {
         await gpsUpdateConsumer.handle(value, ctx);
+        return;
+      }
+
+      if (ctx.topic === TOPICS.GROUP_RIDE_EVENTS) {
+        await groupRideDispatchConsumer.handle(value, ctx);
       }
     },
   );

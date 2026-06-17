@@ -113,12 +113,41 @@ export const GroupRideRouteBuiltEvent = BaseGroupRideEvent.extend({
   routeAlgorithm: z.enum(['google_routes_segments']),
 });
 
+// Emitted by group-ride after the route is built — triggers driver dispatch in ride-service.
+export const GroupRideDriverDispatchRequestedEvent = BaseGroupRideEvent.extend({
+  eventType: z.literal('GROUP_RIDE_DRIVER_DISPATCH_REQUESTED'),
+  anchorRideId: z.string().uuid(),
+  rideIds: z.array(z.string().uuid()).min(2),
+  riderIds: z.array(z.string().uuid()).min(2),
+  firstPickup: LatLng,
+  totalDistanceKm: z.number().nonnegative(),
+  totalDurationSeconds: z.number().int().nonnegative(),
+  fareEstimateNgn: z.number().nonnegative(),
+  route: RouteGeometry,
+});
+
+// Emitted by ride-service when a driver accepts a group ride.
+export const GroupRideDriverAssignedEvent = BaseGroupRideEvent.extend({
+  eventType: z.literal('GROUP_RIDE_DRIVER_ASSIGNED'),
+  rideIds: z.array(z.string().uuid()).min(2),
+  riderIds: z.array(z.string().uuid()).min(2),
+  driverId: z.string().uuid(),
+  driverUserId: z.string().uuid(),
+  driverName: z.string(),
+  driverRating: z.number(),
+  vehiclePlate: z.string(),
+  vehicleModel: z.string(),
+  etaSeconds: z.number().int().nonnegative(),
+});
+
 export const GroupRideEvent = z.discriminatedUnion('eventType', [
   GroupRideReadyForMatchEvent,
   GroupRideMatchCancelledEvent,
   GroupRideCandidatesIdentifiedEvent,
   GroupRidePlannedEvent,
   GroupRideRouteBuiltEvent,
+  GroupRideDriverDispatchRequestedEvent,
+  GroupRideDriverAssignedEvent,
 ]);
 
 export type GroupRideReadyForMatchEvent = z.infer<typeof GroupRideReadyForMatchEvent>;
@@ -126,4 +155,6 @@ export type GroupRideMatchCancelledEvent = z.infer<typeof GroupRideMatchCancelle
 export type GroupRideCandidatesIdentifiedEvent = z.infer<typeof GroupRideCandidatesIdentifiedEvent>;
 export type GroupRidePlannedEvent = z.infer<typeof GroupRidePlannedEvent>;
 export type GroupRideRouteBuiltEvent = z.infer<typeof GroupRideRouteBuiltEvent>;
+export type GroupRideDriverDispatchRequestedEvent = z.infer<typeof GroupRideDriverDispatchRequestedEvent>;
+export type GroupRideDriverAssignedEvent = z.infer<typeof GroupRideDriverAssignedEvent>;
 export type GroupRideEvent = z.infer<typeof GroupRideEvent>;
