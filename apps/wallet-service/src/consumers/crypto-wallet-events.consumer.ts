@@ -109,12 +109,33 @@ export function createCryptoWalletEventsConsumer(params: {
             return;
           }
 
-          const result = await walletService.withdraw(recovered.mnemonic, {
-            chainId: event.chainId,
-            toAddress: event.toAddress,
-            amount: event.amount,
-            token: event.token,
-          });
+          let result;
+          try {
+            result = await walletService.withdraw(recovered.mnemonic, {
+              chainId: event.chainId,
+              toAddress: event.toAddress,
+              amount: event.amount,
+              token: event.token,
+            });
+          } catch (withdrawError) {
+            // Publish failure instead of crashing to DLQ
+            await cryptoWalletEventsProducer.publishWithdrawCompleted({
+              userId: event.userId,
+              chainId: event.chainId,
+              chainName: '',
+              txHash: '',
+              success: false,
+              error: getErrorMessage(withdrawError),
+              amount: event.amount,
+              toAddress: event.toAddress,
+            }, { key: event.userId });
+
+            console.error(
+              `[${serviceId}] crypto withdrawal failed for user ${event.userId}:`,
+              getErrorMessage(withdrawError),
+            );
+            return;
+          }
 
           await cryptoWalletEventsProducer.publishWithdrawCompleted({
             userId: event.userId,
@@ -132,7 +153,7 @@ export function createCryptoWalletEventsConsumer(params: {
             `for user ${event.userId}, txHash=${result.hash}`,
           );
         } catch (error) {
-          console.error(`[${serviceId}] crypto withdrawal failed:`, getErrorMessage(error));
+          console.error(`[${serviceId}] crypto withdrawal event handling failed:`, getErrorMessage(error));
           throw error;
         }
         return;
@@ -151,36 +172,50 @@ export function createCryptoWalletEventsConsumer(params: {
 
           if (!recovered) {
             console.warn(`[${serviceId}] failed to decrypt mnemonic for balance check, user ${event.userId}`);
+            await cryptoWalletEventsProducer.publishBalanceResult({
+              userId: event.userId,
+              balances: [],
+            }, { key: event.userId });
             return;
           }
 
-          if (event.chainId) {
-            const balance = await walletService.getBalance(recovered.mnemonic, event.chainId);
+          try {
+            if (event.chainId) {
+              const balance = await walletService.getBalance(recovered.mnemonic, event.chainId);
+              await cryptoWalletEventsProducer.publishBalanceResult({
+                userId: event.userId,
+                balances: [{
+                  chainId: event.chainId,
+                  chainName: '',
+                  balance: balance.formatted,
+                  decimals: balance.decimal,
+                }],
+              }, { key: event.userId });
+            } else {
+              const allBalances = await walletService.getAllBalances(recovered.mnemonic);
+              await cryptoWalletEventsProducer.publishBalanceResult({
+                userId: event.userId,
+                balances: allBalances.map((b) => ({
+                  chainId: b.chainId,
+                  chainName: b.chainName,
+                  balance: b.balance.formatted,
+                  decimals: b.balance.decimal,
+                })),
+              }, { key: event.userId });
+            }
+          } catch (balanceError) {
+            console.error(`[${serviceId}] RPC balance check failed for user ${event.userId}:`, getErrorMessage(balanceError));
+            // Publish empty result rather than crashing to DLQ
             await cryptoWalletEventsProducer.publishBalanceResult({
               userId: event.userId,
-              balances: [{
-                chainId: event.chainId,
-                chainName: '',
-                balance: balance.formatted,
-                decimals: balance.decimal,
-              }],
+              balances: [],
             }, { key: event.userId });
-          } else {
-            const allBalances = await walletService.getAllBalances(recovered.mnemonic);
-            await cryptoWalletEventsProducer.publishBalanceResult({
-              userId: event.userId,
-              balances: allBalances.map((b) => ({
-                chainId: b.chainId,
-                chainName: b.chainName,
-                balance: b.balance.formatted,
-                decimals: b.balance.decimal,
-              })),
-            }, { key: event.userId });
+            return;
           }
 
           console.log(`[${serviceId}] balance result sent for user ${event.userId}`);
         } catch (error) {
-          console.error(`[${serviceId}] balance check failed:`, getErrorMessage(error));
+          console.error(`[${serviceId}] balance check event handling failed:`, getErrorMessage(error));
           throw error;
         }
         return;

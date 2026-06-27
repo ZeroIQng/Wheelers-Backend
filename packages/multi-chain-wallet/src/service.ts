@@ -61,6 +61,9 @@ export class MultiChainWalletService {
    * and encrypts the mnemonic with the given password.
    */
   createWallet(password: string): CryptoWallet {
+    if (!password || password.length < 1) {
+      throw new Error('Password is required for wallet encryption');
+    }
     const mnemonic = GenerateNewMnemonic();
     return this.importWallet(mnemonic, password);
   }
@@ -70,6 +73,12 @@ export class MultiChainWalletService {
    * Derives addresses for all configured chains and encrypts the mnemonic.
    */
   importWallet(mnemonic: string, password: string): CryptoWallet {
+    if (!password || password.length < 1) {
+      throw new Error('Password is required for wallet encryption');
+    }
+    if (!mnemonic || mnemonic.trim().length === 0) {
+      throw new Error('Mnemonic is required');
+    }
     ValidateMnemonic(mnemonic);
 
     const { encrypted, salt } = VM.encryptSeedPhrase(mnemonic, password);
@@ -117,7 +126,7 @@ export class MultiChainWalletService {
 
     return addresses.map((addr) => {
       const chain = this.chains.find(
-        (c) => c.chainId === addr.chainId && c.vmType === addr.vmType,
+        (c) => c.chainId === addr.chainId && c.name === addr.chainName,
       )!;
       return {
         chainId: addr.chainId,
@@ -131,13 +140,21 @@ export class MultiChainWalletService {
 
   /**
    * Get the deposit address for a specific chain.
+   * When multiple chains share the same chainId (e.g. Solana & Eclipse both use 501),
+   * pass chainName to disambiguate.
    */
   getDepositAddress(
     mnemonic: string,
     chainId: string | number,
     index: number = 0,
+    chainName?: string,
   ): DepositInfo | null {
     const all = this.getDepositAddresses(mnemonic, index);
+    if (chainName) {
+      return all.find(
+        (d) => String(d.chainId) === String(chainId) && d.chainName === chainName,
+      ) || null;
+    }
     return all.find((d) => String(d.chainId) === String(chainId)) || null;
   }
 
@@ -203,13 +220,34 @@ export class MultiChainWalletService {
     params: WithdrawParams,
     index: number = 0,
   ): Promise<WithdrawResult> {
+    if (!params.toAddress || params.toAddress.trim().length === 0) {
+      throw new Error('toAddress is required');
+    }
+    if (typeof params.amount !== 'number' || params.amount <= 0 || !isFinite(params.amount)) {
+      throw new Error('amount must be a positive finite number');
+    }
+
     const chain = this.findChain(params.chainId);
+
+    // Validate address format for the target chain
+    if (chain.vmType === 'SVM') {
+      try {
+        new PublicKey(params.toAddress);
+      } catch {
+        throw new Error(`Invalid Solana address: ${params.toAddress}`);
+      }
+    } else {
+      const { ethers } = require('ethers') as typeof import('ethers');
+      if (!ethers.isAddress(params.toAddress)) {
+        throw new Error(`Invalid EVM address: ${params.toAddress}`);
+      }
+    }
+
     const wallet = this.getChainWallet(mnemonic, params.chainId, index);
 
     let result: TransactionResult;
 
     if (params.token) {
-      // Token transfer
       if (chain.vmType === 'SVM') {
         result = await (wallet as SVMChainWallet).transferToken(
           params.token,
@@ -224,7 +262,6 @@ export class MultiChainWalletService {
         );
       }
     } else {
-      // Native transfer
       if (chain.vmType === 'SVM') {
         result = await (wallet as SVMChainWallet).transferNative(
           new PublicKey(params.toAddress),
@@ -275,18 +312,33 @@ export class MultiChainWalletService {
 
   // ── Internal helpers ─────────────────────────────────────────────────
 
-  private findChain(chainId: string | number): ChainWalletConfig {
-    const chain = this.chains.find((c) => String(c.chainId) === String(chainId));
+  private findChain(chainId: string | number, chainName?: string): ChainWalletConfig {
+    let chain: ChainWalletConfig | undefined;
+    if (chainName) {
+      chain = this.chains.find(
+        (c) => String(c.chainId) === String(chainId) && c.name === chainName,
+      );
+    } else {
+      chain = this.chains.find((c) => String(c.chainId) === String(chainId));
+    }
     if (!chain) throw new Error(`Chain ${chainId} not configured`);
     return chain;
   }
 
   private deriveAddresses(mnemonic: string, index: number): ChainAddress[] {
+    if (index < 0 || !Number.isInteger(index)) {
+      throw new Error('Derivation index must be a non-negative integer');
+    }
+
     const seed = VM.mnemonicToSeed(mnemonic);
     const evmVM = new EVMVM(seed);
     const svmVM = new SVMVM(seed);
 
     return this.chains.map((chain) => {
+      if (!chain.vmType) {
+        throw new Error(`Chain "${chain.name}" (${chain.chainId}) is missing vmType`);
+      }
+
       if (chain.vmType === 'SVM') {
         const { privateKey } = svmVM.generatePrivateKey(index);
         const wallet = new SVMChainWallet(chain, privateKey, index);
@@ -314,7 +366,16 @@ export class MultiChainWalletService {
     chainId: string | number,
     index: number,
   ): EVMChainWallet | SVMChainWallet {
+    if (index < 0 || !Number.isInteger(index)) {
+      throw new Error('Derivation index must be a non-negative integer');
+    }
+
     const chain = this.findChain(chainId);
+
+    if (!chain.vmType) {
+      throw new Error(`Chain "${chain.name}" (${chain.chainId}) is missing vmType`);
+    }
+
     const seed = VM.mnemonicToSeed(mnemonic);
 
     if (chain.vmType === 'SVM') {

@@ -674,3 +674,231 @@ test('crypto consumer ignores unknown event types without crashing', async () =>
     timestamp: new Date().toISOString(),
   }, baseContext);
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// 14. Edge cases — input validation
+// ═══════════════════════════════════════════════════════════════════════
+
+test('createWallet throws on empty password', () => {
+  const service = new MultiChainWalletService(TEST_CHAINS);
+  assert.throws(() => service.createWallet(''), /Password is required/);
+});
+
+test('importWallet throws on empty mnemonic', () => {
+  const service = new MultiChainWalletService(TEST_CHAINS);
+  assert.throws(() => service.importWallet('', TEST_PASSWORD), /Mnemonic is required/);
+  assert.throws(() => service.importWallet('   ', TEST_PASSWORD), /Mnemonic is required/);
+});
+
+test('importWallet throws on empty password', () => {
+  const service = new MultiChainWalletService(TEST_CHAINS);
+  assert.throws(
+    () => service.importWallet(TEST_MNEMONIC, ''),
+    /Password is required/,
+  );
+});
+
+test('withdraw throws on empty toAddress', async () => {
+  const service = new MultiChainWalletService(TEST_CHAINS);
+  await assert.rejects(
+    () => service.withdraw(TEST_MNEMONIC, { chainId: 1, toAddress: '', amount: 0.01 }),
+    /toAddress is required/,
+  );
+  await assert.rejects(
+    () => service.withdraw(TEST_MNEMONIC, { chainId: 1, toAddress: '   ', amount: 0.01 }),
+    /toAddress is required/,
+  );
+});
+
+test('withdraw throws on zero or negative amount', async () => {
+  const service = new MultiChainWalletService(TEST_CHAINS);
+  const validAddr = '0x0000000000000000000000000000000000000001';
+
+  await assert.rejects(
+    () => service.withdraw(TEST_MNEMONIC, { chainId: 1, toAddress: validAddr, amount: 0 }),
+    /amount must be a positive finite number/,
+  );
+  await assert.rejects(
+    () => service.withdraw(TEST_MNEMONIC, { chainId: 1, toAddress: validAddr, amount: -5 }),
+    /amount must be a positive finite number/,
+  );
+});
+
+test('withdraw throws on NaN or Infinity amount', async () => {
+  const service = new MultiChainWalletService(TEST_CHAINS);
+  const validAddr = '0x0000000000000000000000000000000000000001';
+
+  await assert.rejects(
+    () => service.withdraw(TEST_MNEMONIC, { chainId: 1, toAddress: validAddr, amount: NaN }),
+    /amount must be a positive finite number/,
+  );
+  await assert.rejects(
+    () => service.withdraw(TEST_MNEMONIC, { chainId: 1, toAddress: validAddr, amount: Infinity }),
+    /amount must be a positive finite number/,
+  );
+});
+
+test('withdraw throws on invalid EVM address', async () => {
+  const service = new MultiChainWalletService(TEST_CHAINS);
+  await assert.rejects(
+    () => service.withdraw(TEST_MNEMONIC, { chainId: 1, toAddress: 'not-an-address', amount: 0.01 }),
+    /Invalid EVM address/,
+  );
+});
+
+test('withdraw throws on invalid Solana address for SVM chain', async () => {
+  const service = new MultiChainWalletService(TEST_CHAINS);
+  await assert.rejects(
+    () => service.withdraw(TEST_MNEMONIC, { chainId: 501, toAddress: '0xinvalid', amount: 0.01 }),
+    /Invalid Solana address/,
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// 15. Edge cases — negative derivation index
+// ═══════════════════════════════════════════════════════════════════════
+
+test('getDepositAddresses throws on negative index', () => {
+  const service = new MultiChainWalletService(TEST_CHAINS);
+  assert.throws(
+    () => service.getDepositAddresses(TEST_MNEMONIC, -1),
+    /Derivation index must be a non-negative integer/,
+  );
+});
+
+test('getDepositAddresses throws on fractional index', () => {
+  const service = new MultiChainWalletService(TEST_CHAINS);
+  assert.throws(
+    () => service.getDepositAddresses(TEST_MNEMONIC, 1.5),
+    /Derivation index must be a non-negative integer/,
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// 16. Edge cases — chain with missing vmType
+// ═══════════════════════════════════════════════════════════════════════
+
+test('deriving addresses throws when chain has no vmType', () => {
+  const badChains = [{
+    chainId: 999,
+    name: 'Bad Chain',
+    rpcUrl: 'https://example.com',
+    explorerUrl: 'https://example.com',
+    nativeToken: { name: 'BAD', symbol: 'BAD', decimals: 18 },
+    // vmType intentionally missing
+  }];
+
+  const service = new MultiChainWalletService(badChains);
+  assert.throws(
+    () => service.createWallet(TEST_PASSWORD),
+    /missing vmType/,
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// 17. Edge cases — duplicate chainId disambiguation
+// ═══════════════════════════════════════════════════════════════════════
+
+test('getDepositAddress with chainName disambiguates duplicate chainIds', () => {
+  // Solana and Eclipse both use chainId 501
+  const dualChains = [
+    {
+      chainId: 501,
+      name: 'Solana Mainnet',
+      rpcUrl: 'https://api.mainnet-beta.solana.com',
+      explorerUrl: 'https://explorer.solana.com',
+      nativeToken: { name: 'Solana', symbol: 'SOL', decimals: 9 },
+      vmType: 'SVM',
+    },
+    {
+      chainId: 501,
+      name: 'Eclipse Mainnet',
+      rpcUrl: 'https://mainnetbeta-rpc.eclipse.xyz',
+      explorerUrl: 'https://explorer.eclipse.xyz/',
+      nativeToken: { name: 'Eclipse', symbol: 'ETH', decimals: 9 },
+      vmType: 'SVM',
+    },
+  ];
+
+  const service = new MultiChainWalletService(dualChains);
+
+  // Without chainName, returns the first match (Solana)
+  const first = service.getDepositAddress(TEST_MNEMONIC, 501);
+  assert.equal(first.chainName, 'Solana Mainnet');
+
+  // With chainName, returns the specific chain
+  const eclipse = service.getDepositAddress(TEST_MNEMONIC, 501, 0, 'Eclipse Mainnet');
+  assert.equal(eclipse.chainName, 'Eclipse Mainnet');
+
+  const solana = service.getDepositAddress(TEST_MNEMONIC, 501, 0, 'Solana Mainnet');
+  assert.equal(solana.chainName, 'Solana Mainnet');
+
+  // Both are SVM with chainId 501 but different addresses are generated
+  // (same derivation path so same address, but the chainName distinguishes them)
+  assert.equal(eclipse.address, solana.address);  // Same key derivation
+  assert.notEqual(eclipse.nativeToken.symbol, solana.nativeToken.symbol);
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// 18. Edge cases — consumer gracefully handles withdraw crash
+// ═══════════════════════════════════════════════════════════════════════
+
+test('crypto consumer publishes failure when withdraw throws (e.g. bad address validation)', async () => {
+  const service = new MultiChainWalletService();
+  const wallet = service.createWallet(TEST_PASSWORD);
+
+  const publishCalls = [];
+
+  const consumer = createCryptoWalletEventsConsumer({
+    cryptoWalletEventsProducer: {
+      publishWithdrawCompleted: async (payload, options) => {
+        publishCalls.push({ payload, options });
+      },
+    },
+  });
+
+  // Send a withdraw with an invalid EVM address — should publish failure, not crash
+  await consumer.handle({
+    eventType: 'CRYPTO_WITHDRAW_REQUESTED',
+    userId,
+    encryptedMnemonic: wallet.encryptedMnemonic,
+    encryptionSalt: wallet.encryptionSalt,
+    password: TEST_PASSWORD,
+    chainId: 1,
+    toAddress: 'totally-not-an-address',
+    amount: 0.01,
+    timestamp: new Date().toISOString(),
+  }, baseContext);
+
+  assert.equal(publishCalls.length, 1);
+  assert.equal(publishCalls[0].payload.success, false);
+  assert.ok(publishCalls[0].payload.error.length > 0, 'should have error message');
+  assert.equal(publishCalls[0].payload.toAddress, 'totally-not-an-address');
+});
+
+test('crypto consumer publishes empty balances on decryption failure', async () => {
+  const service = new MultiChainWalletService();
+  const wallet = service.createWallet(TEST_PASSWORD);
+
+  const publishCalls = [];
+
+  const consumer = createCryptoWalletEventsConsumer({
+    cryptoWalletEventsProducer: {
+      publishBalanceResult: async (payload, options) => {
+        publishCalls.push({ payload, options });
+      },
+    },
+  });
+
+  await consumer.handle({
+    eventType: 'CRYPTO_BALANCE_REQUESTED',
+    userId,
+    encryptedMnemonic: wallet.encryptedMnemonic,
+    encryptionSalt: wallet.encryptionSalt,
+    password: 'wrong-password',
+    timestamp: new Date().toISOString(),
+  }, baseContext);
+
+  assert.equal(publishCalls.length, 1);
+  assert.deepEqual(publishCalls[0].payload.balances, []);
+});
