@@ -65,6 +65,8 @@ export class PouchLiquifiaClient {
       currency?: string;
       fundingLimit?: number;
       settlementMode?: 'held' | 'auto';
+      /** Stable idempotency key — pass the userId to prevent duplicate VAs on retry. */
+      idempotencyKey?: string;
     },
   ): Promise<PouchVirtualAccount> {
     const body: Record<string, unknown> = {};
@@ -76,7 +78,7 @@ export class PouchLiquifiaClient {
     const res = await this.post<PouchVirtualAccount>(
       `/customers/${customerId}/virtual-accounts`,
       body,
-      { 'X-Idempotency-Key': randomUUID() },
+      { 'X-Idempotency-Key': opts?.idempotencyKey ?? randomUUID() },
     );
     return res.data;
   }

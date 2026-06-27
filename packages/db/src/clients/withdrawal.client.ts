@@ -157,68 +157,84 @@ export const withdrawalClient = {
       });
     }),
 
-  settle: async (providerReference: string) =>
-    prisma.$transaction(async (tx: TxClient) => {
-      const request = await tx.withdrawalRequest.findFirst({
-        where: { providerReference },
-        include: {
-          reservation: true,
-          wallet: true,
-        },
-      });
+  settle: async (providerReference: string) => {
+    try {
+      return await prisma.$transaction(async (tx: TxClient) => {
+        const request = await tx.withdrawalRequest.findFirst({
+          where: { providerReference },
+          include: {
+            reservation: true,
+            wallet: true,
+          },
+        });
 
-      if (!request) {
-        return null;
+        if (!request) {
+          return null;
+        }
+
+        if (request.status === 'SETTLED') {
+          return request;
+        }
+
+        if (request.reservation.status !== 'ACTIVE') {
+          throw new Error('Withdrawal reservation is not active.');
+        }
+
+        const wallet = await tx.wallet.update({
+          where: { id: request.walletId },
+          data: {
+            lockedNgn: { decrement: request.reservedAmountNgn },
+          },
+        });
+
+        await tx.transaction.create({
+          data: {
+            walletId: request.walletId,
+            type: 'WITHDRAWAL',
+            direction: 'DEBIT',
+            amountNgn: request.reservedAmountNgn,
+            balanceAfterNgn: wallet.balanceNgn,
+            referenceId: request.id,
+            metadata: asJson({
+              providerReference: request.providerReference,
+              pouchPayoutId: request.pouchPayoutId,
+              bankNetworkId: request.bankNetworkId,
+            }),
+          },
+        });
+
+        await tx.walletReservation.update({
+          where: { id: request.reservationId },
+          data: {
+            status: 'CONSUMED',
+            consumedAt: new Date(),
+          },
+        });
+
+        return tx.withdrawalRequest.update({
+          where: { id: request.id },
+          data: {
+            status: 'SETTLED',
+            settledAt: new Date(),
+            failureReason: null,
+          },
+      });
+      });
+    } catch (error) {
+      // Concurrent settle race: another call already settled this withdrawal.
+      // Return the settled request instead of crashing.
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const settled = await prisma.withdrawalRequest.findFirst({
+          where: { providerReference },
+        });
+        if (settled?.status === 'SETTLED') return settled;
       }
-
-      if (request.status === 'SETTLED') {
-        return request;
-      }
-
-      if (request.reservation.status !== 'ACTIVE') {
-        throw new Error('Withdrawal reservation is not active.');
-      }
-
-      const wallet = await tx.wallet.update({
-        where: { id: request.walletId },
-        data: {
-          lockedNgn: { decrement: request.reservedAmountNgn },
-        },
-      });
-
-      await tx.transaction.create({
-        data: {
-          walletId: request.walletId,
-          type: 'WITHDRAWAL',
-          direction: 'DEBIT',
-          amountNgn: request.reservedAmountNgn,
-          balanceAfterNgn: wallet.balanceNgn,
-          referenceId: request.id,
-          metadata: asJson({
-            providerReference: request.providerReference,
-            pouchPayoutId: request.pouchPayoutId,
-            bankNetworkId: request.bankNetworkId,
-          }),
-        },
-      });
-
-      await tx.walletReservation.update({
-        where: { id: request.reservationId },
-        data: {
-          status: 'CONSUMED',
-          consumedAt: new Date(),
-        },
-      });
-
-      return tx.withdrawalRequest.update({
-        where: { id: request.id },
-        data: {
-          status: 'SETTLED',
-          settledAt: new Date(),
-          failureReason: null,
-        },
-      });
-    }),
+      throw error;
+    }
+  },
 
   listByUser: (userId: string, limit = 20, cursor?: string) =>
     prisma.withdrawalRequest.findMany({

@@ -847,10 +847,13 @@ export async function handleProvisionVirtualAccountRoute(
       return;
     }
 
-    // Ensure wallet exists
+    // Ensure wallet exists (catch P2002 in case of concurrent creation)
     const wallet = await walletClient.findByUserId(user.id);
     if (!wallet) {
-      await walletClient.create(user.id);
+      await walletClient.create(user.id).catch((err) => {
+        if (err && typeof err === "object" && "code" in err && err.code === "P2002") return;
+        throw err;
+      });
     }
 
     // Fetch full user for name
@@ -871,22 +874,46 @@ export async function handleProvisionVirtualAccountRoute(
       await userClient.updatePouchCustomerId(user.id, pouchCustomerId);
     }
 
-    // Create virtual account
+    // Create virtual account (idempotency key = userId to prevent duplicates on retry)
     const va = await deps.pouchLiquifiaClient.createVirtualAccount(
       pouchCustomerId,
-      { country: "NG", currency: "NGN" },
+      { country: "NG", currency: "NGN", idempotencyKey: `va-provision-${user.id}` },
     );
 
-    const created = await virtualAccountClient.create({
-      userId: user.id,
-      pouchCustomerId,
-      pouchVirtualAccountId: va.id,
-      bankName: va.bank_name,
-      accountNumber: va.account_number,
-      accountName: va.account_name,
-      currency: va.currency,
-      country: va.country,
-    });
+    let created;
+    try {
+      created = await virtualAccountClient.create({
+        userId: user.id,
+        pouchCustomerId,
+        pouchVirtualAccountId: va.id,
+        bankName: va.bank_name,
+        accountNumber: va.account_number,
+        accountName: va.account_name,
+        currency: va.currency,
+        country: va.country,
+      });
+    } catch (dbError) {
+      // Concurrent provisioning race — another request already saved this VA
+      if (
+        dbError &&
+        typeof dbError === "object" &&
+        "code" in dbError &&
+        dbError.code === "P2002"
+      ) {
+        const raced = await virtualAccountClient.findByUserId(user.id);
+        if (raced) {
+          sendJson(res, 200, {
+            accountNumber: raced.accountNumber,
+            accountName: raced.accountName,
+            bankName: raced.bankName,
+            currency: raced.currency,
+            alreadyProvisioned: true,
+          });
+          return;
+        }
+      }
+      throw dbError;
+    }
 
     sendJson(res, 201, {
       accountNumber: created.accountNumber,
