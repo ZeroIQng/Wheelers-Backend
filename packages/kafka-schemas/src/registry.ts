@@ -9,6 +9,7 @@ import { GpsUpdateEvent, GpsProcessedEvent } from './events/gps.events';
 import { GroupRideEvent }    from './events/group-ride.events';
 import { ComplianceEvent }   from './events/compliance.events';
 import { NotificationEvent } from './events/notification.events';
+import { CryptoWalletEvent } from './events/crypto-wallet.events';
 
 // Maps every live topic to its Zod discriminated union schema.
 // DLQ topics are intentionally omitted — DLQ messages are raw strings
@@ -23,7 +24,8 @@ const TOPIC_SCHEMAS = {
   [TOPICS.GPS_PROCESSED]:       GpsProcessedEvent,
   [TOPICS.GROUP_RIDE_EVENTS]:   GroupRideEvent,
   [TOPICS.COMPLIANCE_EVENTS]:   ComplianceEvent,
-  [TOPICS.NOTIFICATION_EVENTS]: NotificationEvent,
+  [TOPICS.NOTIFICATION_EVENTS]:  NotificationEvent,
+  [TOPICS.CRYPTO_WALLET_EVENTS]: CryptoWalletEvent,
 } as const;
 
 type LiveTopic = keyof typeof TOPIC_SCHEMAS;

@@ -7,8 +7,9 @@ export const TOPICS = {
   GPS_STREAM:           'gps.stream',
   GPS_PROCESSED:        'gps.processed',
   GROUP_RIDE_EVENTS:    'group-ride.events',
-  COMPLIANCE_EVENTS:    'compliance.events',
-  NOTIFICATION_EVENTS:  'notification.events',
+  COMPLIANCE_EVENTS:        'compliance.events',
+  NOTIFICATION_EVENTS:      'notification.events',
+  CRYPTO_WALLET_EVENTS:     'crypto-wallet.events',
 
   // Dead-letter queues — one per topic
   USER_EVENTS_DLQ:          'user.events.dlq',
@@ -19,8 +20,9 @@ export const TOPICS = {
   GPS_STREAM_DLQ:           'gps.stream.dlq',
   GPS_PROCESSED_DLQ:        'gps.processed.dlq',
   GROUP_RIDE_EVENTS_DLQ:    'group-ride.events.dlq',
-  COMPLIANCE_EVENTS_DLQ:    'compliance.events.dlq',
-  NOTIFICATION_EVENTS_DLQ:  'notification.events.dlq',
+  COMPLIANCE_EVENTS_DLQ:        'compliance.events.dlq',
+  NOTIFICATION_EVENTS_DLQ:      'notification.events.dlq',
+  CRYPTO_WALLET_EVENTS_DLQ:     'crypto-wallet.events.dlq',
 } as const;
 
 export type Topic = (typeof TOPICS)[keyof typeof TOPICS];

@@ -14,7 +14,8 @@
     "@wheleers/config": "*",
     "@wheleers/db": "*",
     "@wheleers/kafka-client": "*",
-    "@wheleers/kafka-schemas": "*"
+    "@wheleers/kafka-schemas": "*",
+    "@wheleers/multi-chain-wallet": "*"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

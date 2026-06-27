@@ -4,9 +4,11 @@ import { createConsumer, createProducer } from '@wheleers/kafka-client';
 import { TOPICS } from '@wheleers/kafka-schemas';
 
 import { createWalletEventsProducer } from './producers/wallet-events.producer';
+import { createCryptoWalletEventsProducer } from './producers/crypto-wallet-events.producer';
 import { createPaymentEventsConsumer } from './consumers/payment-events.consumer';
 import { createRideEventsConsumer } from './consumers/ride-events.consumer';
 import { createUserEventsConsumer } from './consumers/user-events.consumer';
+import { createCryptoWalletEventsConsumer } from './consumers/crypto-wallet-events.consumer';
 
 const SERVICE_ID = 'wallet-service';
 
@@ -29,6 +31,7 @@ async function bootstrap(): Promise<void> {
   const consumer = await createConsumer({ groupId: SERVICE_ID });
 
   const walletEventsProducer = createWalletEventsProducer(producer);
+  const cryptoWalletEventsProducer = createCryptoWalletEventsProducer(producer);
 
   const userEventsConsumer = createUserEventsConsumer({
     walletRepository: walletClient,
@@ -43,9 +46,13 @@ async function bootstrap(): Promise<void> {
     walletEventsProducer,
     serviceId: SERVICE_ID,
   });
+  const cryptoWalletEventsConsumer = createCryptoWalletEventsConsumer({
+    cryptoWalletEventsProducer,
+    serviceId: SERVICE_ID,
+  });
 
   await consumer.subscribe(
-    [TOPICS.USER_EVENTS, TOPICS.RIDE_EVENTS, TOPICS.PAYMENT_EVENTS],
+    [TOPICS.USER_EVENTS, TOPICS.RIDE_EVENTS, TOPICS.PAYMENT_EVENTS, TOPICS.CRYPTO_WALLET_EVENTS],
     async (value, ctx) => {
       if (ctx.topic === TOPICS.USER_EVENTS) {
         await userEventsConsumer.handle(value, ctx);
@@ -59,6 +66,11 @@ async function bootstrap(): Promise<void> {
 
       if (ctx.topic === TOPICS.PAYMENT_EVENTS) {
         await paymentEventsConsumer.handle(value, ctx);
+        return;
+      }
+
+      if (ctx.topic === TOPICS.CRYPTO_WALLET_EVENTS) {
+        await cryptoWalletEventsConsumer.handle(value, ctx);
         return;
       }
     },
