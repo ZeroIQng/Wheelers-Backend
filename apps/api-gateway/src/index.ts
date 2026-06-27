@@ -65,7 +65,7 @@ import {
   handleWalletTransactionsRoute,
   handleWalletDepositInfoRoute,
 } from "./http/wallet.route";
-import { PouchLiquifiaClient } from "./http/pouch-liquifia.client";
+import { PouchLiquifiaClient } from "@wheleers/pouch-client";
 import {
   handleSendPhoneOtpRoute,
   handleVerifyPhoneOtpRoute,
@@ -244,10 +244,10 @@ async function bootstrap(): Promise<void> {
 
   const publisher = new GatewayPublisher(producer);
 
-  const pouchLiquifiaClient = new PouchLiquifiaClient(
-    gatewayEnv.POUCH_LIQUIFIA_BASE_URL,
-    gatewayEnv.POUCH_LIQUIFIA_API_KEY,
-  );
+  const pouchLiquifiaClient = new PouchLiquifiaClient({
+    baseUrl: gatewayEnv.POUCH_LIQUIFIA_BASE_URL,
+    apiKey: gatewayEnv.POUCH_LIQUIFIA_API_KEY,
+  });
 
   const routePlanner = new GoogleMapsRoutePlanner(
     gatewayEnv.GOOGLE_MAPS_BASE_URL,

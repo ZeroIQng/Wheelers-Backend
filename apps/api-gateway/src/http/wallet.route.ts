@@ -14,7 +14,7 @@ import {
   PouchLiquifiaClient,
   type PouchBankAccount,
   type PouchPayout,
-} from "./pouch-liquifia.client";
+} from "@wheleers/pouch-client";
 import type { RedisClient } from "../redis/client";
 
 // ─── Deps ──────────────────────────────────────────────────────────

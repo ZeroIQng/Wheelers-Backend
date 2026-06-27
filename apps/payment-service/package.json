@@ -14,7 +14,8 @@
     "@wheleers/db": "*",
     "@wheleers/kafka-client": "*",
     "@wheleers/kafka-schemas": "*",
-    "@wheleers/config": "*"
+    "@wheleers/config": "*",
+    "@wheleers/pouch-client": "*"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

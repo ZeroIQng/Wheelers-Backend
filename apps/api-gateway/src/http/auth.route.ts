@@ -9,7 +9,7 @@ import { createLocalAccessToken, hashPassword, verifyPassword } from '../auth/lo
 import type { GatewayRole } from '../types';
 import { getString, isRecord } from '../utils/object';
 import type { GatewayPublisher } from '../websocket/publisher';
-import type { PouchLiquifiaClient } from './pouch-liquifia.client';
+import type { PouchLiquifiaClient } from '@wheleers/pouch-client';
 import { readJsonBody, sendJson } from './utils';
 
 interface AuthRouteDeps {
