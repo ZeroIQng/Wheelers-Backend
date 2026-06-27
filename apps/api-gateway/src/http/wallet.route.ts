@@ -16,6 +16,7 @@ import {
   type PouchPayout,
 } from "@wheleers/pouch-client";
 import type { RedisClient } from "../redis/client";
+import type { PayoutCreatedEvent } from "@wheleers/kafka-schemas";
 
 // ─── Deps ──────────────────────────────────────────────────────────
 
@@ -561,6 +562,20 @@ export async function handleCreateWalletWithdrawalRoute(
           pouchPayoutId: payout.id,
           providerReference: payout.reference,
         });
+
+        // Publish PAYOUT_CREATED event for payment-service to track lifecycle
+        const payoutCreatedEvent: PayoutCreatedEvent = {
+          eventType: 'PAYOUT_CREATED',
+          userId: user.id,
+          pouchPayoutId: payout.id,
+          withdrawalId: reserveResult.request.id,
+          amountNgn: requestedAmountNgn,
+          bankAccountNumber: accountNumber,
+          bankAccountName: accountName,
+          bankNetworkId: bankUuid,
+          timestamp: new Date().toISOString(),
+        };
+        await deps.publisher.publishPaymentEvent(payoutCreatedEvent);
 
         console.log("[api-gateway][wallet-withdrawal] payout created", {
           withdrawalRequestId: reserveResult.request.id,
