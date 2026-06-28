@@ -21,6 +21,11 @@ export function createRideEventsConsumer(params: {
       if (!event) return;
 
       if (event.eventType === 'RIDE_DRIVER_ASSIGNED') {
+        // Cash rides skip wallet hold — driver collects cash directly
+        if (event.paymentMethod === 'CASH') {
+          return;
+        }
+
         try {
           const wallet = await walletRepository.findByUserId(event.riderId);
           if (!wallet) {
@@ -33,7 +38,7 @@ export function createRideEventsConsumer(params: {
             walletId: wallet.id,
             riderId: event.riderId,
             driverUserId: event.driverUserId,
-            amountNgn: event.lockedFareNgn,
+            amountNgn: event.agreedFareNgn,
           });
 
           if (!holdResult.applied) {
@@ -43,7 +48,7 @@ export function createRideEventsConsumer(params: {
           await walletEventsProducer.publishLocked({
             walletId: holdResult.wallet.id,
             userId: holdResult.wallet.userId,
-            lockedAmountNgn: event.lockedFareNgn,
+            lockedAmountNgn: event.agreedFareNgn,
             rideId: event.rideId,
             reason: 'ride_fare_hold',
           }, { key: event.rideId });
@@ -85,6 +90,11 @@ export function createRideEventsConsumer(params: {
       }
 
       if (event.eventType === 'RIDE_COMPLETED') {
+        // Cash rides skip wallet settlement — driver already collected cash
+        if (event.paymentMethod === 'CASH') {
+          return;
+        }
+
         try {
           const result = await walletRepository.completeRideHoldWithDriverPayout({
             rideId: event.rideId,

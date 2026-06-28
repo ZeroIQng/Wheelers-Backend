@@ -1,5 +1,4 @@
-import { FEES } from './constants/fees';
-import { calculateRidePrice, type RidePriceBreakdown } from './pricing';
+import { calculateSuggestedFare, type SuggestedFare } from './pricing';
 
 export type RouteWaypoint = {
   lat: number;
@@ -19,8 +18,11 @@ export type PlannedRouteGeometry = {
 export type PlannedRouteMetrics = {
   distanceKm: number;
   durationSeconds: number;
+  suggestedFareNgn: number;
+  minOfferNgn: number;
+  ratePerKmNgn: number;
   fareEstimateNgn: number;
-  ridePrice: RidePriceBreakdown;
+  ridePrice: SuggestedFare;
   geometry: PlannedRouteGeometry;
 };
 
@@ -93,13 +95,15 @@ export class GoogleMapsRoutePlanner {
     const route = extractPrimaryRoute(payload);
     const distanceKm = round3(route.distanceMeters / 1000);
     const durationSeconds = Math.max(0, Math.round(route.durationSeconds));
-    const ridePrice = calculateRidePrice(distanceKm);
-    const fareEstimateNgn = estimateRideFareNgn(ridePrice);
+    const ridePrice = calculateSuggestedFare(distanceKm);
 
     return {
       distanceKm,
       durationSeconds,
-      fareEstimateNgn,
+      suggestedFareNgn: ridePrice.suggestedFareNgn,
+      minOfferNgn: ridePrice.minOfferNgn,
+      ratePerKmNgn: ridePrice.ratePerKmNgn,
+      fareEstimateNgn: ridePrice.suggestedFareNgn,
       ridePrice,
       geometry: {
         coordinates: route.coordinates,
@@ -136,9 +140,9 @@ function buildWaypoint(point: RouteWaypoint): {
 }
 
 export function estimateRideFareNgn(
-  ridePrice: RidePriceBreakdown,
+  ridePrice: SuggestedFare,
 ): number {
-  return round2(Math.max(ridePrice.tripPrice, FEES.MIN_RIDE_FARE_NGN));
+  return ridePrice.suggestedFareNgn;
 }
 
 function extractPrimaryRoute(payload: unknown): {

@@ -4,7 +4,9 @@ import type { MessageContext } from '@wheleers/kafka-client';
 import {
   safeParseKafkaEvent,
   TOPICS,
+  type RideCounterOfferEvent,
   type RideDriverRejectedEvent,
+  type RideOfferAcceptedEvent,
   type RideRouteUpdateRequestedEvent,
   type RideRequestedEvent,
 } from '@wheleers/kafka-schemas';
@@ -12,6 +14,8 @@ import {
 import type { PendingRideMatch, RideServiceState } from '../index';
 import type { RideEventsProducer } from '../producers/ride-events.producer';
 import { matchDriver } from '../handlers/match-driver.handler';
+
+const BID_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
 
 export function createRideRequestedConsumer(params: {
   state: RideServiceState;
@@ -31,8 +35,18 @@ export function createRideRequestedConsumer(params: {
         return;
       }
 
+      if (event.eventType === 'RIDE_COUNTER_OFFER') {
+        handleCounterOffer(event);
+        return;
+      }
+
+      if (event.eventType === 'RIDE_OFFER_ACCEPTED') {
+        await handleOfferAccepted(event);
+        return;
+      }
+
       if (event.eventType === 'RIDE_DRIVER_REJECTED') {
-        await handleDriverRejected(event);
+        handleDriverRejected(event);
         return;
       }
 
@@ -91,7 +105,7 @@ export function createRideRequestedConsumer(params: {
       },
     ]);
 
-    // Persist (best-effort). A duplicate event should still be allowed to resume matching.
+    // Persist ride (best-effort)
     try {
       await rideClient.create({
         id: event.rideId,
@@ -104,6 +118,8 @@ export function createRideRequestedConsumer(params: {
         destAddress: event.destination.address,
         stops: event.stops,
         fareEstimateNgn: event.fareEstimateNgn,
+        paymentMethod: event.paymentMethod,
+        riderOfferNgn: event.riderOfferNgn,
         status: 'MATCHING',
       });
     } catch (err) {
@@ -115,6 +131,7 @@ export function createRideRequestedConsumer(params: {
       }
     }
 
+    // Find nearby drivers
     const result = await matchDriver({
       rideEnv,
       onlineDrivers: state.onlineDrivers,
@@ -123,10 +140,12 @@ export function createRideRequestedConsumer(params: {
 
     if (!result.ok) {
       console.log(`[ride-service] no matching drivers for ride ${event.rideId}: ${result.reason}`);
-      await cancelNoDrivers(event);
+      // Don't cancel — start the bid timeout instead
+      startBidTimeout(event);
       return;
     }
 
+    // Clear any existing pending match
     const existing = state.pendingMatchesByRideId.get(event.rideId);
     if (existing?.timeout) clearTimeout(existing.timeout);
 
@@ -138,22 +157,78 @@ export function createRideRequestedConsumer(params: {
       timeout: null,
     });
 
-    await offerNextDriver(event.rideId);
+    // Broadcast to ALL nearby drivers simultaneously
+    const expiresAt = new Date(Date.now() + BID_TIMEOUT_MS);
+
+    await rideEventsProducer.broadcastRideOffer({
+      drivers: result.drivers,
+      rideRequested: event,
+      expiresAt,
+    });
+
+    console.log(`[ride-service] broadcasted ride ${event.rideId} to ${result.drivers.length} drivers`);
+
+    // Start bid timeout
+    startBidTimeout(event);
   }
 
-  async function handleDriverRejected(event: RideDriverRejectedEvent): Promise<void> {
+  function handleCounterOffer(event: RideCounterOfferEvent): void {
     const pending = state.pendingMatchesByRideId.get(event.rideId);
     if (!pending) return;
 
-    if (pending.offeredDriverId !== event.driverId) {
-      return;
+    // Reset the bid timeout since we got activity
+    if (pending.timeout) {
+      clearTimeout(pending.timeout);
+      pending.timeout = null;
     }
 
-    if (pending.timeout) clearTimeout(pending.timeout);
-    pending.timeout = null;
-    pending.offeredDriverId = null;
+    // Counter-offer is forwarded to rider via gateway Kafka consumer → WebSocket
+    // No action needed here other than tracking
+    console.log(`[ride-service] counter-offer on ride ${event.rideId} from driver ${event.driverId}: ₦${event.counterOfferNgn}`);
+  }
 
-    await offerNextDriver(event.rideId);
+  async function handleOfferAccepted(event: RideOfferAcceptedEvent): Promise<void> {
+    const pending = state.pendingMatchesByRideId.get(event.rideId);
+    if (!pending) return;
+
+    // Clear timeout
+    if (pending.timeout) clearTimeout(pending.timeout);
+
+    // Find the driver info from candidates or online drivers for vehicle details
+    const driverInfo = pending.candidates.find((d) => d.driverId === event.driverId)
+      ?? state.onlineDrivers.get(event.driverId);
+
+    // Publish RIDE_DRIVER_ASSIGNED
+    // Driver name/rating come from the counter-offer event (stored client-side);
+    // vehicle info comes from the in-memory driver pool.
+    await rideEventsProducer.rideDriverAssigned({
+      eventType: 'RIDE_DRIVER_ASSIGNED',
+      rideId: event.rideId,
+      riderId: event.riderId,
+      driverId: event.driverId,
+      driverUserId: event.driverUserId,
+      driverName: 'Driver',
+      driverRating: 5.0,
+      vehiclePlate: driverInfo?.vehiclePlate ?? '',
+      vehicleModel: driverInfo?.vehicleModel ?? '',
+      etaSeconds: 0,
+      agreedFareNgn: event.agreedFareNgn,
+      lockedFareNgn: event.agreedFareNgn,
+      paymentMethod: event.paymentMethod,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Clean up pending state
+    state.pendingMatchesByRideId.delete(event.rideId);
+  }
+
+  function handleDriverRejected(event: RideDriverRejectedEvent): void {
+    const pending = state.pendingMatchesByRideId.get(event.rideId);
+    if (!pending) return;
+
+    // Remove driver from candidates
+    pending.candidates = pending.candidates.filter((d) => d.driverId !== event.driverId);
+    pending.attemptedDriverIds.add(event.driverId);
   }
 
   function handleRouteUpdateRequested(event: RideRouteUpdateRequestedEvent): void {
@@ -172,86 +247,33 @@ export function createRideRequestedConsumer(params: {
     };
   }
 
-  async function offerNextDriver(rideId: string): Promise<void> {
-    const pending = state.pendingMatchesByRideId.get(rideId);
-    if (!pending) return;
+  function startBidTimeout(event: RideRequestedEvent): void {
+    const pending = state.pendingMatchesByRideId.get(event.rideId);
 
-    let nextDriver = findNextAvailableCandidate(pending);
-
-    if (!nextDriver) {
-      await refreshCandidates(pending);
-      nextDriver = findNextAvailableCandidate(pending);
-    }
-
-    if (!nextDriver) {
-      await cancelNoDrivers(pending.rideRequested);
-      return;
-    }
-
-    pending.attemptedDriverIds.add(nextDriver.driverId);
-    pending.offeredDriverId = nextDriver.driverId;
-
-    const timeoutMs = Number(rideEnv.DRIVER_ACCEPT_TIMEOUT_S) * 1000;
-    const expiresAt = new Date(Date.now() + timeoutMs);
-
-    await rideEventsProducer.rideOfferNotification({
-      driver: nextDriver,
-      rideRequested: pending.rideRequested,
-      expiresAt,
-    });
-
-    pending.timeout = setTimeout(() => {
-      void rideEventsProducer.rideDriverRejected({
-        eventType: 'RIDE_DRIVER_REJECTED',
-        rideId,
-        riderId: pending.rideRequested.riderId,
-        driverId: nextDriver.driverId,
-        reason: 'timeout',
+    const timeout = setTimeout(() => {
+      void rideEventsProducer.rideBidTimeout({
+        eventType: 'RIDE_BID_TIMEOUT',
+        rideId: event.rideId,
+        riderId: event.riderId,
         timestamp: new Date().toISOString(),
       }).catch((err) => {
-        console.warn(`[ride-service] driver timeout reject skipped:`, (err as any)?.message ?? err);
+        console.warn(`[ride-service] bid timeout publish failed:`, (err as any)?.message ?? err);
       });
-    }, timeoutMs);
-    pending.timeout.unref();
+    }, BID_TIMEOUT_MS);
+    timeout.unref();
 
-    console.log(`[ride-service] offered ride ${rideId} to driver ${nextDriver.driverId}`);
-  }
-
-  function findNextAvailableCandidate(pending: PendingRideMatch) {
-    return pending.candidates.find((driver) =>
-      !pending.attemptedDriverIds.has(driver.driverId) &&
-      state.onlineDrivers.has(driver.driverId)
-    );
-  }
-
-  async function refreshCandidates(pending: PendingRideMatch): Promise<void> {
-    const result = await matchDriver({
-      rideEnv,
-      onlineDrivers: state.onlineDrivers,
-      rideRequested: pending.rideRequested,
-    });
-    if (!result.ok) return;
-
-    const knownDriverIds = new Set(pending.candidates.map((driver) => driver.driverId));
-    for (const driver of result.drivers) {
-      if (knownDriverIds.has(driver.driverId) || pending.attemptedDriverIds.has(driver.driverId)) {
-        continue;
-      }
-      pending.candidates.push(driver);
-      knownDriverIds.add(driver.driverId);
+    if (pending) {
+      pending.timeout = timeout;
+    } else {
+      // No drivers found — create a minimal pending entry for the timeout
+      state.pendingMatchesByRideId.set(event.rideId, {
+        rideRequested: event,
+        candidates: [],
+        attemptedDriverIds: new Set(),
+        offeredDriverId: null,
+        timeout,
+      });
     }
-  }
-
-  async function cancelNoDrivers(event: RideRequestedEvent): Promise<void> {
-    clearPendingMatch(event.rideId);
-
-    await rideEventsProducer.rideCancelled({
-      eventType: 'RIDE_CANCELLED',
-      rideId: event.rideId,
-      riderId: event.riderId,
-      reason: 'no_drivers_available',
-      timestamp: new Date().toISOString(),
-    });
   }
 
   function clearPendingMatch(rideId: string): void {

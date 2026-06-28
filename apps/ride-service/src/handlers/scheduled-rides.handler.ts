@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ScheduledRideStatus, scheduledRideClient } from '@wheleers/db';
 import { TOPICS } from '@wheleers/kafka-schemas';
-import type { RideEnv } from '@wheleers/config';
+import { calculateSuggestedFare, type RideEnv } from '@wheleers/config';
 import type { RideRequestedEvent } from '@wheleers/kafka-schemas';
 import type { RideEventsProducer } from '../producers/ride-events.producer';
 import {
@@ -133,6 +133,9 @@ async function doDispatch(
   const rideId = randomUUID();
   const stops = scheduledRideClient.parseStops(claimed.stops);
 
+  const fareEstimateNgn = Number(claimed.fareEstimateNgn ?? 0);
+  const pricing = calculateSuggestedFare(claimed.plannedDistanceKm ?? 0);
+
   const event: RideRequestedEvent = {
     eventType: 'RIDE_REQUESTED',
     rideId,
@@ -150,7 +153,12 @@ async function doDispatch(
     stops,
     plannedDistanceKm: claimed.plannedDistanceKm ?? undefined,
     plannedDurationSeconds: claimed.plannedDurationSeconds ?? undefined,
-    fareEstimateNgn: Number(claimed.fareEstimateNgn ?? 0),
+    fareEstimateNgn: fareEstimateNgn || pricing.suggestedFareNgn,
+    paymentMethod: 'WALLET',
+    riderOfferNgn: fareEstimateNgn || pricing.suggestedFareNgn,
+    suggestedFareNgn: pricing.suggestedFareNgn,
+    minOfferNgn: pricing.minOfferNgn,
+    ratePerKmNgn: pricing.ratePerKmNgn,
     timestamp: new Date().toISOString(),
   };
 

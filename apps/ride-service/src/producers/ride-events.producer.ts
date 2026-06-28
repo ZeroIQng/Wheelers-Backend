@@ -4,6 +4,7 @@ import {
   type GpsStaleWarningEvent,
   type InAppSendEvent,
   type PushSendEvent,
+  type RideBidTimeoutEvent,
   type RideCancelledEvent,
   type RideCompletedEvent,
   type RideDriverAssignedEvent,
@@ -23,8 +24,9 @@ export type RideEventsProducer = {
   rideCancelled(event: RideCancelledEvent): Promise<void>;
   rideCompleted(event: RideCompletedEvent): Promise<void>;
   rideRouteUpdated(event: RideRouteUpdatedEvent): Promise<void>;
-  rideOfferNotification(params: {
-    driver: OnlineDriver;
+  rideBidTimeout(event: RideBidTimeoutEvent): Promise<void>;
+  broadcastRideOffer(params: {
+    drivers: OnlineDriver[];
     rideRequested: RideRequestedEvent;
     expiresAt: Date;
   }): Promise<void>;
@@ -57,7 +59,11 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
       await producer.send(TOPICS.RIDE_EVENTS, event as any, { key: event.rideId });
     },
 
-    async rideOfferNotification({ driver, rideRequested, expiresAt }) {
+    async rideBidTimeout(event) {
+      await producer.send(TOPICS.RIDE_EVENTS, event as any, { key: event.rideId });
+    },
+
+    async broadcastRideOffer({ drivers, rideRequested, expiresAt }) {
       const timestamp = new Date().toISOString();
       const title = 'New ride request';
       const stopCount = rideRequested.stops.length;
@@ -66,72 +72,83 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
           ? `${rideRequested.pickup.address} to ${rideRequested.destination.address} with ${stopCount} stop${stopCount === 1 ? '' : 's'}`
           : `${rideRequested.pickup.address} to ${rideRequested.destination.address}`;
 
-      const offerEvent: RideOfferSentEvent = {
-        eventType: 'RIDE_OFFER_SENT',
-        rideId: rideRequested.rideId,
-        riderId: rideRequested.riderId,
-        driverId: driver.driverId,
-        driverUserId: driver.userId,
-        pickup: rideRequested.pickup,
-        destination: rideRequested.destination,
-        stops: rideRequested.stops,
-        fareEstimateNgn: rideRequested.fareEstimateNgn,
-        plannedDistanceKm: rideRequested.plannedDistanceKm,
-        plannedDurationSeconds: rideRequested.plannedDurationSeconds,
-        expiresAt: expiresAt.toISOString(),
-        route: rideRequested.route,
-        timestamp,
-      };
+      const batch: Array<{
+        topic: string;
+        value: any;
+        options: { key: string };
+      }> = [];
 
-      const push: PushSendEvent = {
-        eventType: 'PUSH_SEND',
-        notificationId: randomUUID(),
-        userId: driver.driverId,
-        title,
-        body,
-        data: {
-          type: 'ride:request',
+      for (const driver of drivers) {
+        const offerEvent: RideOfferSentEvent = {
+          eventType: 'RIDE_OFFER_SENT',
           rideId: rideRequested.rideId,
           riderId: rideRequested.riderId,
-          pickupLat: String(rideRequested.pickup.lat),
-          pickupLng: String(rideRequested.pickup.lng),
-          pickupAddress: rideRequested.pickup.address,
-          destinationLat: String(rideRequested.destination.lat),
-          destinationLng: String(rideRequested.destination.lng),
-          destinationAddress: rideRequested.destination.address,
-          stops: JSON.stringify(rideRequested.stops),
-          stopCount: String(stopCount),
-          plannedDistanceKm:
-            rideRequested.plannedDistanceKm === undefined ? '' : String(rideRequested.plannedDistanceKm),
-          plannedDurationSeconds:
-            rideRequested.plannedDurationSeconds === undefined
-              ? ''
-              : String(rideRequested.plannedDurationSeconds),
-          fareEstimateNgn: String(rideRequested.fareEstimateNgn),
+          driverId: driver.driverId,
+          driverUserId: driver.userId,
+          pickup: rideRequested.pickup,
+          destination: rideRequested.destination,
+          stops: rideRequested.stops,
+          fareEstimateNgn: rideRequested.fareEstimateNgn,
+          paymentMethod: rideRequested.paymentMethod,
+          riderOfferNgn: rideRequested.riderOfferNgn,
+          suggestedFareNgn: rideRequested.suggestedFareNgn,
+          ratePerKmNgn: rideRequested.ratePerKmNgn,
+          plannedDistanceKm: rideRequested.plannedDistanceKm,
+          plannedDurationSeconds: rideRequested.plannedDurationSeconds,
           expiresAt: expiresAt.toISOString(),
-        },
-        priority: 'high',
-        timestamp,
-      };
+          route: rideRequested.route,
+          timestamp,
+        };
 
-      const inApp: InAppSendEvent = {
-        eventType: 'IN_APP_SEND',
-        notificationId: randomUUID(),
-        userId: driver.driverId,
-        title,
-        body,
-        category: 'ride',
-        referenceId: rideRequested.rideId,
-        referenceType: 'ride',
-        read: false,
-        timestamp,
-      };
+        batch.push({
+          topic: TOPICS.RIDE_EVENTS,
+          value: offerEvent,
+          options: { key: rideRequested.rideId },
+        });
 
-      await producer.sendBatch([
-        { topic: TOPICS.RIDE_EVENTS, value: offerEvent as any, options: { key: rideRequested.rideId } },
-        { topic: TOPICS.NOTIFICATION_EVENTS, value: push as any, options: { key: driver.driverId } },
-        { topic: TOPICS.NOTIFICATION_EVENTS, value: inApp as any, options: { key: driver.driverId } },
-      ]);
+        const push: PushSendEvent = {
+          eventType: 'PUSH_SEND',
+          notificationId: randomUUID(),
+          userId: driver.userId,
+          title,
+          body: `${body} | ₦${rideRequested.riderOfferNgn} offered | ${rideRequested.paymentMethod}`,
+          data: {
+            type: 'ride:request',
+            rideId: rideRequested.rideId,
+            riderId: rideRequested.riderId,
+            pickupAddress: rideRequested.pickup.address,
+            destinationAddress: rideRequested.destination.address,
+            riderOfferNgn: String(rideRequested.riderOfferNgn),
+            suggestedFareNgn: String(rideRequested.suggestedFareNgn),
+            paymentMethod: rideRequested.paymentMethod,
+            expiresAt: expiresAt.toISOString(),
+          },
+          priority: 'high',
+          timestamp,
+        };
+
+        const inApp: InAppSendEvent = {
+          eventType: 'IN_APP_SEND',
+          notificationId: randomUUID(),
+          userId: driver.userId,
+          title,
+          body: `${body} | ₦${rideRequested.riderOfferNgn} offered | ${rideRequested.paymentMethod}`,
+          category: 'ride',
+          referenceId: rideRequested.rideId,
+          referenceType: 'ride',
+          read: false,
+          timestamp,
+        };
+
+        batch.push(
+          { topic: TOPICS.NOTIFICATION_EVENTS, value: push, options: { key: driver.driverId } },
+          { topic: TOPICS.NOTIFICATION_EVENTS, value: inApp, options: { key: driver.driverId } },
+        );
+      }
+
+      if (batch.length > 0) {
+        await producer.sendBatch(batch);
+      }
     },
 
     async gpsStaleWarning(event) {

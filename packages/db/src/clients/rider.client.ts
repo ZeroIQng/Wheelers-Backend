@@ -1,5 +1,5 @@
 import { prisma } from '../prisma';
-import type { RideStatus, RideStopStatus, RideStopType } from '@prisma/client';
+import type { RidePaymentMethod, RideStatus, RideStopStatus, RideStopType } from '@prisma/client';
 
 type RouteStopInput = {
   lat: number;
@@ -143,8 +143,10 @@ export const rideClient = {
     destLng:          number;
     destAddress:      string;
     stops?:           RouteStopInput[];
-    fareEstimateNgn: number;
+    fareEstimateNgn:  number;
     status?:          RideStatus;
+    paymentMethod?:   RidePaymentMethod;
+    riderOfferNgn?:   number;
   }) =>
     prisma.$transaction(async (tx) => {
       const { stops, ...rideData } = data;
@@ -205,6 +207,8 @@ export const rideClient = {
     fareFinalNgn:    number;
     distanceKm:      number;
     durationSeconds: number;
+    agreedFareNgn?:  number;
+    paymentMethod?:  RidePaymentMethod;
   }) =>
     prisma.ride.update({
       where: { id: rideId },

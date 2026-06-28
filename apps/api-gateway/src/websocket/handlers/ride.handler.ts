@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { GoogleMapsRoutePlanner } from '@wheleers/config';
+import { GoogleMapsRoutePlanner, validateRiderOffer } from '@wheleers/config';
 import { chatClient, referralClient } from '@wheleers/db';
 import {
   ChatMessageSentEvent,
@@ -7,8 +7,10 @@ import {
   FeedbackLoggedEvent,
   RideCancelledEvent,
   RideCompletionRequestedEvent,
+  RideCounterOfferEvent,
   RideDriverAssignedEvent,
   RideDriverRejectedEvent,
+  RideOfferAcceptedEvent,
   RideRouteUpdateRequestedEvent,
   RideRequestedEvent,
   RideStopConfirmedEvent,
@@ -74,6 +76,11 @@ function parseStopList(payload: Record<string, unknown>, key: string): LatLngAdd
   });
 }
 
+function parsePaymentMethod(value: unknown): 'CASH' | 'WALLET' {
+  if (value === 'CASH') return 'CASH';
+  return 'WALLET';
+}
+
 function normalizeEndedBy(value: unknown): 'both_confirmed' | 'auto_gps' | 'admin' {
   if (value === 'auto_gps' || value === 'admin') return value;
   return 'both_confirmed';
@@ -103,11 +110,34 @@ export async function handleRideMessage(
     const pickup = parseLatLng(payload, 'pickup');
     const destination = parseLatLng(payload, 'destination');
     const stops = parseStopList(payload, 'stops');
+    const paymentMethod = parsePaymentMethod(payload['paymentMethod']);
     const plannedRoute = await routePlanner.planRoute({
       origin: pickup,
       stops,
       destination,
     });
+
+    const suggestedFareNgn = plannedRoute.suggestedFareNgn;
+    const minOfferNgn = plannedRoute.minOfferNgn;
+    const ratePerKmNgn = plannedRoute.ratePerKmNgn;
+
+    // Rider's offer — defaults to suggested fare if not provided
+    let riderOfferNgn = getNumber(payload, 'offerNgn') ?? suggestedFareNgn;
+
+    // Validate rider's offer
+    const validation = validateRiderOffer(riderOfferNgn, suggestedFareNgn);
+    if (!validation.valid) {
+      return {
+        type: 'ride:request:rejected',
+        payload: {
+          rideId,
+          error: validation.reason,
+          suggestedFareNgn,
+          minOfferNgn: validation.minOfferNgn,
+        },
+      };
+    }
+
     const useReferralCashback =
       getBoolean(payload, 'useReferralCashback') ?? false;
     const requestedReferralCashbackNgn = getNumber(
@@ -115,19 +145,19 @@ export async function handleRideMessage(
       'requestedReferralCashbackNgn',
     );
     let referralCashbackAppliedNgn = 0;
-    let fareEstimateNgn = plannedRoute.fareEstimateNgn;
+    let fareEstimateNgn = suggestedFareNgn;
 
     if (useReferralCashback) {
       const reservation = await referralClient.reserveRideCashback({
         userId: auth.userId,
         rideId,
-        fareNgn: plannedRoute.ridePrice.tripPrice,
+        fareNgn: suggestedFareNgn,
         requestedAmountNgn: requestedReferralCashbackNgn,
       });
       referralCashbackAppliedNgn = reservation.reservedCashbackNgn;
       fareEstimateNgn = Math.max(
         0,
-        plannedRoute.fareEstimateNgn - referralCashbackAppliedNgn,
+        suggestedFareNgn - referralCashbackAppliedNgn,
       );
     }
 
@@ -141,9 +171,14 @@ export async function handleRideMessage(
       plannedDistanceKm: plannedRoute.distanceKm,
       plannedDurationSeconds: plannedRoute.durationSeconds,
       fareEstimateNgn,
+      paymentMethod,
+      riderOfferNgn,
+      suggestedFareNgn,
+      minOfferNgn,
+      ratePerKmNgn,
       fareBeforeCashbackNgn:
         referralCashbackAppliedNgn > 0
-          ? plannedRoute.fareEstimateNgn
+          ? suggestedFareNgn
           : undefined,
       referralCashbackAppliedNgn:
         referralCashbackAppliedNgn > 0 ? referralCashbackAppliedNgn : undefined,
@@ -172,23 +207,73 @@ export async function handleRideMessage(
       type: 'ride:request:accepted',
       payload: {
         rideId: event.rideId,
-        status: 'queued',
+        status: 'bidding',
         pickup,
         destination,
         stops,
         route: plannedRoute.geometry,
         plannedDistanceKm: event.plannedDistanceKm,
         plannedDurationSeconds: event.plannedDurationSeconds,
+        paymentMethod,
+        riderOfferNgn,
+        suggestedFareNgn,
+        minOfferNgn,
+        ratePerKmNgn,
         fareEstimateNgn: event.fareEstimateNgn,
         fareBeforeCashbackNgn: event.fareBeforeCashbackNgn,
         referralCashbackAppliedNgn,
         pricingCurrency: 'NGN',
-        pricingBreakdown: {
-          ...plannedRoute.ridePrice,
-          tripPrice: fareEstimateNgn,
-          originalTripPrice: plannedRoute.ridePrice.tripPrice,
-          referralCashbackAppliedNgn,
-        },
+      },
+    };
+  }
+
+  if (type === 'ride:counter_offer') {
+    const event = RideCounterOfferEvent.parse({
+      eventType: 'RIDE_COUNTER_OFFER',
+      rideId: requireString(payload, 'rideId'),
+      riderId: requireString(payload, 'riderId'),
+      driverId: getString(payload, 'driverId') ?? auth.driverId ?? auth.userId,
+      driverUserId: auth.userId,
+      counterOfferNgn: requireNumber(payload, 'counterOfferNgn'),
+      driverName: requireString(payload, 'driverName'),
+      driverRating: requireNumber(payload, 'driverRating'),
+      vehiclePlate: requireString(payload, 'vehiclePlate'),
+      vehicleModel: requireString(payload, 'vehicleModel'),
+      etaSeconds: requireNumber(payload, 'etaSeconds'),
+      timestamp,
+    });
+
+    await publisher.publishRideEvent(event);
+
+    return {
+      type: 'ride:counter_offer:accepted',
+      payload: {
+        rideId: event.rideId,
+        counterOfferNgn: event.counterOfferNgn,
+      },
+    };
+  }
+
+  if (type === 'ride:accept_offer') {
+    const event = RideOfferAcceptedEvent.parse({
+      eventType: 'RIDE_OFFER_ACCEPTED',
+      rideId: requireString(payload, 'rideId'),
+      riderId: auth.userId,
+      driverId: requireString(payload, 'driverId'),
+      driverUserId: requireString(payload, 'driverUserId'),
+      agreedFareNgn: requireNumber(payload, 'agreedFareNgn'),
+      paymentMethod: parsePaymentMethod(payload['paymentMethod']),
+      timestamp,
+    });
+
+    await publisher.publishRideEvent(event);
+
+    return {
+      type: 'ride:accept_offer:accepted',
+      payload: {
+        rideId: event.rideId,
+        driverId: event.driverId,
+        agreedFareNgn: event.agreedFareNgn,
       },
     };
   }
@@ -214,7 +299,7 @@ export async function handleRideMessage(
       stops,
       plannedDistanceKm: plannedRoute?.distanceKm,
       plannedDurationSeconds: plannedRoute?.durationSeconds,
-      fareEstimateNgn: plannedRoute?.fareEstimateNgn,
+      fareEstimateNgn: plannedRoute?.suggestedFareNgn,
       route: plannedRoute?.geometry,
       updatedBy: auth.driverId ? 'driver' : 'rider',
       timestamp,
@@ -279,6 +364,7 @@ export async function handleRideMessage(
       riderId: requireString(payload, 'riderId'),
       driverId: requireString(payload, 'driverId'),
       lockedFareNgn: requireNumber(payload, 'lockedFareNgn'),
+      paymentMethod: parsePaymentMethod(payload['paymentMethod']),
       startedAt: getString(payload, 'startedAt') ?? timestamp,
       timestamp,
     });
@@ -332,7 +418,9 @@ export async function handleRideMessage(
       vehiclePlate: requireString(payload, 'vehiclePlate'),
       vehicleModel: requireString(payload, 'vehicleModel'),
       etaSeconds: requireNumber(payload, 'etaSeconds'),
-      lockedFareNgn: requireNumber(payload, 'lockedFareNgn'),
+      agreedFareNgn: requireNumber(payload, 'agreedFareNgn'),
+      lockedFareNgn: requireNumber(payload, 'agreedFareNgn'),
+      paymentMethod: parsePaymentMethod(payload['paymentMethod']),
       timestamp,
     });
 

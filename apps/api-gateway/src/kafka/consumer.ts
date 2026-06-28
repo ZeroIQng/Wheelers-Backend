@@ -109,10 +109,46 @@ async function handleRideEvent(
       destination: event.destination,
       stops: event.stops,
       fareEstimateNgn: event.fareEstimateNgn,
+      paymentMethod: event.paymentMethod,
+      riderOfferNgn: event.riderOfferNgn,
+      suggestedFareNgn: event.suggestedFareNgn,
+      ratePerKmNgn: event.ratePerKmNgn,
       plannedDistanceKm: event.plannedDistanceKm,
       plannedDurationSeconds: event.plannedDurationSeconds,
       expiresAt: event.expiresAt,
       route: event.route,
+    });
+    return;
+  }
+
+  if (event.eventType === 'RIDE_COUNTER_OFFER') {
+    await registry.sendToUser(event.riderId, 'ride:counter_offer', {
+      rideId: event.rideId,
+      driverId: event.driverId,
+      driverUserId: event.driverUserId,
+      counterOfferNgn: event.counterOfferNgn,
+      driverName: event.driverName,
+      driverRating: event.driverRating,
+      vehiclePlate: event.vehiclePlate,
+      vehicleModel: event.vehicleModel,
+      etaSeconds: event.etaSeconds,
+    });
+    return;
+  }
+
+  if (event.eventType === 'RIDE_OFFER_ACCEPTED') {
+    await registry.sendToUser(event.driverUserId, 'ride:offer_accepted', {
+      rideId: event.rideId,
+      riderId: event.riderId,
+      agreedFareNgn: event.agreedFareNgn,
+      paymentMethod: event.paymentMethod,
+    });
+    return;
+  }
+
+  if (event.eventType === 'RIDE_BID_TIMEOUT') {
+    await registry.sendToUser(event.riderId, 'ride:bid_timeout', {
+      rideId: event.rideId,
     });
     return;
   }
@@ -131,7 +167,9 @@ async function handleRideEvent(
       vehiclePlate: event.vehiclePlate,
       vehicleModel: event.vehicleModel,
       etaSeconds: event.etaSeconds,
+      agreedFareNgn: event.agreedFareNgn,
       lockedFareNgn: event.lockedFareNgn,
+      paymentMethod: event.paymentMethod,
     });
 
     return;

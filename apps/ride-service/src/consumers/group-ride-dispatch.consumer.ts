@@ -43,6 +43,11 @@ export function createGroupRideDispatchConsumer(params: {
       destination: event.firstPickup, // destination irrelevant for driver matching — only pickup matters
       stops: [],
       fareEstimateNgn: event.fareEstimateNgn,
+      paymentMethod: 'WALLET',
+      riderOfferNgn: event.fareEstimateNgn,
+      suggestedFareNgn: event.fareEstimateNgn,
+      minOfferNgn: event.fareEstimateNgn,
+      ratePerKmNgn: 300,
       plannedDistanceKm: event.totalDistanceKm,
       plannedDurationSeconds: event.totalDurationSeconds,
       route: event.route,
@@ -82,50 +87,18 @@ export function createGroupRideDispatchConsumer(params: {
       });
     }
 
-    // Offer to the first candidate. The existing ride-requested consumer
-    // handles RIDE_DRIVER_REJECTED / timeout and cycles through candidates.
-    const nextDriver = result.drivers[0];
-    if (!nextDriver) return;
+    // Broadcast ride offer to ALL nearby drivers simultaneously
+    const BID_TIMEOUT_MS = 3 * 60 * 1000;
+    const expiresAt = new Date(Date.now() + BID_TIMEOUT_MS);
 
-    state.pendingMatchesByRideId.get(event.anchorRideId)!.attemptedDriverIds.add(
-      nextDriver.driverId,
-    );
-    state.pendingMatchesByRideId.get(event.anchorRideId)!.offeredDriverId =
-      nextDriver.driverId;
-
-    const timeoutMs = Number(rideEnv.DRIVER_ACCEPT_TIMEOUT_S) * 1000;
-    const expiresAt = new Date(Date.now() + timeoutMs);
-
-    await rideEventsProducer.rideOfferNotification({
-      driver: nextDriver,
+    await rideEventsProducer.broadcastRideOffer({
+      drivers: result.drivers,
       rideRequested: syntheticRide,
       expiresAt,
     });
 
-    const pending = state.pendingMatchesByRideId.get(event.anchorRideId);
-    if (pending) {
-      pending.timeout = setTimeout(() => {
-        void rideEventsProducer
-          .rideDriverRejected({
-            eventType: 'RIDE_DRIVER_REJECTED',
-            rideId: event.anchorRideId,
-            riderId: event.riderIds[0],
-            driverId: nextDriver.driverId,
-            reason: 'timeout',
-            timestamp: new Date().toISOString(),
-          })
-          .catch((err) => {
-            console.warn(
-              `[ride-service] group ride driver timeout reject skipped:`,
-              (err as any)?.message ?? err,
-            );
-          });
-      }, timeoutMs);
-      pending.timeout.unref();
-    }
-
     console.log(
-      `[ride-service] offered group ride ${event.groupId} (anchor=${event.anchorRideId}) to driver ${nextDriver.driverId}`,
+      `[ride-service] broadcasted group ride ${event.groupId} (anchor=${event.anchorRideId}) to ${result.drivers.length} drivers`,
     );
   }
 }

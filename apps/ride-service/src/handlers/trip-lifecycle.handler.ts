@@ -1,4 +1,4 @@
-import { FEES, GoogleMapsRoutePlanner } from '@wheleers/config';
+import { GoogleMapsRoutePlanner } from '@wheleers/config';
 import { DriverStatus, driverClient, rideClient } from '@wheleers/db';
 import type { MessageContext } from '@wheleers/kafka-client';
 import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
@@ -131,6 +131,10 @@ export function createTripLifecycleHandler(params?: {
               ride.fareEstimateNgn !== null && ride.fareEstimateNgn !== undefined
                 ? Number(ride.fareEstimateNgn)
                 : undefined,
+            agreedFareNgn:
+              ride.agreedFareNgn !== null && ride.agreedFareNgn !== undefined
+                ? Number(ride.agreedFareNgn)
+                : undefined,
           });
 
           const routeStops = await rideClient.completeFinalStop(event.rideId, completedAt);
@@ -149,6 +153,7 @@ export function createTripLifecycleHandler(params?: {
             durationSeconds,
             endedBy: event.endedBy,
             completedAt: completedAt.toISOString(),
+            paymentMethod: ride.paymentMethod ?? 'WALLET',
             timestamp: new Date().toISOString(),
           });
         } catch (err) {
@@ -355,9 +360,11 @@ function resolveDurationSeconds(startedAt: Date | null, completedAt: Date): numb
 function resolveFareNgn(params: {
   requestedFareNgn?: number;
   estimatedFareNgn?: number;
+  agreedFareNgn?: number;
 }): number {
-  const sourceFare = params.estimatedFareNgn ?? params.requestedFareNgn ?? FEES.MIN_RIDE_FARE_NGN;
-  return round2(Math.max(sourceFare, FEES.MIN_RIDE_FARE_NGN));
+  // Use the agreed fare (from bidding) if available, otherwise fall back to estimate
+  const sourceFare = params.agreedFareNgn ?? params.estimatedFareNgn ?? params.requestedFareNgn ?? 0;
+  return round2(Math.max(sourceFare, 0));
 }
 
 async function resolveDriverUserId(driverId: string): Promise<string> {

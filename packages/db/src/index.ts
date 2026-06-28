@@ -73,4 +73,5 @@ export {
   ReferralCashbackStatus,
   ReferralCashbackUsageStatus,
   ChatSenderRole,
+  RidePaymentMethod,
 } from '@prisma/client';

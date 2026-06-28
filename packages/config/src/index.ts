@@ -22,20 +22,13 @@ export { FEES }                        from './constants/fees';
 export { GPS }                         from './constants/gps';
 export { RIDE }                        from './constants/ride';
 export {
-  BATTERY_CAPACITY_KWH,
-  CAR_COST_NAIRA,
-  DAILY_INSURANCE_NAIRA,
-  DAILY_MAINTENANCE_NAIRA,
-  DRIVER_SALARY_NAIRA_PER_MONTH,
-  ELECTRICITY_COST_NAIRA_PER_KWH,
-  MARGIN_PERCENT,
-  MINIMUM_DAILY_DISTANCE_KM,
-  RANGE_PER_CHARGE_KM,
-  REPAYMENT_MONTHS,
-  RIDE_PRICING_DEFAULTS,
-  calculateRidePrice,
+  RATE_PER_KM_NGN,
+  MIN_OFFER_DISCOUNT,
+  FARE_ROUNDING_INCREMENT,
+  calculateSuggestedFare,
+  validateRiderOffer,
 } from './pricing';
-export type { RidePriceBreakdown, RidePricingParameters } from './pricing';
+export type { SuggestedFare, RidePriceBreakdown } from './pricing';
 export {
   GoogleMapsRoutePlanner,
   RoutePlanningError,

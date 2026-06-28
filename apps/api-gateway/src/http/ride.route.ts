@@ -202,7 +202,10 @@ export async function handleRideEstimateRoute(
       route: plannedRoute.geometry,
       plannedDistanceKm: plannedRoute.distanceKm,
       plannedDurationSeconds: plannedRoute.durationSeconds,
-      fareEstimateNgn: plannedRoute.ridePrice.tripPrice,
+      suggestedFareNgn: plannedRoute.suggestedFareNgn,
+      minOfferNgn: plannedRoute.minOfferNgn,
+      ratePerKmNgn: plannedRoute.ratePerKmNgn,
+      fareEstimateNgn: plannedRoute.suggestedFareNgn,
       pricingCurrency: "NGN",
       pricingBreakdown: plannedRoute.ridePrice,
     });
@@ -294,18 +297,18 @@ export async function handleCreateScheduledRideRoute(
           "requestedReferralCashbackNgn",
         );
         let referralCashbackAppliedNgn = 0;
-        let fareEstimateNgn = plannedRoute.ridePrice.tripPrice;
+        let fareEstimateNgn = plannedRoute.suggestedFareNgn;
 
         if (useReferralCashback) {
           const reservation = await referralClient.reserveRideCashback({
             userId: user.id,
             rideId: scheduledRideId,
-            fareNgn: plannedRoute.ridePrice.tripPrice,
+            fareNgn: plannedRoute.suggestedFareNgn,
             requestedAmountNgn: requestedReferralCashbackNgn,
           });
           referralCashbackAppliedNgn = reservation.reservedCashbackNgn;
           fareEstimateNgn = resolveNetFareNgn({
-            grossFareNgn: plannedRoute.ridePrice.tripPrice,
+            grossFareNgn: plannedRoute.suggestedFareNgn,
             discountNgn: referralCashbackAppliedNgn,
           });
         }
@@ -375,7 +378,7 @@ export async function handleCreateScheduledRideRoute(
           body: {
             item: mapScheduledRideItem(scheduledRide),
             referralCashbackAppliedNgn,
-            fareBeforeCashbackNgn: plannedRoute.ridePrice.tripPrice,
+            fareBeforeCashbackNgn: plannedRoute.suggestedFareNgn,
           },
         };
       },

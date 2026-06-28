@@ -271,19 +271,22 @@ model GroupRideFaceVerification {
 }
 
 model Ride {
-  id               String       @id @default(uuid())
+  id               String            @id @default(uuid())
   riderId          String
   driverId         String?
-  status           RideStatus   @default(REQUESTED)
+  status           RideStatus        @default(REQUESTED)
+  paymentMethod    RidePaymentMethod @default(WALLET)
   pickupLat        Float
   pickupLng        Float
   pickupAddress    String
   destLat          Float
   destLng          Float
   destAddress      String
-  fareEstimateNgn  Decimal?     @db.Decimal(18, 2)
-  fareFinalNgn     Decimal?     @db.Decimal(18, 2)
-  platformFeeNgn   Decimal?     @db.Decimal(18, 2)
+  fareEstimateNgn  Decimal?          @db.Decimal(18, 2)
+  riderOfferNgn    Decimal?          @db.Decimal(18, 2)
+  agreedFareNgn    Decimal?          @db.Decimal(18, 2)
+  fareFinalNgn     Decimal?          @db.Decimal(18, 2)
+  platformFeeNgn   Decimal?          @db.Decimal(18, 2)
   distanceKm       Float?
   durationSeconds  Int?
   cancelStage      CancelStage?
@@ -734,4 +737,9 @@ enum ReferralCashbackUsageStatus {
 enum ChatSenderRole {
   RIDER
   DRIVER
+}
+
+enum RidePaymentMethod {
+  CASH
+  WALLET
 }
