@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Identity Verification</title>
+  <link rel="stylesheet" href="/widget/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Loading state -->
+    <div id="loading-screen" class="screen active">
+      <div class="spinner"></div>
+      <p>Setting up camera...</p>
+    </div>
+
+    <!-- Camera + challenge screen -->
+    <div id="camera-screen" class="screen">
+      <div class="camera-container">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay" class="overlay"></canvas>
+        <div class="face-guide"></div>
+      </div>
+      <div id="challenge-bar">
+        <p id="challenge-text">Position your face in the circle</p>
+        <div id="progress-dots">
+          <span class="dot" id="dot-0"></span>
+          <span class="dot" id="dot-1"></span>
+          <span class="dot" id="dot-2"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Submitting state -->
+    <div id="submitting-screen" class="screen">
+      <div class="spinner"></div>
+      <p>Verifying your identity...</p>
+    </div>
+
+    <!-- Success state -->
+    <div id="success-screen" class="screen">
+      <div class="success-icon">&#10003;</div>
+      <h2>Verified!</h2>
+      <p>Your identity has been confirmed.</p>
+      <p class="subtitle">You can now request rides.</p>
+    </div>
+
+    <!-- Error state -->
+    <div id="error-screen" class="screen">
+      <div class="error-icon">!</div>
+      <h2>Verification Failed</h2>
+      <p id="error-message">Something went wrong.</p>
+      <button id="retry-btn" class="btn">Try Again</button>
+    </div>
+
+    <!-- Camera denied -->
+    <div id="denied-screen" class="screen">
+      <div class="error-icon">&#128247;</div>
+      <h2>Camera Access Required</h2>
+      <p>Please allow camera access in your device settings to complete verification.</p>
+    </div>
+  </div>
+
+  <!-- Hidden canvas for selfie capture -->
+  <canvas id="capture-canvas" style="display:none"></canvas>
+
+  <!-- TensorFlow.js + MediaPipe FaceMesh from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.17.0/dist/tf-core.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.17.0/dist/tf-backend-webgl.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@1.0.5/dist/face-landmarks-detection.js"></script>
+
+  <script src="/widget/face-verification.js"></script>
+</body>
+</html>

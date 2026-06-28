@@ -35,6 +35,10 @@ model User {
   referralsMade    Referral[]          @relation("ReferralReferrer")
   referralReceived Referral?           @relation("ReferralReferred")
   referralCashbacks ReferralCashback[]
+  riderKycStatus    RiderKycStatus     @default(NONE)
+  selfieCid         String?
+  kycVerifiedAt     DateTime?
+  riderKycAttempts  RiderKycAttempt[]
 
   @@index([privyDid])
   @@index([username])
@@ -742,4 +746,25 @@ enum ChatSenderRole {
 enum RidePaymentMethod {
   CASH
   WALLET
+}
+
+enum RiderKycStatus {
+  NONE
+  PENDING
+  VERIFIED
+}
+
+model RiderKycAttempt {
+  id            String         @id @default(uuid())
+  userId        String
+  status        RiderKycStatus
+  selfieKey     String?
+  livenessScore Float?
+  failureReason String?
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime       @default(now())
+  user          User           @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
 }

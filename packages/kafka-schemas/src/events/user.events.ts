@@ -41,15 +41,23 @@ export const UserConsentLoggedEvent = BaseUserEvent.extend({
   consentVersion: z.string(),
 });
 
+// Fired by api-gateway after rider completes face liveness verification.
+export const RiderKycVerifiedEvent = BaseUserEvent.extend({
+  eventType:  z.literal('RIDER_KYC_VERIFIED'),
+  verifiedAt: z.string().datetime(),
+});
+
 export const UserEvent = z.discriminatedUnion('eventType', [
   UserCreatedEvent,
   UserKycApprovedEvent,
   UserRoleChangedEvent,
   UserConsentLoggedEvent,
+  RiderKycVerifiedEvent,
 ]);
 
-export type UserCreatedEvent      = z.infer<typeof UserCreatedEvent>;
-export type UserKycApprovedEvent  = z.infer<typeof UserKycApprovedEvent>;
-export type UserRoleChangedEvent  = z.infer<typeof UserRoleChangedEvent>;
+export type UserCreatedEvent       = z.infer<typeof UserCreatedEvent>;
+export type UserKycApprovedEvent   = z.infer<typeof UserKycApprovedEvent>;
+export type UserRoleChangedEvent   = z.infer<typeof UserRoleChangedEvent>;
 export type UserConsentLoggedEvent = z.infer<typeof UserConsentLoggedEvent>;
-export type UserEvent             = z.infer<typeof UserEvent>;
+export type RiderKycVerifiedEvent  = z.infer<typeof RiderKycVerifiedEvent>;
+export type UserEvent              = z.infer<typeof UserEvent>;

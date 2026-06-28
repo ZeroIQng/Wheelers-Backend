@@ -14,6 +14,7 @@ export { groupRideClient }      from './clients/group-ride.client';
 export { complianceClient }     from './clients/compliance.client';
 export { referralClient }       from './clients/referral.client';
 export { chatClient }           from './clients/chat.client';
+export { riderKycClient }       from './clients/rider-kyc.client';
 
 // Re-export Prisma types so services don't need to install @prisma/client directly
 export type {
@@ -42,6 +43,7 @@ export type {
   ReferralCashbackUsage,
   ReferralCashbackUnlock,
   ChatMessage,
+  RiderKycAttempt,
   Prisma,
 } from '@prisma/client';
 
@@ -74,4 +76,5 @@ export {
   ReferralCashbackUsageStatus,
   ChatSenderRole,
   RidePaymentMethod,
+  RiderKycStatus,
 } from '@prisma/client';

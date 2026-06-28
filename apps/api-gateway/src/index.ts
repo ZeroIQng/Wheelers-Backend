@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
+import { readFile } from "node:fs/promises";
+import { join, extname, resolve } from "node:path";
 import {
   buildTopicList,
   createConsumer,
@@ -77,6 +79,10 @@ import {
   handleListReferralReferralsRoute,
   handlePreviewReferralRideCashbackRoute,
 } from "./http/referral.route";
+import {
+  handleGetKycStatusRoute,
+  handleVerifyKycRoute,
+} from "./http/kyc.route";
 import { handleGetRideChatMessagesRoute } from "./http/chat.route";
 import { applyCorsHeaders, sendJson } from "./http/utils";
 import { startGatewayKafkaConsumer } from "./kafka/consumer";
@@ -86,6 +92,7 @@ import { GatewayPublisher } from "./websocket/publisher";
 import { SocketRegistry } from "./websocket/registry";
 import { createGatewayWebSocketServer } from "./websocket/server";
 import { GroupRideFaceStorage } from "./storage/group-ride-face-storage";
+import { RiderKycFaceStorage } from "./storage/rider-kyc-face-storage";
 import { startReferralJobs } from "./referrals/jobs";
 
 const SCHEDULED_RIDE_QUEUE = "wheleers-scheduled-rides";
@@ -114,6 +121,45 @@ function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
 
 function sendMethodNotAllowed(res: ServerResponse): void {
   sendJson(res, 405, { error: "Method not allowed" });
+}
+
+const WIDGET_DIR = join(__dirname, "..", "widget");
+const MIME_TYPES: Record<string, string> = {
+  ".html": "text/html",
+  ".css": "text/css",
+  ".js": "application/javascript",
+};
+
+async function serveWidgetFile(pathname: string, res: ServerResponse): Promise<void> {
+  // Only allow known extensions to prevent path traversal / serving unexpected files
+  const ext = extname(pathname);
+  const contentType = MIME_TYPES[ext];
+  if (!contentType) {
+    sendJson(res, 404, { error: "Not found" });
+    return;
+  }
+
+  // Strip leading /widget/ and resolve against widget dir
+  const relative = pathname.replace(/^\/widget\//, "");
+  if (relative.includes("..") || relative.includes("\0")) {
+    sendJson(res, 400, { error: "Invalid path" });
+    return;
+  }
+
+  const filePath = resolve(WIDGET_DIR, relative);
+  // Canonical path must stay inside WIDGET_DIR
+  if (!filePath.startsWith(resolve(WIDGET_DIR) + "/")) {
+    sendJson(res, 400, { error: "Invalid path" });
+    return;
+  }
+
+  try {
+    const data = await readFile(filePath);
+    res.writeHead(200, { "Content-Type": contentType, "Cache-Control": "no-cache" });
+    res.end(data);
+  } catch {
+    sendJson(res, 404, { error: "Not found" });
+  }
 }
 
 function getHeaderValue(req: IncomingMessage, name: string): string | null {
@@ -264,6 +310,15 @@ async function bootstrap(): Promise<void> {
         })
       : undefined;
 
+  const riderKycFaceStorage =
+    gatewayEnv.AWS_REGION && gatewayEnv.RIDER_KYC_S3_BUCKET
+      ? new RiderKycFaceStorage({
+          region: gatewayEnv.AWS_REGION,
+          bucket: gatewayEnv.RIDER_KYC_S3_BUCKET,
+          prefix: gatewayEnv.RIDER_KYC_S3_PREFIX,
+        })
+      : null;
+
   const registry = new SocketRegistry({
     instanceId: `${sharedEnv.KAFKA_CLIENT_ID}-${process.pid}-${Math.random()
       .toString(16)
@@ -297,6 +352,12 @@ async function bootstrap(): Promise<void> {
     publisher,
     pouchLiquifiaClient,
     redisClient: redisCommandClient,
+  };
+
+  const kycDeps = {
+    jwtSecret: gatewayEnv.JWT_SECRET,
+    publisher,
+    faceStorage: riderKycFaceStorage,
   };
 
   const server = createServer(async (req, res) => {
@@ -831,6 +892,33 @@ async function bootstrap(): Promise<void> {
       await handleGetWalletWithdrawalRoute(
         req, res, walletDeps, decodeURIComponent(withdrawalMatch[1]),
       );
+      return;
+    }
+
+    // ── KYC routes ──────────────────────────────────────────────────────────
+    if (url.pathname === "/kyc/status") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleGetKycStatusRoute(req, res, kycDeps);
+      return;
+    }
+
+    if (url.pathname === "/kyc/verify") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleVerifyKycRoute(req, res, kycDeps);
+      return;
+    }
+
+    // ── Widget static files ──────────────────────────────────────────────────
+    if (req.method === "GET" && url.pathname.startsWith("/widget/")) {
+      await serveWidgetFile(url.pathname, res);
       return;
     }
 

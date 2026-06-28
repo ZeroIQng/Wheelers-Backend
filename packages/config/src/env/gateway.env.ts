@@ -19,6 +19,8 @@ const GatewayEnvSchema = z.object({
   GROUP_RIDE_FACE_S3_BUCKET: z.string().min(1).optional(),
   GROUP_RIDE_FACE_S3_PREFIX: z.string().min(1).default('group-rides/face-verification'),
   GROUP_RIDE_FACE_UPLOAD_URL_TTL_S: z.coerce.number().int().positive().default(900),
+  RIDER_KYC_S3_BUCKET: z.string().min(1).optional(),
+  RIDER_KYC_S3_PREFIX: z.string().min(1).default('rider-kyc/face-verification'),
   SCHEDULED_RIDE_DISPATCH_LEAD_TIME_S: z.coerce.number().int().positive().default(300),
   CORS_ORIGINS:       z.string().default('http://localhost:19006,https://app.wheelersng.com'),
   WS_IDLE_TIMEOUT_MS: z.string().default('60000'),

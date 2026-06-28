@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { GoogleMapsRoutePlanner, validateRiderOffer } from '@wheleers/config';
-import { chatClient, referralClient } from '@wheleers/db';
+import { chatClient, referralClient, riderKycClient } from '@wheleers/db';
 import {
   ChatMessageSentEvent,
   DisputeOpenedEvent,
@@ -106,6 +106,17 @@ export async function handleRideMessage(
   const timestamp = new Date().toISOString();
 
   if (type === 'ride:request') {
+    const isVerified = await riderKycClient.isVerified(auth.userId);
+    if (!isVerified) {
+      return {
+        type: 'ride:request:rejected',
+        payload: {
+          error: 'Identity verification required before requesting a ride',
+          kycRequired: true,
+        },
+      };
+    }
+
     const rideId = getString(payload, 'rideId') ?? randomUUID();
     const pickup = parseLatLng(payload, 'pickup');
     const destination = parseLatLng(payload, 'destination');
