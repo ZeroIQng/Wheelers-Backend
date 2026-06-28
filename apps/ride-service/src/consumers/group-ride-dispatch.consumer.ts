@@ -77,6 +77,7 @@ export function createGroupRideDispatchConsumer(params: {
       attemptedDriverIds: new Set(),
       offeredDriverId: null,
       timeout: null,
+      counterOfferDrivers: new Map(),
     });
 
     // Store all group ride participant mappings so the gateway can relay events.

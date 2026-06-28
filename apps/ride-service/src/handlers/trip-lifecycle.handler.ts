@@ -32,7 +32,10 @@ export function createTripLifecycleHandler(params?: {
         });
 
         try {
-          await rideClient.assignDriver(event.rideId, event.driverId, event.etaSeconds);
+          await rideClient.assignDriver(event.rideId, event.driverId, {
+            agreedFareNgn: event.agreedFareNgn,
+            paymentMethod: event.paymentMethod,
+          });
           await driverClient.updateStatus(event.driverId, DriverStatus.ON_RIDE);
         } catch (err) {
           console.warn(`[ride-service] ride assignment persistence skipped:`, (err as any)?.message ?? err);
@@ -171,6 +174,7 @@ export function createTripLifecycleHandler(params?: {
             fareFinalNgn: event.fareNgn,
             distanceKm: event.distanceKm,
             durationSeconds: event.durationSeconds,
+            paymentMethod: event.paymentMethod,
           });
           await driverClient.updateStatus(event.driverId, DriverStatus.ONLINE);
         } catch (err) {

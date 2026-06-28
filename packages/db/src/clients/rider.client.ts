@@ -172,13 +172,18 @@ export const rideClient = {
     }),
 
   // Assign driver once matched — also sets matchedAt timestamp.
-  assignDriver: (rideId: string, driverId: string, etaSeconds: number) =>
+  assignDriver: (rideId: string, driverId: string, opts?: {
+    agreedFareNgn?: number;
+    paymentMethod?: RidePaymentMethod;
+  }) =>
     prisma.ride.update({
       where: { id: rideId },
       data: {
         driverId,
         status:    'DRIVER_ASSIGNED',
         matchedAt: new Date(),
+        ...(opts?.agreedFareNgn !== undefined ? { agreedFareNgn: opts.agreedFareNgn } : {}),
+        ...(opts?.paymentMethod !== undefined ? { paymentMethod: opts.paymentMethod } : {}),
       },
     }),
 

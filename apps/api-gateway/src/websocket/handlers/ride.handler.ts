@@ -8,7 +8,6 @@ import {
   RideCancelledEvent,
   RideCompletionRequestedEvent,
   RideCounterOfferEvent,
-  RideDriverAssignedEvent,
   RideDriverRejectedEvent,
   RideOfferAcceptedEvent,
   RideRouteUpdateRequestedEvent,
@@ -77,7 +76,8 @@ function parseStopList(payload: Record<string, unknown>, key: string): LatLngAdd
 }
 
 function parsePaymentMethod(value: unknown): 'CASH' | 'WALLET' {
-  if (value === 'CASH') return 'CASH';
+  const upper = typeof value === 'string' ? value.toUpperCase() : value;
+  if (upper === 'CASH') return 'CASH';
   return 'WALLET';
 }
 
@@ -407,30 +407,31 @@ export async function handleRideMessage(
   }
 
   if (type === 'driver:accept') {
-    const event = RideDriverAssignedEvent.parse({
-      eventType: 'RIDE_DRIVER_ASSIGNED',
+    // Driver accepts at the rider's offered price — publish as counter-offer
+    // at the same amount, then let ride-service handle assignment uniformly.
+    const driverId = getString(payload, 'driverId') ?? auth.driverId ?? auth.userId;
+    const counterOfferEvent = RideCounterOfferEvent.parse({
+      eventType: 'RIDE_COUNTER_OFFER',
       rideId: requireString(payload, 'rideId'),
       riderId: requireString(payload, 'riderId'),
-      driverId: getString(payload, 'driverId') ?? auth.driverId ?? auth.userId,
+      driverId,
       driverUserId: auth.userId,
+      counterOfferNgn: requireNumber(payload, 'agreedFareNgn'),
       driverName: requireString(payload, 'driverName'),
       driverRating: requireNumber(payload, 'driverRating'),
       vehiclePlate: requireString(payload, 'vehiclePlate'),
       vehicleModel: requireString(payload, 'vehicleModel'),
       etaSeconds: requireNumber(payload, 'etaSeconds'),
-      agreedFareNgn: requireNumber(payload, 'agreedFareNgn'),
-      lockedFareNgn: requireNumber(payload, 'agreedFareNgn'),
-      paymentMethod: parsePaymentMethod(payload['paymentMethod']),
       timestamp,
     });
 
-    await publisher.publishRideEvent(event);
+    await publisher.publishRideEvent(counterOfferEvent);
 
     return {
       type: 'driver:accept:accepted',
       payload: {
-        rideId: event.rideId,
-        riderId: event.riderId,
+        rideId: counterOfferEvent.rideId,
+        riderId: counterOfferEvent.riderId,
       },
     };
   }

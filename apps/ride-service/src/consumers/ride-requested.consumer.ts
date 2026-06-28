@@ -155,6 +155,7 @@ export function createRideRequestedConsumer(params: {
       attemptedDriverIds: new Set(),
       offeredDriverId: null,
       timeout: null,
+      counterOfferDrivers: new Map(),
     });
 
     // Broadcast to ALL nearby drivers simultaneously
@@ -182,8 +183,16 @@ export function createRideRequestedConsumer(params: {
       pending.timeout = null;
     }
 
+    // Store driver info so we can use it when the rider accepts
+    pending.counterOfferDrivers.set(event.driverId, {
+      driverName: event.driverName,
+      driverRating: event.driverRating,
+      vehiclePlate: event.vehiclePlate,
+      vehicleModel: event.vehicleModel,
+      etaSeconds: event.etaSeconds,
+    });
+
     // Counter-offer is forwarded to rider via gateway Kafka consumer → WebSocket
-    // No action needed here other than tracking
     console.log(`[ride-service] counter-offer on ride ${event.rideId} from driver ${event.driverId}: ₦${event.counterOfferNgn}`);
   }
 
@@ -194,24 +203,23 @@ export function createRideRequestedConsumer(params: {
     // Clear timeout
     if (pending.timeout) clearTimeout(pending.timeout);
 
-    // Find the driver info from candidates or online drivers for vehicle details
-    const driverInfo = pending.candidates.find((d) => d.driverId === event.driverId)
+    // Look up stored counter-offer driver info, fallback to in-memory pool for vehicle details
+    const counterOfferInfo = pending.counterOfferDrivers.get(event.driverId);
+    const poolDriver = pending.candidates.find((d) => d.driverId === event.driverId)
       ?? state.onlineDrivers.get(event.driverId);
 
     // Publish RIDE_DRIVER_ASSIGNED
-    // Driver name/rating come from the counter-offer event (stored client-side);
-    // vehicle info comes from the in-memory driver pool.
     await rideEventsProducer.rideDriverAssigned({
       eventType: 'RIDE_DRIVER_ASSIGNED',
       rideId: event.rideId,
       riderId: event.riderId,
       driverId: event.driverId,
       driverUserId: event.driverUserId,
-      driverName: 'Driver',
-      driverRating: 5.0,
-      vehiclePlate: driverInfo?.vehiclePlate ?? '',
-      vehicleModel: driverInfo?.vehicleModel ?? '',
-      etaSeconds: 0,
+      driverName: counterOfferInfo?.driverName ?? 'Driver',
+      driverRating: counterOfferInfo?.driverRating ?? 5.0,
+      vehiclePlate: counterOfferInfo?.vehiclePlate ?? poolDriver?.vehiclePlate ?? '',
+      vehicleModel: counterOfferInfo?.vehicleModel ?? poolDriver?.vehicleModel ?? '',
+      etaSeconds: counterOfferInfo?.etaSeconds ?? 0,
       agreedFareNgn: event.agreedFareNgn,
       lockedFareNgn: event.agreedFareNgn,
       paymentMethod: event.paymentMethod,
@@ -272,6 +280,7 @@ export function createRideRequestedConsumer(params: {
         attemptedDriverIds: new Set(),
         offeredDriverId: null,
         timeout,
+        counterOfferDrivers: new Map(),
       });
     }
   }

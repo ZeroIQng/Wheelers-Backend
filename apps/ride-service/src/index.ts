@@ -47,12 +47,21 @@ export type RideRouteStopState = {
   completedAt?: string;
 };
 
+export type CounterOfferDriverInfo = {
+  driverName: string;
+  driverRating: number;
+  vehiclePlate: string;
+  vehicleModel: string;
+  etaSeconds: number;
+};
+
 export type PendingRideMatch = {
   rideRequested: RideRequestedEvent;
   candidates: OnlineDriver[];
   attemptedDriverIds: Set<string>;
   offeredDriverId: string | null;
   timeout: NodeJS.Timeout | null;
+  counterOfferDrivers: Map<string, CounterOfferDriverInfo>;
 };
 
 export type RideParticipantState = {
