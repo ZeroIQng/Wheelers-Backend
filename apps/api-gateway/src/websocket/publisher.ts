@@ -2,6 +2,7 @@ import type { WheelersProducer } from '@wheleers/kafka-client';
 import {
   TOPICS,
   type ComplianceEvent,
+  type CryptoWalletEvent,
   type DriverEvent,
   type GpsUpdateEvent,
   type GroupRideEvent,
@@ -58,5 +59,9 @@ export class GatewayPublisher {
           : event.eventType;
 
     await this.producer.send(TOPICS.COMPLIANCE_EVENTS, event, { key });
+  }
+
+  async publishCryptoWalletEvent(event: CryptoWalletEvent): Promise<void> {
+    await this.producer.send(TOPICS.CRYPTO_WALLET_EVENTS, event, { key: event.userId });
   }
 }

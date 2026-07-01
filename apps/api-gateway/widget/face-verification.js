@@ -2,12 +2,12 @@
   'use strict';
 
   // ── Config ──────────────────────────────────────────────────────────────────
-  var EAR_THRESHOLD = 0.21;
-  var BLINK_FRAMES = 2;
+  var EAR_THRESHOLD = 0.18;
+  var BLINK_FRAMES = 1;
   var REQUIRED_BLINKS = 2;
-  var HEAD_TURN_THRESHOLD = 0.15;
-  var HEAD_TURN_HOLD_MS = 500;
-  var CHALLENGE_TIMEOUT_MS = 15000;
+  var HEAD_TURN_THRESHOLD = 0.08;
+  var HEAD_TURN_HOLD_MS = 400;
+  var CHALLENGE_TIMEOUT_MS = 20000;
   var MIN_TOTAL_DURATION_MS = 3000;
 
   // ── URL params ──────────────────────────────────────────────────────────────
@@ -62,7 +62,7 @@
   async function startCamera() {
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       });
       video.srcObject = stream;
@@ -88,8 +88,7 @@
 
     var model = faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh;
     detector = await faceLandmarksDetection.createDetector(model, {
-      runtime: 'mediapipe',
-      solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh',
+      runtime: 'tfjs',
       refineLandmarks: true,
       maxFaces: 1,
     });
@@ -121,15 +120,36 @@
     return Math.sqrt(dx * dx + dy * dy);
   }
 
+  // MediaPipe FaceMesh refined eye landmark indices
   var RIGHT_EYE = [33, 160, 158, 133, 153, 144];
   var LEFT_EYE = [362, 385, 387, 263, 373, 380];
+
+  // Adaptive baseline for EAR — calibrates to user's open-eye EAR
+  var earBaseline = 0;
+  var earSamples = [];
+  var EAR_CALIBRATION_FRAMES = 8;
+
+  function calibrateEar(ear) {
+    if (earSamples.length < EAR_CALIBRATION_FRAMES) {
+      earSamples.push(ear);
+      if (earSamples.length === EAR_CALIBRATION_FRAMES) {
+        earBaseline = earSamples.reduce(function (s, v) { return s + v; }, 0) / earSamples.length;
+      }
+      return false; // Still calibrating
+    }
+    return true;
+  }
 
   function detectBlink(landmarks) {
     var leftEar = eyeAspectRatio(landmarks, LEFT_EYE);
     var rightEar = eyeAspectRatio(landmarks, RIGHT_EYE);
     var ear = (leftEar + rightEar) / 2;
 
-    if (ear < EAR_THRESHOLD) {
+    // Use adaptive threshold: 70% of open-eye baseline, or fixed threshold if not calibrated
+    var threshold = earBaseline > 0 ? earBaseline * 0.7 : EAR_THRESHOLD;
+    if (!calibrateEar(ear)) return blinkCount;
+
+    if (ear < threshold) {
       lowEarFrames++;
       if (lowEarFrames >= BLINK_FRAMES && blinkState === 'OPEN') {
         blinkState = 'CLOSED';
@@ -343,26 +363,46 @@
 
     showScreen('camera-screen');
 
-    // Wait for face to be detected before starting challenges
+    // Wait for face to be detected and calibrate EAR baseline
     challengeText.textContent = 'Position your face in the circle';
     var faceFound = false;
+    var stableFaceFrames = 0;
     var faceAttempts = 0;
-    while (!faceFound && faceAttempts < 300) { // ~10 seconds
+    earSamples = [];
+    earBaseline = 0;
+    while (stableFaceFrames < 10 && faceAttempts < 450) { // ~15 seconds
       var faces = await detector.estimateFaces(video);
       if (faces && faces.length > 0) {
-        faceFound = true;
-        faceGuide.className = 'face-guide detected';
+        if (!faceFound) {
+          faceFound = true;
+          faceGuide.className = 'face-guide detected';
+          challengeText.textContent = 'Hold steady...';
+        }
+        stableFaceFrames++;
+
+        // Calibrate EAR during stable detection
+        var kp = faces[0].keypoints;
+        var le = eyeAspectRatio(kp, LEFT_EYE);
+        var re = eyeAspectRatio(kp, RIGHT_EYE);
+        calibrateEar((le + re) / 2);
+      } else {
+        stableFaceFrames = 0;
+        if (faceFound) {
+          faceGuide.className = 'face-guide';
+          challengeText.textContent = 'Position your face in the circle';
+          faceFound = false;
+        }
       }
       faceAttempts++;
       await sleep(33);
     }
 
-    if (!faceFound) {
-      showError('No face detected. Please ensure your face is visible.');
+    if (stableFaceFrames < 10) {
+      showError('No face detected. Please ensure your face is visible and well-lit.');
       return;
     }
 
-    await sleep(500);
+    await sleep(400);
 
     // Run liveness challenges
     var passed = await runChallenges();
@@ -400,6 +440,8 @@
     blinkState = 'OPEN';
     lowEarFrames = 0;
     turnStartTime = 0;
+    earBaseline = 0;
+    earSamples = [];
 
     for (var i = 0; i < dots.length; i++) {
       dots[i].className = 'dot';

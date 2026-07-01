@@ -13,7 +13,7 @@ export const UserCreatedEvent = BaseUserEvent.extend({
   role:          z.enum(['RIDER', 'DRIVER', 'BOTH']),
   email:         z.string().email().optional(),
   name:          z.string().optional(),
-  authMethod:    z.enum(['username']),
+  authMethod:    z.enum(['username', 'whatsapp']),
 });
 
 // Fired by compliance-worker after driver KYC docs are verified.

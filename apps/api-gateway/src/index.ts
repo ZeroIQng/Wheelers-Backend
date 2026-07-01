@@ -72,6 +72,7 @@ import {
   handleSendPhoneOtpRoute,
   handleVerifyPhoneOtpRoute,
 } from "./http/phone.route";
+import { handleTwilioWhatsappWebhookRoute } from "./http/whatsapp.route";
 import {
   handleApplyReferralCodeRoute,
   handleGetReferralSummaryRoute,
@@ -269,6 +270,7 @@ async function bootstrap(): Promise<void> {
       [TOPICS.WALLET_EVENTS, TOPIC_PRESETS.STANDARD],
       [TOPICS.NOTIFICATION_EVENTS, TOPIC_PRESETS.LOW_VOLUME],
       [TOPICS.COMPLIANCE_EVENTS, TOPIC_PRESETS.LOW_VOLUME],
+      [TOPICS.CRYPTO_WALLET_EVENTS, TOPIC_PRESETS.LOW_VOLUME],
       [TOPICS.GPS_STREAM, TOPIC_PRESETS.GPS],
       [TOPICS.GPS_PROCESSED, TOPIC_PRESETS.GPS],
     ]),
@@ -547,6 +549,30 @@ async function bootstrap(): Promise<void> {
         twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
         twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
         phoneOtpTtlSeconds: gatewayEnv.WHATSAPP_OTP_TTL_SECONDS,
+      });
+
+      return;
+    }
+
+    if (url.pathname === "/webhooks/twilio/whatsapp") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleTwilioWhatsappWebhookRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+        publisher,
+        pouchLiquifiaClient,
+        redisClient: redisCommandClient,
+        twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
+        twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
+        twilioWhatsappNumber: gatewayEnv.TWILIO_WHATSAPP_NUMBER,
+        twilioKycContentSid: gatewayEnv.TWILIO_KYC_CONTENT_SID,
+        groqApiKey: gatewayEnv.GROQ_API_KEY,
+        groqModel: gatewayEnv.GROQ_MODEL,
+        groqTimeoutMs: gatewayEnv.GROQ_TIMEOUT_MS,
+        appBaseUrl: gatewayEnv.APP_BASE_URL,
       });
 
       return;

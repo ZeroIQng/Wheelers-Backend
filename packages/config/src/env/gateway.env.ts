@@ -10,6 +10,12 @@ const GatewayEnvSchema = z.object({
   TWILIO_ACCOUNT_SID: z.string().min(1).optional(),
   TWILIO_AUTH_TOKEN:  z.string().min(1).optional(),
   TWILIO_FROM_NUMBER: z.string().min(1).optional(),
+  GROQ_API_KEY:       z.string().min(1).optional(),
+  GROQ_MODEL:         z.string().min(1).default('llama-3.3-70b-versatile'),
+  GROQ_TIMEOUT_MS:    z.coerce.number().int().positive().default(6000),
+  APP_BASE_URL:       z.string().url().optional(),
+  TWILIO_WHATSAPP_NUMBER: z.string().min(1).optional(),
+  TWILIO_KYC_CONTENT_SID: z.string().min(1).optional(),
   // Pouch Liquifia Fiat Aggregator
   POUCH_LIQUIFIA_API_KEY: z.string().min(1),
   POUCH_LIQUIFIA_BASE_URL: z.string().url().default('https://fiat-api.pouchfinance.xyz/api/v1'),

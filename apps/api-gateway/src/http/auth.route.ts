@@ -4,13 +4,14 @@ import {
   UserCreatedEvent,
   UserRoleChangedEvent,
 } from '@wheleers/kafka-schemas';
-import { UserRole, userClient, virtualAccountClient, walletClient } from '@wheleers/db';
+import { UserRole, userClient, walletClient } from '@wheleers/db';
 import { createLocalAccessToken, hashPassword, verifyPassword } from '../auth/local';
 import type { GatewayRole } from '../types';
 import { getString, isRecord } from '../utils/object';
 import type { GatewayPublisher } from '../websocket/publisher';
 import type { PouchLiquifiaClient } from '@wheleers/pouch-client';
 import { readJsonBody, sendJson } from './utils';
+import { provisionPouchAccount } from '../onboarding/user-onboarding';
 
 interface AuthRouteDeps {
   jwtSecret: string;
@@ -233,45 +234,4 @@ export async function handleUsernamePasswordSigninRoute(
       error: error instanceof Error ? error.message : 'Signin failed',
     });
   }
-}
-
-async function provisionPouchAccount(
-  pouch: PouchLiquifiaClient,
-  userId: string,
-  name: string | undefined,
-): Promise<void> {
-  const nameParts = (name ?? 'Wheelers User').trim().split(/\s+/);
-  const firstName = nameParts[0] ?? 'Wheelers';
-  const lastName = nameParts.slice(1).join(' ') || 'User';
-
-  const customer = await pouch.createCustomer({
-    customerReference: userId,
-    firstName,
-    lastName,
-  });
-
-  await userClient.updatePouchCustomerId(userId, customer.id);
-
-  const va = await pouch.createVirtualAccount(customer.id, {
-    country: 'NG',
-    currency: 'NGN',
-    idempotencyKey: `va-provision-${userId}`,
-  });
-
-  await virtualAccountClient.create({
-    userId,
-    pouchCustomerId: customer.id,
-    pouchVirtualAccountId: va.id,
-    bankName: va.bank_name,
-    accountNumber: va.account_number,
-    accountName: va.account_name,
-    currency: va.currency,
-    country: va.country,
-  });
-
-  console.info('[auth] pouch provisioning complete', {
-    userId,
-    pouchCustomerId: customer.id,
-    accountNumber: va.account_number,
-  });
 }
