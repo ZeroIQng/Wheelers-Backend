@@ -210,6 +210,15 @@ export const RideDriverRejectedEvent = BaseRideEvent.extend({
   reason:     z.enum(['timeout', 'manual_reject']),
 });
 
+// Fired by api-gateway when rider sends a counter-offer to a specific driver.
+// Consumed by: ride-service (update pending match, re-broadcast to targeted driver).
+export const RideRiderCounterOfferEvent = BaseRideEvent.extend({
+  eventType:        z.literal('RIDE_RIDER_COUNTER_OFFER'),
+  riderId:          z.string().uuid(),
+  driverId:         z.string().uuid(),
+  counterOfferNgn:  z.number(),
+});
+
 // Fired by ride-service after 3 minutes with no counter-offers.
 // Consumed by: api-gateway (relay to rider as ride:bid_timeout).
 export const RideBidTimeoutEvent = BaseRideEvent.extend({
@@ -233,6 +242,7 @@ export const RideEvent = z.discriminatedUnion('eventType', [
   RideStopConfirmedEvent,
   RideOfferSentEvent,
   RideCounterOfferEvent,
+  RideRiderCounterOfferEvent,
   RideOfferAcceptedEvent,
   RideDriverAssignedEvent,
   RideRouteUpdatedEvent,
@@ -258,6 +268,7 @@ export type RideCompletionRequestedEvent = z.infer<typeof RideCompletionRequeste
 export type RideCompletedEvent       = z.infer<typeof RideCompletedEvent>;
 export type RideCancelledEvent       = z.infer<typeof RideCancelledEvent>;
 export type RideDriverRejectedEvent  = z.infer<typeof RideDriverRejectedEvent>;
+export type RideRiderCounterOfferEvent = z.infer<typeof RideRiderCounterOfferEvent>;
 export type RideBidTimeoutEvent      = z.infer<typeof RideBidTimeoutEvent>;
 export type ChatMessageSentEvent     = z.infer<typeof ChatMessageSentEvent>;
 export type RideEvent                = z.infer<typeof RideEvent>;

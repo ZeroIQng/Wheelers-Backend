@@ -87,6 +87,9 @@ import {
 import { handleGetRideChatMessagesRoute } from "./http/chat.route";
 import { applyCorsHeaders, sendJson } from "./http/utils";
 import { startGatewayKafkaConsumer } from "./kafka/consumer";
+import { handleWhatsappFlowEndpoint } from "./whatsapp-flows/flow-endpoint";
+import { handleDriverFlowEndpoint } from "./whatsapp-flows/driver-flow-endpoint";
+import { handleDriverWhatsappWebhookRoute } from "./http/driver-whatsapp.route";
 import { RedisClient } from "./redis/client";
 import { asRawProducer, startOutboxPublisher } from "./outbox/outbox-publisher";
 import { GatewayPublisher } from "./websocket/publisher";
@@ -565,6 +568,8 @@ async function bootstrap(): Promise<void> {
         publisher,
         pouchLiquifiaClient,
         redisClient: redisCommandClient,
+        routePlanner,
+        googleMapsApiKey: gatewayEnv.GOOGLE_MAPS_API_KEY,
         twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
         twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
         twilioWhatsappNumber: gatewayEnv.TWILIO_WHATSAPP_NUMBER,
@@ -573,6 +578,72 @@ async function bootstrap(): Promise<void> {
         groqModel: gatewayEnv.GROQ_MODEL,
         groqTimeoutMs: gatewayEnv.GROQ_TIMEOUT_MS,
         appBaseUrl: gatewayEnv.APP_BASE_URL,
+      });
+
+      return;
+    }
+
+    if (url.pathname === "/webhooks/whatsapp-flow") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      const flowPrivateKey = gatewayEnv.WHATSAPP_FLOW_PRIVATE_KEY;
+      if (!flowPrivateKey) {
+        sendJson(res, 503, { error: "WhatsApp Flow not configured" });
+        return;
+      }
+
+      await handleWhatsappFlowEndpoint(req, res, {
+        redisClient: redisCommandClient,
+        publisher,
+        privateKeyPem: Buffer.from(flowPrivateKey, "base64").toString("utf8"),
+        tokenSecret: gatewayEnv.JWT_SECRET,
+      });
+
+      return;
+    }
+
+    if (url.pathname === "/webhooks/twilio/driver-whatsapp") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleDriverWhatsappWebhookRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+        publisher,
+        pouchLiquifiaClient,
+        redisClient: redisCommandClient,
+        twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
+        twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
+        twilioDriverWhatsappNumber: gatewayEnv.TWILIO_DRIVER_WHATSAPP_NUMBER,
+        groqApiKey: gatewayEnv.GROQ_API_KEY,
+        groqModel: gatewayEnv.GROQ_MODEL,
+        groqTimeoutMs: gatewayEnv.GROQ_TIMEOUT_MS,
+      });
+
+      return;
+    }
+
+    if (url.pathname === "/webhooks/whatsapp-driver-flow") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      const driverFlowKey = gatewayEnv.WHATSAPP_DRIVER_FLOW_PRIVATE_KEY;
+      if (!driverFlowKey) {
+        sendJson(res, 503, { error: "Driver WhatsApp Flow not configured" });
+        return;
+      }
+
+      await handleDriverFlowEndpoint(req, res, {
+        redisClient: redisCommandClient,
+        publisher,
+        privateKeyPem: Buffer.from(driverFlowKey, "base64").toString("utf8"),
+        tokenSecret: gatewayEnv.JWT_SECRET,
       });
 
       return;
@@ -991,6 +1062,27 @@ async function bootstrap(): Promise<void> {
   await startGatewayKafkaConsumer({
     consumer,
     registry,
+    redisClient: redisCommandClient,
+    whatsappNotifier:
+      gatewayEnv.TWILIO_ACCOUNT_SID && gatewayEnv.TWILIO_AUTH_TOKEN && gatewayEnv.TWILIO_WHATSAPP_NUMBER
+        ? {
+            twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
+            twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
+            twilioWhatsappNumber: gatewayEnv.TWILIO_WHATSAPP_NUMBER,
+            twilioFlowContentSid: gatewayEnv.WHATSAPP_FLOW_CONTENT_SID,
+            tokenSecret: gatewayEnv.JWT_SECRET,
+          }
+        : undefined,
+    driverWhatsappNotifier:
+      gatewayEnv.TWILIO_ACCOUNT_SID && gatewayEnv.TWILIO_AUTH_TOKEN && gatewayEnv.TWILIO_DRIVER_WHATSAPP_NUMBER
+        ? {
+            twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
+            twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
+            twilioDriverWhatsappNumber: gatewayEnv.TWILIO_DRIVER_WHATSAPP_NUMBER,
+            twilioDriverFlowContentSid: gatewayEnv.WHATSAPP_DRIVER_FLOW_CONTENT_SID,
+            tokenSecret: gatewayEnv.JWT_SECRET,
+          }
+        : undefined,
   });
 
   const port = Number(gatewayEnv.PORT);

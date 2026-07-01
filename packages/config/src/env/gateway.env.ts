@@ -16,6 +16,15 @@ const GatewayEnvSchema = z.object({
   APP_BASE_URL:       z.string().url().optional(),
   TWILIO_WHATSAPP_NUMBER: z.string().min(1).optional(),
   TWILIO_KYC_CONTENT_SID: z.string().min(1).optional(),
+  // WhatsApp Flows
+  WHATSAPP_FLOW_PRIVATE_KEY: z.string().min(1).optional(),
+  WHATSAPP_FLOW_ID: z.string().min(1).optional(),
+  WHATSAPP_FLOW_CONTENT_SID: z.string().min(1).optional(),
+  META_ACCESS_TOKEN: z.string().min(1).optional(),
+  // Driver WhatsApp
+  TWILIO_DRIVER_WHATSAPP_NUMBER: z.string().min(1).optional(),
+  WHATSAPP_DRIVER_FLOW_PRIVATE_KEY: z.string().min(1).optional(),
+  WHATSAPP_DRIVER_FLOW_CONTENT_SID: z.string().min(1).optional(),
   // Pouch Liquifia Fiat Aggregator
   POUCH_LIQUIFIA_API_KEY: z.string().min(1),
   POUCH_LIQUIFIA_BASE_URL: z.string().url().default('https://fiat-api.pouchfinance.xyz/api/v1'),

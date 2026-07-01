@@ -27,6 +27,21 @@ export class GroqClient {
   }
 
   async complete(messages: LlmChatMessage[]): Promise<string | null> {
+    return this.chat(messages, false);
+  }
+
+  async completeJson(messages: LlmChatMessage[]): Promise<Record<string, unknown> | null> {
+    const raw = await this.chat(messages, true);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      console.warn('[groq] Failed to parse JSON response', { raw: raw.slice(0, 200) });
+      return null;
+    }
+  }
+
+  private async chat(messages: LlmChatMessage[], jsonMode: boolean): Promise<string | null> {
     if (!this.config.apiKey) {
       return null;
     }
@@ -35,18 +50,23 @@ export class GroqClient {
     const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
 
     try {
+      const body: Record<string, unknown> = {
+        model: this.config.model,
+        messages,
+        temperature: jsonMode ? 0.1 : 0.4,
+        max_completion_tokens: jsonMode ? 300 : 420,
+      };
+      if (jsonMode) {
+        body.response_format = { type: 'json_object' };
+      }
+
       const response = await fetch(GROQ_CHAT_COMPLETIONS_URL, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${this.config.apiKey}`,
           'content-type': 'application/json',
         },
-        body: JSON.stringify({
-          model: this.config.model,
-          messages,
-          temperature: 0.4,
-          max_completion_tokens: 420,
-        }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
 

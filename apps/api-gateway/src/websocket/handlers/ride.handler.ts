@@ -10,6 +10,7 @@ import {
   RideCounterOfferEvent,
   RideDriverRejectedEvent,
   RideOfferAcceptedEvent,
+  RideRiderCounterOfferEvent,
   RideRouteUpdateRequestedEvent,
   RideRequestedEvent,
   RideStopConfirmedEvent,
@@ -274,6 +275,28 @@ export async function handleRideMessage(
         rideId: event.rideId,
         driverId: event.driverId,
         agreedFareNgn: event.agreedFareNgn,
+      },
+    };
+  }
+
+  if (type === 'ride:rider_counter_offer') {
+    const event = RideRiderCounterOfferEvent.parse({
+      eventType: 'RIDE_RIDER_COUNTER_OFFER',
+      rideId: requireString(payload, 'rideId'),
+      riderId: auth.userId,
+      driverId: requireString(payload, 'driverId'),
+      counterOfferNgn: requireNumber(payload, 'counterOfferNgn'),
+      timestamp,
+    });
+
+    await publisher.publishRideEvent(event);
+
+    return {
+      type: 'ride:rider_counter_offer:accepted',
+      payload: {
+        rideId: event.rideId,
+        driverId: event.driverId,
+        counterOfferNgn: event.counterOfferNgn,
       },
     };
   }

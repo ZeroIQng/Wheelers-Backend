@@ -5,6 +5,7 @@ import {
   safeParseKafkaEvent,
   TOPICS,
   type RideCounterOfferEvent,
+  type RideRiderCounterOfferEvent,
   type RideDriverRejectedEvent,
   type RideOfferAcceptedEvent,
   type RideRouteUpdateRequestedEvent,
@@ -37,6 +38,11 @@ export function createRideRequestedConsumer(params: {
 
       if (event.eventType === 'RIDE_COUNTER_OFFER') {
         handleCounterOffer(event);
+        return;
+      }
+
+      if (event.eventType === 'RIDE_RIDER_COUNTER_OFFER') {
+        await handleRiderCounterOffer(event);
         return;
       }
 
@@ -194,6 +200,43 @@ export function createRideRequestedConsumer(params: {
 
     // Counter-offer is forwarded to rider via gateway Kafka consumer → WebSocket
     console.log(`[ride-service] counter-offer on ride ${event.rideId} from driver ${event.driverId}: ₦${event.counterOfferNgn}`);
+  }
+
+  async function handleRiderCounterOffer(event: RideRiderCounterOfferEvent): Promise<void> {
+    const pending = state.pendingMatchesByRideId.get(event.rideId);
+    if (!pending) return;
+
+    // Update the rider's offer amount for this ride
+    pending.rideRequested = {
+      ...pending.rideRequested,
+      riderOfferNgn: event.counterOfferNgn,
+    };
+
+    // Reset bid timeout since there's activity
+    if (pending.timeout) {
+      clearTimeout(pending.timeout);
+      pending.timeout = null;
+    }
+    startBidTimeout(pending.rideRequested);
+
+    // Find the targeted driver to re-send the updated offer
+    const driver = pending.candidates.find((d) => d.driverId === event.driverId)
+      ?? state.onlineDrivers.get(event.driverId);
+
+    if (!driver) {
+      console.warn(`[ride-service] rider counter-offer: driver ${event.driverId} not found for ride ${event.rideId}`);
+      return;
+    }
+
+    const expiresAt = new Date(Date.now() + BID_TIMEOUT_MS);
+    await rideEventsProducer.sendUpdatedOfferToDriver({
+      driver,
+      rideRequested: pending.rideRequested,
+      updatedOfferNgn: event.counterOfferNgn,
+      expiresAt,
+    });
+
+    console.log(`[ride-service] rider counter-offer on ride ${event.rideId} to driver ${event.driverId}: ₦${event.counterOfferNgn}`);
   }
 
   async function handleOfferAccepted(event: RideOfferAcceptedEvent): Promise<void> {

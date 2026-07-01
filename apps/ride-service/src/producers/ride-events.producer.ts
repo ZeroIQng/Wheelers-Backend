@@ -30,6 +30,12 @@ export type RideEventsProducer = {
     rideRequested: RideRequestedEvent;
     expiresAt: Date;
   }): Promise<void>;
+  sendUpdatedOfferToDriver(params: {
+    driver: OnlineDriver;
+    rideRequested: RideRequestedEvent;
+    updatedOfferNgn: number;
+    expiresAt: Date;
+  }): Promise<void>;
   gpsStaleWarning(event: GpsStaleWarningEvent): Promise<void>;
 };
 
@@ -149,6 +155,51 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
       if (batch.length > 0) {
         await producer.sendBatch(batch);
       }
+    },
+
+    async sendUpdatedOfferToDriver({ driver, rideRequested, updatedOfferNgn, expiresAt }) {
+      const timestamp = new Date().toISOString();
+
+      const offerEvent: RideOfferSentEvent = {
+        eventType: 'RIDE_OFFER_SENT',
+        rideId: rideRequested.rideId,
+        riderId: rideRequested.riderId,
+        driverId: driver.driverId,
+        driverUserId: driver.userId,
+        pickup: rideRequested.pickup,
+        destination: rideRequested.destination,
+        stops: rideRequested.stops,
+        fareEstimateNgn: rideRequested.fareEstimateNgn,
+        paymentMethod: rideRequested.paymentMethod,
+        riderOfferNgn: updatedOfferNgn,
+        suggestedFareNgn: rideRequested.suggestedFareNgn,
+        ratePerKmNgn: rideRequested.ratePerKmNgn,
+        plannedDistanceKm: rideRequested.plannedDistanceKm,
+        plannedDurationSeconds: rideRequested.plannedDurationSeconds,
+        expiresAt: expiresAt.toISOString(),
+        route: rideRequested.route,
+        timestamp,
+      };
+
+      const push: PushSendEvent = {
+        eventType: 'PUSH_SEND',
+        notificationId: randomUUID(),
+        userId: driver.userId,
+        title: 'Updated rider offer',
+        body: `Rider updated their offer to ₦${updatedOfferNgn} for ${rideRequested.pickup.address} → ${rideRequested.destination.address}`,
+        data: {
+          type: 'ride:offer_updated',
+          rideId: rideRequested.rideId,
+          riderOfferNgn: String(updatedOfferNgn),
+        },
+        priority: 'high',
+        timestamp,
+      };
+
+      await producer.sendBatch([
+        { topic: TOPICS.RIDE_EVENTS, value: offerEvent, options: { key: rideRequested.rideId } },
+        { topic: TOPICS.NOTIFICATION_EVENTS, value: push, options: { key: driver.driverId } },
+      ]);
     },
 
     async gpsStaleWarning(event) {

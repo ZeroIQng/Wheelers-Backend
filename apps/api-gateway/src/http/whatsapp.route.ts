@@ -1,6 +1,8 @@
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { userClient } from '@wheleers/db';
+import { GoogleMapsRoutePlanner, validateRiderOffer } from '@wheleers/config';
+import { RideRequestedEvent, RideCancelledEvent, TOPICS } from '@wheleers/kafka-schemas';
 import type { PouchLiquifiaClient } from '@wheleers/pouch-client';
 import type { GatewayPublisher } from '../websocket/publisher';
 import { createLocalAccessToken } from '../auth/local';
@@ -10,14 +12,27 @@ import {
   getWhatsappConversation,
 } from '../LLM/conversation-store';
 import { WhatsappBotService } from '../LLM/whatsapp-bot.service';
+import { GroqClient } from '../LLM/groq.client';
+import { parseRideIntent } from '../LLM/ride-intent-parser';
+import { geocodeAddress } from '../LLM/geocoding';
+import {
+  storeWhatsappRide,
+  setActiveRide,
+  getActiveRide,
+  clearActiveRide,
+  setPhoneLookup,
+  cleanupRideKeys,
+} from '../whatsapp-flows/bid-state';
 import type { RedisClient } from '../redis/client';
 import { readRawBody, sendJson } from './utils';
 
-interface TwilioWhatsappRouteDeps {
+export interface TwilioWhatsappRouteDeps {
   jwtSecret: string;
   publisher: GatewayPublisher;
   pouchLiquifiaClient: PouchLiquifiaClient;
   redisClient: RedisClient;
+  routePlanner: GoogleMapsRoutePlanner;
+  googleMapsApiKey: string;
   twilioAccountSid?: string;
   twilioAuthToken?: string;
   twilioWhatsappNumber?: string;
@@ -224,8 +239,120 @@ export async function handleTwilioWhatsappWebhookRoute(
       }
     }
 
-    // AI response for all users
+    // Store phone lookup for Kafka consumer notifications
+    await setPhoneLookup(deps.redisClient, user.id, phone).catch(() => {});
+
     const recentMessages = await getWhatsappConversation(deps.redisClient, phone);
+    const groq = new GroqClient({
+      apiKey: deps.groqApiKey,
+      model: deps.groqModel,
+      timeoutMs: deps.groqTimeoutMs,
+    });
+
+    // Try to parse ride intent before falling through to AI conversation
+    const rideIntent = await parseRideIntent(groq, incomingMessage, recentMessages);
+
+    if (rideIntent?.intent === 'ride_request' && rideIntent.pickup && rideIntent.destination) {
+      const existingRide = await getActiveRide(deps.redisClient, user.id);
+      if (existingRide) {
+        const reply = "You already have an active ride request. I'll notify you when drivers respond, or say 'cancel ride' to cancel.";
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage },
+          { role: 'assistant', content: reply },
+        ]);
+        sendTwiml(res, reply);
+        return;
+      }
+
+      const [pickupGeo, destGeo] = await Promise.all([
+        geocodeAddress(deps.googleMapsApiKey, rideIntent.pickup.address),
+        geocodeAddress(deps.googleMapsApiKey, rideIntent.destination.address),
+      ]);
+
+      if (pickupGeo && destGeo) {
+        const plannedRoute = await deps.routePlanner.planRoute({
+          origin: pickupGeo,
+          destination: destGeo,
+        });
+
+        const rideId = randomUUID();
+        const suggestedFareNgn = plannedRoute.suggestedFareNgn;
+        const riderOfferNgn = rideIntent.offerNgn ?? suggestedFareNgn;
+        const paymentMethod = rideIntent.paymentMethod ?? 'CASH';
+
+        const validation = validateRiderOffer(riderOfferNgn, suggestedFareNgn);
+        const finalOffer = validation.valid ? riderOfferNgn : suggestedFareNgn;
+
+        const event = RideRequestedEvent.parse({
+          eventType: 'RIDE_REQUESTED',
+          rideId,
+          riderId: user.id,
+          pickup: { lat: pickupGeo.lat, lng: pickupGeo.lng, address: pickupGeo.formattedAddress },
+          destination: { lat: destGeo.lat, lng: destGeo.lng, address: destGeo.formattedAddress },
+          stops: [],
+          plannedDistanceKm: plannedRoute.distanceKm,
+          plannedDurationSeconds: plannedRoute.durationSeconds,
+          fareEstimateNgn: suggestedFareNgn,
+          paymentMethod,
+          riderOfferNgn: finalOffer,
+          suggestedFareNgn,
+          minOfferNgn: plannedRoute.minOfferNgn,
+          ratePerKmNgn: plannedRoute.ratePerKmNgn,
+          route: plannedRoute.geometry,
+          timestamp: new Date().toISOString(),
+        });
+
+        await deps.publisher.publishRideEvent(event);
+
+        await storeWhatsappRide(deps.redisClient, rideId, {
+          riderId: user.id,
+          phone,
+          pickupAddress: pickupGeo.formattedAddress,
+          destinationAddress: destGeo.formattedAddress,
+          offerNgn: finalOffer,
+          suggestedFareNgn,
+          paymentMethod,
+          createdAt: new Date().toISOString(),
+        });
+        await setActiveRide(deps.redisClient, user.id, rideId);
+
+        const offerDisplay = `₦${finalOffer.toLocaleString()}`;
+        const reply = `Looking for drivers from *${rideIntent.pickup.area}* to *${rideIntent.destination.area}*! Your offer: ${offerDisplay}. I'll message you when drivers respond 🚗`;
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage },
+          { role: 'assistant', content: reply },
+        ]);
+        sendTwiml(res, reply);
+        return;
+      }
+      // Geocoding failed — fall through to AI conversation for clarification
+    }
+
+    if (rideIntent?.intent === 'cancel_ride') {
+      const activeRide = await getActiveRide(deps.redisClient, user.id);
+      if (activeRide) {
+        const cancelEvent = RideCancelledEvent.parse({
+          eventType: 'RIDE_CANCELLED',
+          rideId: activeRide,
+          riderId: user.id,
+          reason: 'rider_cancelled',
+          timestamp: new Date().toISOString(),
+        });
+        await deps.publisher.publishRideEvent(cancelEvent);
+        await clearActiveRide(deps.redisClient, user.id);
+        await cleanupRideKeys(deps.redisClient, activeRide);
+
+        const reply = 'Your ride has been cancelled. You can request another ride anytime!';
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage },
+          { role: 'assistant', content: reply },
+        ]);
+        sendTwiml(res, reply);
+        return;
+      }
+    }
+
+    // AI response for all users
     const bot = new WhatsappBotService({
       apiKey: deps.groqApiKey,
       model: deps.groqModel,
