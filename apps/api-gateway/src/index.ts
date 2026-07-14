@@ -58,6 +58,7 @@ import {
   handleAdminGetDriverRoute,
   handleAdminApproveDriverRoute,
   handleAdminRejectDriverRoute,
+  handleAdminFieldReviewRoute,
 } from "./http/admin.route";
 import {
   handleAdminLoginRoute,
@@ -900,6 +901,26 @@ async function bootstrap(): Promise<void> {
           jwtSecret: gatewayEnv.JWT_SECRET,
           kycStorage: driverKycStorage,
         }, approveMatch[1]!);
+        return;
+      }
+
+      const fieldReviewMatch = url.pathname.match(/^\/admin\/drivers\/([^/]+)\/field-review$/);
+      if (fieldReviewMatch) {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+
+        if (!driverKycStorage) {
+          sendJson(res, 503, { error: 'Storage not configured' });
+          return;
+        }
+
+        await handleAdminFieldReviewRoute(req, res, {
+          adminApiKey: process.env.ADMIN_API_KEY ?? '',
+          jwtSecret: gatewayEnv.JWT_SECRET,
+          kycStorage: driverKycStorage,
+        }, fieldReviewMatch[1]!);
         return;
       }
 

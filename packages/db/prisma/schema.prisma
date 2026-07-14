@@ -102,6 +102,7 @@ model DriverKycSubmission {
   reviewedBy      String?
   rejectionReason String?
   rejectedFields  String[]  @default([])
+  fieldStatuses   Json?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   driver          Driver    @relation(fields: [driverId], references: [id])

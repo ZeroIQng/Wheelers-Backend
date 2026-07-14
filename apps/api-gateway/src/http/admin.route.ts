@@ -97,8 +97,66 @@ export async function handleAdminGetDriverRoute(
       licenceImageUrl: licenceUrl,
       selfieUrl,
       rejectionReason: submission.rejectionReason,
+      rejectedFields: submission.rejectedFields ?? [],
+      fieldStatuses: (submission.fieldStatuses as Record<string, unknown>) ?? {},
     },
   });
+}
+
+/**
+ * POST /admin/drivers/:driverId/field-review
+ * Approve or reject a single KYC field.
+ * Body: { field: "nin"|"licence"|"selfie"|"vehicle", status: "approved"|"rejected", reason?: string }
+ */
+export async function handleAdminFieldReviewRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: AdminRouteDeps,
+  driverId: string,
+): Promise<void> {
+  const auth = await verifyAdminAuth(req, deps);
+  if (!auth) {
+    sendJson(res, 401, { error: 'Unauthorized' });
+    return;
+  }
+
+  const rawBody = await readJsonBody(req);
+  if (!isRecord(rawBody)) {
+    sendJson(res, 400, { error: 'Body must be a JSON object' });
+    return;
+  }
+
+  const field = getString(rawBody, 'field');
+  const status = getString(rawBody, 'status');
+  const reason = getString(rawBody, 'reason') ?? '';
+  const validFields = ['nin', 'licence', 'selfie', 'vehicle'];
+  const validStatuses = ['approved', 'rejected'];
+
+  if (!field || !validFields.includes(field)) {
+    sendJson(res, 400, { error: 'field must be one of: nin, licence, selfie, vehicle' });
+    return;
+  }
+
+  if (!status || !validStatuses.includes(status)) {
+    sendJson(res, 400, { error: 'status must be "approved" or "rejected"' });
+    return;
+  }
+
+  const submission = await driverClient.findKycSubmission(driverId);
+  if (!submission || submission.status !== 'SUBMITTED') {
+    sendJson(res, 400, { error: 'No pending submission to review' });
+    return;
+  }
+
+  const existing = (submission.fieldStatuses as Record<string, unknown>) ?? {};
+  const updated: Record<string, unknown> = {
+    ...existing,
+    [field]: { status, reason, reviewedBy: auth.adminName, reviewedAt: new Date().toISOString() },
+  };
+
+  await driverClient.updateFieldStatuses(driverId, updated as Record<string, string>);
+
+  sendJson(res, 200, { field, status, fieldStatuses: updated });
 }
 
 /**

@@ -182,6 +182,12 @@ export const driverClient = {
       data:  { status: 'REJECTED', reviewedAt: new Date(), reviewedBy, rejectionReason, rejectedFields: rejectedFields ?? [] },
     }),
 
+  updateFieldStatuses: (driverId: string, fieldStatuses: Record<string, string>) =>
+    prisma.driverKycSubmission.update({
+      where: { driverId },
+      data: { fieldStatuses },
+    }),
+
   // ── KYC reviews ────────────────────────────────────────────────────────────
 
   createKycReview: (data: {

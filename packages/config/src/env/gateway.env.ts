@@ -40,7 +40,7 @@ const GatewayEnvSchema = z.object({
   RIDER_KYC_S3_BUCKET: z.string().min(1).optional(),
   RIDER_KYC_S3_PREFIX: z.string().min(1).default('rider-kyc/face-verification'),
   SCHEDULED_RIDE_DISPATCH_LEAD_TIME_S: z.coerce.number().int().positive().default(300),
-  CORS_ORIGINS:       z.string().default('http://localhost:19006,https://app.wheelersng.com'),
+  CORS_ORIGINS:       z.string().default('http://localhost:19006,http://localhost:3000,https://app.wheelersng.com'),
   WS_IDLE_TIMEOUT_MS: z.string().default('60000'),
   // Social Auth
   APPLE_BUNDLE_ID:    z.string().optional().transform(v => v?.trim() || undefined),
