@@ -135,6 +135,53 @@ export const driverClient = {
     });
   },
 
+  // ── KYC submissions ────────────────────────────────────────────────────────
+
+  upsertKycSubmission: (driverId: string, data: {
+    ninImageKey?:     string;
+    licenceImageKey?: string;
+    selfieKey?:       string;
+    vehicleMake?:     string;
+    vehicleModel?:    string;
+    vehiclePlate?:    string;
+    vehicleYear?:     number;
+  }) =>
+    prisma.driverKycSubmission.upsert({
+      where:  { driverId },
+      create: { driverId, ...data },
+      update: data,
+    }),
+
+  submitKyc: (driverId: string) =>
+    prisma.driverKycSubmission.update({
+      where: { driverId },
+      data:  { status: 'SUBMITTED', submittedAt: new Date() },
+    }),
+
+  findKycSubmission: (driverId: string) =>
+    prisma.driverKycSubmission.findUnique({
+      where: { driverId },
+    }),
+
+  findPendingKycSubmissions: () =>
+    prisma.driverKycSubmission.findMany({
+      where:   { status: 'SUBMITTED' },
+      include: { driver: { include: { user: true } } },
+      orderBy: { submittedAt: 'asc' },
+    }),
+
+  approveKycSubmission: (driverId: string, reviewedBy: string) =>
+    prisma.driverKycSubmission.update({
+      where: { driverId },
+      data:  { status: 'APPROVED', reviewedAt: new Date(), reviewedBy },
+    }),
+
+  rejectKycSubmission: (driverId: string, reviewedBy: string, rejectionReason: string, rejectedFields?: string[]) =>
+    prisma.driverKycSubmission.update({
+      where: { driverId },
+      data:  { status: 'REJECTED', reviewedAt: new Date(), reviewedBy, rejectionReason, rejectedFields: rejectedFields ?? [] },
+    }),
+
   // ── KYC reviews ────────────────────────────────────────────────────────────
 
   createKycReview: (data: {

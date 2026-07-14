@@ -18,6 +18,12 @@ export interface WhatsappBotUserContext {
   isNewUser: boolean;
   riderKycStatus: string;
   hasFiatWallet: boolean;
+  walletBalanceNgn: number | null;
   hasVirtualAccount: boolean;
+  virtualAccountDetails: {
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+  } | null;
   kycLink: string | null;
 }

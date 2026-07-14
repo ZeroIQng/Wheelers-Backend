@@ -27,12 +27,21 @@ export class GroupRideFaceStorage {
   private readonly s3: S3Client;
 
   constructor(params: {
-    region: string;
+    accountId: string;
+    accessKeyId: string;
+    secretAccessKey: string;
     bucket: string;
     prefix: string;
     uploadUrlTtlSeconds: number;
   }) {
-    this.s3 = new S3Client({ region: params.region });
+    this.s3 = new S3Client({
+      region: 'auto',
+      endpoint: `https://${params.accountId}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: params.accessKeyId,
+        secretAccessKey: params.secretAccessKey,
+      },
+    });
     this.bucket = params.bucket;
     this.prefix = normalizePrefix(params.prefix);
     this.uploadUrlTtlSeconds = params.uploadUrlTtlSeconds;

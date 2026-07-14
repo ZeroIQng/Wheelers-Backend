@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
-export class RiderKycFaceStorage {
+export class DriverKycStorage {
   private readonly s3: S3Client;
   private readonly bucket: string;
   private readonly prefix: string;
@@ -19,13 +20,14 @@ export class RiderKycFaceStorage {
     this.prefix = params.prefix.replace(/^\/+/, '').replace(/\/+$/, '');
   }
 
-  async uploadSelfie(params: {
-    userId: string;
+  async upload(params: {
+    driverId: string;
+    type: 'nin' | 'licence' | 'selfie';
     imageBuffer: Buffer;
     mimeType: string;
   }): Promise<string> {
     const ext = params.mimeType === 'image/png' ? 'png' : 'jpg';
-    const objectKey = `${this.prefix}/${params.userId}/${Date.now()}-${randomUUID()}.${ext}`;
+    const objectKey = `${this.prefix}/${params.driverId}/${params.type}-${Date.now()}-${randomUUID()}.${ext}`;
 
     await this.s3.send(
       new PutObjectCommand({
@@ -37,5 +39,14 @@ export class RiderKycFaceStorage {
     );
 
     return objectKey;
+  }
+
+  async getSignedUrl(key: string, expiresInSeconds = 3600): Promise<string> {
+    const command = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+    });
+
+    return getSignedUrl(this.s3, command, { expiresIn: expiresInSeconds });
   }
 }

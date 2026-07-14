@@ -78,11 +78,35 @@ model Driver {
   totalRides        Int               @default(0)
   totalEarningsNgn  Decimal           @default(0) @db.Decimal(18, 2)
   user              User              @relation(fields: [userId], references: [id])
+  kycSubmission     DriverKycSubmission?
   kycReviews        DriverKycReview[]
   rides             Ride[]            @relation("DriverRides")
 
   @@index([status])
   @@index([kycStatus])
+}
+
+model DriverKycSubmission {
+  id              String    @id @default(uuid())
+  driverId        String    @unique
+  ninImageKey     String?
+  licenceImageKey String?
+  selfieKey       String?
+  vehicleMake     String?
+  vehicleModel    String?
+  vehiclePlate    String?
+  vehicleYear     Int?
+  status          KycStatus @default(PENDING)
+  submittedAt     DateTime?
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  rejectionReason String?
+  rejectedFields  String[]  @default([])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  driver          Driver    @relation(fields: [driverId], references: [id])
+
+  @@index([status, submittedAt])
 }
 
 model DriverKycReview {
@@ -556,6 +580,18 @@ model NotificationDevice {
   user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, enabled, updatedAt])
+}
+
+model AdminUser {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  passwordHash String
+  name         String
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([username])
 }
 
 // ─── Enums ───────────────────────────────────────────────────────

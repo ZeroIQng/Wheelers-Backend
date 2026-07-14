@@ -25,6 +25,10 @@ import {
   handleUsernamePasswordSignupRoute,
 } from "./http/auth.route";
 import {
+  handleAppleAuthRoute,
+  handleGoogleAuthRoute,
+} from "./http/social-auth.route";
+import {
   handleGetCurrentProfileRoute,
   handleUpdateCurrentProfileRoute,
 } from "./http/profile.route";
@@ -45,6 +49,26 @@ import {
   handleGetDriverEarningsRoute,
   handleGetDriverRideHistoryRoute,
 } from "./http/driver.route";
+import {
+  handleDriverKycSubmitRoute,
+  handleDriverKycStatusRoute,
+} from "./http/driver-kyc.route";
+import {
+  handleAdminListDriversRoute,
+  handleAdminGetDriverRoute,
+  handleAdminApproveDriverRoute,
+  handleAdminRejectDriverRoute,
+} from "./http/admin.route";
+import {
+  handleAdminLoginRoute,
+  handleCreateAdminRoute,
+} from "./http/admin-auth.route";
+import {
+  handleAdminPlatformStatsRoute,
+  handleAdminDriverAnalyticsRoute,
+  handleAdminRiderAnalyticsRoute,
+  handleAdminRecentRidesRoute,
+} from "./http/admin-analytics.route";
 import {
   handleCancelGroupRideMatchRequestRoute,
   handleCompleteGroupRideFaceUploadRoute,
@@ -89,6 +113,7 @@ import { applyCorsHeaders, sendJson } from "./http/utils";
 import { startGatewayKafkaConsumer } from "./kafka/consumer";
 import { handleWhatsappFlowEndpoint } from "./whatsapp-flows/flow-endpoint";
 import { handleDriverFlowEndpoint } from "./whatsapp-flows/driver-flow-endpoint";
+import { handleRideSearchFlowEndpoint } from "./whatsapp-flows/ride-search-flow-endpoint";
 import { handleDriverWhatsappWebhookRoute } from "./http/driver-whatsapp.route";
 import { RedisClient } from "./redis/client";
 import { asRawProducer, startOutboxPublisher } from "./outbox/outbox-publisher";
@@ -97,6 +122,7 @@ import { SocketRegistry } from "./websocket/registry";
 import { createGatewayWebSocketServer } from "./websocket/server";
 import { GroupRideFaceStorage } from "./storage/group-ride-face-storage";
 import { RiderKycFaceStorage } from "./storage/rider-kyc-face-storage";
+import { DriverKycStorage } from "./storage/driver-kyc-storage";
 import { startReferralJobs } from "./referrals/jobs";
 
 const SCHEDULED_RIDE_QUEUE = "wheleers-scheduled-rides";
@@ -305,24 +331,38 @@ async function bootstrap(): Promise<void> {
     gatewayEnv.GOOGLE_MAPS_API_KEY,
   );
 
-  const groupRideFaceStorage =
-    gatewayEnv.AWS_REGION && gatewayEnv.GROUP_RIDE_FACE_S3_BUCKET
-      ? new GroupRideFaceStorage({
-          region: gatewayEnv.AWS_REGION,
-          bucket: gatewayEnv.GROUP_RIDE_FACE_S3_BUCKET,
-          prefix: gatewayEnv.GROUP_RIDE_FACE_S3_PREFIX,
-          uploadUrlTtlSeconds: gatewayEnv.GROUP_RIDE_FACE_UPLOAD_URL_TTL_S,
-        })
-      : undefined;
+  const r2Configured = !!(gatewayEnv.R2_ACCOUNT_ID && gatewayEnv.R2_ACCESS_KEY_ID && gatewayEnv.R2_SECRET_ACCESS_KEY && gatewayEnv.R2_BUCKET);
 
-  const riderKycFaceStorage =
-    gatewayEnv.AWS_REGION && gatewayEnv.RIDER_KYC_S3_BUCKET
-      ? new RiderKycFaceStorage({
-          region: gatewayEnv.AWS_REGION,
-          bucket: gatewayEnv.RIDER_KYC_S3_BUCKET,
-          prefix: gatewayEnv.RIDER_KYC_S3_PREFIX,
-        })
-      : null;
+  const groupRideFaceStorage = r2Configured
+    ? new GroupRideFaceStorage({
+        accountId: gatewayEnv.R2_ACCOUNT_ID!,
+        accessKeyId: gatewayEnv.R2_ACCESS_KEY_ID!,
+        secretAccessKey: gatewayEnv.R2_SECRET_ACCESS_KEY!,
+        bucket: gatewayEnv.R2_BUCKET!,
+        prefix: gatewayEnv.GROUP_RIDE_FACE_S3_PREFIX,
+        uploadUrlTtlSeconds: gatewayEnv.GROUP_RIDE_FACE_UPLOAD_URL_TTL_S,
+      })
+    : undefined;
+
+  const riderKycFaceStorage = r2Configured
+    ? new RiderKycFaceStorage({
+        accountId: gatewayEnv.R2_ACCOUNT_ID!,
+        accessKeyId: gatewayEnv.R2_ACCESS_KEY_ID!,
+        secretAccessKey: gatewayEnv.R2_SECRET_ACCESS_KEY!,
+        bucket: gatewayEnv.R2_BUCKET!,
+        prefix: gatewayEnv.RIDER_KYC_S3_PREFIX,
+      })
+    : null;
+
+  const driverKycStorage = r2Configured
+    ? new DriverKycStorage({
+        accountId: gatewayEnv.R2_ACCOUNT_ID!,
+        accessKeyId: gatewayEnv.R2_ACCESS_KEY_ID!,
+        secretAccessKey: gatewayEnv.R2_SECRET_ACCESS_KEY!,
+        bucket: gatewayEnv.R2_BUCKET!,
+        prefix: 'drivers/kyc',
+      })
+    : null;
 
   const registry = new SocketRegistry({
     instanceId: `${sharedEnv.KAFKA_CLIENT_ID}-${process.pid}-${Math.random()
@@ -412,6 +452,38 @@ async function bootstrap(): Promise<void> {
 
       await handleUsernamePasswordSigninRoute(req, res, {
         jwtSecret: gatewayEnv.JWT_SECRET,
+      });
+
+      return;
+    }
+
+    if (url.pathname === "/auth/apple") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleAppleAuthRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+        appleBundleId: gatewayEnv.APPLE_BUNDLE_ID,
+        googleClientId: gatewayEnv.GOOGLE_CLIENT_ID,
+        pouchLiquifiaClient,
+      });
+
+      return;
+    }
+
+    if (url.pathname === "/auth/google") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleGoogleAuthRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+        appleBundleId: gatewayEnv.APPLE_BUNDLE_ID,
+        googleClientId: gatewayEnv.GOOGLE_CLIENT_ID,
+        pouchLiquifiaClient,
       });
 
       return;
@@ -583,6 +655,30 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
+    if (url.pathname === "/webhooks/whatsapp-ride-search-flow") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      const rideSearchFlowKey = gatewayEnv.WHATSAPP_RIDE_SEARCH_FLOW_PRIVATE_KEY;
+      if (!rideSearchFlowKey) {
+        sendJson(res, 503, { error: "Ride search WhatsApp Flow not configured" });
+        return;
+      }
+
+      await handleRideSearchFlowEndpoint(req, res, {
+        redisClient: redisCommandClient,
+        publisher,
+        privateKeyPem: Buffer.from(rideSearchFlowKey, "base64").toString("utf8"),
+        tokenSecret: gatewayEnv.JWT_SECRET,
+        googleMapsApiKey: gatewayEnv.GOOGLE_MAPS_API_KEY,
+        routePlanner,
+      });
+
+      return;
+    }
+
     if (url.pathname === "/webhooks/whatsapp-flow") {
       if (req.method !== "POST") {
         sendMethodNotAllowed(res);
@@ -702,6 +798,203 @@ async function bootstrap(): Promise<void> {
       await handleGetDriverRideHistoryRoute(req, res, {
         jwtSecret: gatewayEnv.JWT_SECRET,
       }, url);
+      return;
+    }
+
+    // ── Driver KYC routes ──────────────────────────────────────────────────
+
+    if (url.pathname === "/drivers/kyc/submit") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      if (!driverKycStorage) {
+        sendJson(res, 503, { error: 'KYC storage not configured' });
+        return;
+      }
+
+      await handleDriverKycSubmitRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+        kycStorage: driverKycStorage,
+      });
+      return;
+    }
+
+    if (url.pathname === "/drivers/kyc/status") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleDriverKycStatusRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+      });
+      return;
+    }
+
+    // ── Admin auth routes ──────────────────────────────────────────────────
+
+    if (url.pathname === "/admin/login") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleAdminLoginRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+        adminApiKey: process.env.ADMIN_API_KEY ?? '',
+      });
+      return;
+    }
+
+    if (url.pathname === "/admin/create-admin") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleCreateAdminRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+        adminApiKey: process.env.ADMIN_API_KEY ?? '',
+      });
+      return;
+    }
+
+    // ── Admin routes ──────────────────────────────────────────────────────
+
+    if (url.pathname === "/admin/drivers") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      if (!driverKycStorage) {
+        sendJson(res, 503, { error: 'Storage not configured' });
+        return;
+      }
+
+      await handleAdminListDriversRoute(req, res, {
+        adminApiKey: process.env.ADMIN_API_KEY ?? '',
+        jwtSecret: gatewayEnv.JWT_SECRET,
+        kycStorage: driverKycStorage,
+      });
+      return;
+    }
+
+    if (url.pathname.startsWith("/admin/drivers/")) {
+      const approveMatch = url.pathname.match(/^\/admin\/drivers\/([^/]+)\/approve$/);
+      if (approveMatch) {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+
+        if (!driverKycStorage) {
+          sendJson(res, 503, { error: 'Storage not configured' });
+          return;
+        }
+
+        await handleAdminApproveDriverRoute(req, res, {
+          adminApiKey: process.env.ADMIN_API_KEY ?? '',
+          jwtSecret: gatewayEnv.JWT_SECRET,
+          kycStorage: driverKycStorage,
+        }, approveMatch[1]!);
+        return;
+      }
+
+      const rejectMatch = url.pathname.match(/^\/admin\/drivers\/([^/]+)\/reject$/);
+      if (rejectMatch) {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+
+        if (!driverKycStorage) {
+          sendJson(res, 503, { error: 'Storage not configured' });
+          return;
+        }
+
+        await handleAdminRejectDriverRoute(req, res, {
+          adminApiKey: process.env.ADMIN_API_KEY ?? '',
+          jwtSecret: gatewayEnv.JWT_SECRET,
+          kycStorage: driverKycStorage,
+        }, rejectMatch[1]!);
+        return;
+      }
+
+      const driverDetailMatch = url.pathname.match(/^\/admin\/drivers\/([^/]+)$/);
+      if (driverDetailMatch) {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+
+        if (!driverKycStorage) {
+          sendJson(res, 503, { error: 'Storage not configured' });
+          return;
+        }
+
+        await handleAdminGetDriverRoute(req, res, {
+          adminApiKey: process.env.ADMIN_API_KEY ?? '',
+          jwtSecret: gatewayEnv.JWT_SECRET,
+          kycStorage: driverKycStorage,
+        }, driverDetailMatch[1]!);
+        return;
+      }
+    }
+
+    // ── Admin analytics routes ──────────────────────────────────────────────
+
+    if (url.pathname === "/admin/analytics/platform") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleAdminPlatformStatsRoute(req, res, {
+        adminApiKey: process.env.ADMIN_API_KEY ?? '',
+        jwtSecret: gatewayEnv.JWT_SECRET,
+      });
+      return;
+    }
+
+    if (url.pathname === "/admin/analytics/drivers") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleAdminDriverAnalyticsRoute(req, res, {
+        adminApiKey: process.env.ADMIN_API_KEY ?? '',
+        jwtSecret: gatewayEnv.JWT_SECRET,
+      });
+      return;
+    }
+
+    if (url.pathname === "/admin/analytics/riders") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleAdminRiderAnalyticsRoute(req, res, {
+        adminApiKey: process.env.ADMIN_API_KEY ?? '',
+        jwtSecret: gatewayEnv.JWT_SECRET,
+      });
+      return;
+    }
+
+    if (url.pathname === "/admin/analytics/recent-rides") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleAdminRecentRidesRoute(req, res, {
+        adminApiKey: process.env.ADMIN_API_KEY ?? '',
+        jwtSecret: gatewayEnv.JWT_SECRET,
+      });
       return;
     }
 

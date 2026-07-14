@@ -67,5 +67,5 @@ export function applyCorsHeaders(
 
   res.setHeader('vary', 'origin');
   res.setHeader('access-control-allow-methods', 'POST,GET,OPTIONS');
-  res.setHeader('access-control-allow-headers', 'content-type,authorization');
+  res.setHeader('access-control-allow-headers', 'content-type,authorization,x-admin-key');
 }

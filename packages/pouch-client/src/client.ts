@@ -56,6 +56,25 @@ export class PouchLiquifiaClient {
     return res.data;
   }
 
+  async findCustomerByReference(customerReference: string): Promise<PouchCustomer | null> {
+    const res = await this.get<PouchCustomer[]>(
+      `/customers?search=${encodeURIComponent(customerReference)}&take=10`,
+    );
+    const customers = Array.isArray(res.data) ? res.data : [];
+    return customers.find((c) => c.customer_reference === customerReference) ?? null;
+  }
+
+  async updateCustomer(customerId: string, params: {
+    email?: string;
+    phoneNumber?: string;
+  }): Promise<PouchCustomer> {
+    const body: Record<string, unknown> = {};
+    if (params.email) body.email = params.email;
+    if (params.phoneNumber) body.phone_number = params.phoneNumber;
+    const res = await this.patch<PouchCustomer>(`/customers/${customerId}`, body);
+    return res.data;
+  }
+
   // ── Virtual Accounts ────────────────────────────────────────
 
   async createVirtualAccount(
@@ -165,6 +184,13 @@ export class PouchLiquifiaClient {
     return this.requestWithRetry<T>('GET', path);
   }
 
+  private async patch<T>(
+    path: string,
+    body: unknown,
+  ): Promise<ApiResponse<T>> {
+    return this.requestWithRetry<T>('PATCH', path, body);
+  }
+
   private async post<T>(
     path: string,
     body: unknown,
@@ -223,7 +249,8 @@ export class PouchLiquifiaClient {
       const json = (await res.json()) as ApiResponse<T>;
 
       if (!res.ok || json.success === false) {
-        const msg = json.error ?? json.message ?? `Pouch Liquifia ${method} ${path} failed`;
+        const raw = json.error ?? json.message ?? `Pouch Liquifia ${method} ${path} failed`;
+        const msg = typeof raw === 'string' ? raw : JSON.stringify(raw);
         throw new PouchApiError(msg, res.status, json.code);
       }
 

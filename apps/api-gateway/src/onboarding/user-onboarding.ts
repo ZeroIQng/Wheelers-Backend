@@ -86,21 +86,42 @@ export async function provisionPouchAccount(
 
   let pouchCustomerId = user.pouchCustomerId ?? undefined;
   if (!pouchCustomerId) {
-    const customer = await pouch.createCustomer({
-      customerReference: userId,
-      firstName,
-      lastName,
-      phoneNumber: phone ?? user.phone ?? undefined,
-    });
+    try {
+      const customer = await pouch.createCustomer({
+        customerReference: userId,
+        firstName,
+        lastName,
+        phoneNumber: phone ?? user.phone ?? undefined,
+        email: user.email ?? undefined,
+      });
+      pouchCustomerId = customer.id;
+    } catch (error) {
+      // If customer already exists on Pouch, fetch by reference
+      const isDuplicate = error instanceof Error && error.message.includes('DUPLICATE_CUSTOMER_REFERENCE');
+      if (!isDuplicate) throw error;
 
-    pouchCustomerId = customer.id;
+      const existing = await pouch.findCustomerByReference(userId);
+      if (!existing) throw error;
+      pouchCustomerId = existing.id;
+
+      // Patch missing contact info so virtual account creation succeeds
+      const needsEmail = !existing.email && user.email;
+      const needsPhone = !existing.phone_number && (phone ?? user.phone);
+      if (needsEmail || needsPhone) {
+        await pouch.updateCustomer(pouchCustomerId, {
+          email: needsEmail ? (user.email ?? undefined) : undefined,
+          phoneNumber: needsPhone ? (phone ?? user.phone ?? undefined) : undefined,
+        });
+      }
+    }
+
     await userClient.updatePouchCustomerId(userId, pouchCustomerId);
   }
 
   const va = await pouch.createVirtualAccount(pouchCustomerId, {
     country: 'NG',
     currency: 'NGN',
-    idempotencyKey: `va-provision-${userId}`,
+    idempotencyKey: `va-provision-${userId}-${Date.now()}`,
   });
 
   await virtualAccountClient.create({

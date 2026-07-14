@@ -1,22 +1,34 @@
 import type { GroqClient } from './groq.client';
 import type { WhatsappConversationMessage } from './types';
 
+export interface RideLocation {
+  address: string;
+  area: string;
+  specific: boolean;
+}
+
 export interface RideIntent {
   intent: 'ride_request' | 'ride_status' | 'cancel_ride' | 'other';
-  pickup: { address: string; area: string } | null;
-  destination: { address: string; area: string } | null;
+  pickup: RideLocation | null;
+  destination: RideLocation | null;
   offerNgn: number | null;
-  paymentMethod: 'CASH' | 'WALLET' | null;
+  paymentMethod: 'CASH' | 'WALLET' | 'CRYPTO_WALLET' | null;
 }
 
 const RIDE_INTENT_SYSTEM_PROMPT = `
 You extract ride request details from Nigerian WhatsApp messages.
 Return ONLY a JSON object with these fields:
 - "intent": "ride_request" | "ride_status" | "cancel_ride" | "other"
-- "pickup": { "address": string, "area": string } | null
-- "destination": { "address": string, "area": string } | null
+- "pickup": { "address": string, "area": string, "specific": boolean } | null
+- "destination": { "address": string, "area": string, "specific": boolean } | null
 - "offerNgn": number | null
-- "paymentMethod": "WALLET" | "CASH" | null
+- "paymentMethod": "WALLET" | "CRYPTO_WALLET" | "CASH" | null
+
+"specific" field:
+- true = the location is precise enough to find on a map (a street, landmark, estate, bus stop, mall, hotel, school, hospital, market, plaza, roundabout, junction, bridge, gate, etc.)
+- false = just a broad area/neighborhood name with no specific point (e.g. "Lekki", "VI", "Ikeja", "Ajah", "Yaba", "Wuse", "Garki")
+- Examples of SPECIFIC (true): "Chevron roundabout Lekki", "Shoprite Ikeja", "Palms Mall", "Lekki Phase 1 gate", "Adeola Odeku VI", "Computer Village", "Unilag main gate", "Third Mainland Bridge", "Obalende bus stop"
+- Examples of NOT SPECIFIC (false): "Lekki", "VI", "Ikeja", "Ajah", "Ikoyi", "Surulere", "Festac", "Abuja", "Wuse"
 
 Rules:
 - If the message is about booking a ride, going somewhere, or requesting a trip → "ride_request"
@@ -24,31 +36,24 @@ Rules:
 - If cancelling a ride → "cancel_ride"
 - Everything else (greetings, wallet questions, general chat) → "other"
 - For "other" intent, set all other fields to null
-- Normalize Nigerian locations:
-  "VI" → "Victoria Island, Lagos"
-  "Lekki" → "Lekki, Lagos"
-  "Ajah" → "Ajah, Lagos"
-  "Ikoyi" → "Ikoyi, Lagos"
-  "Yaba" → "Yaba, Lagos"
-  "Surulere" → "Surulere, Lagos"
-  "Ikeja" → "Ikeja, Lagos"
-  "Maryland" → "Maryland, Lagos"
-  "Festac" → "Festac Town, Lagos"
-  "Oshodi" → "Oshodi, Lagos"
-  "Berger" → "Berger, Lagos"
-  "Ojodu" → "Ojodu, Lagos"
-  "Abule Egba" → "Abule Egba, Lagos"
-  For non-Lagos cities, include the state (e.g., "Garki, Abuja")
+- Normalize Nigerian locations and always include city/state:
+  "VI" → "Victoria Island, Lagos", "Lekki" → "Lekki, Lagos", "Ikeja" → "Ikeja, Lagos", etc.
+  For non-Lagos cities, include the state (e.g., "Garki, Abuja", "Wuse, Abuja")
 - Extract price if mentioned (e.g., "2000", "₦2,000", "2k" → 2000, "5k" → 5000)
 - If payment method not mentioned, set to null
+- "wallet" or "use wallet" = "WALLET" (means Naira wallet by default)
+- "crypto wallet" or "pay with crypto" or "USDC" = "CRYPTO_WALLET"
 - Look at conversation history to fill in missing pickup/destination if mentioned earlier
 
 Examples:
-"I want to go from Lekki to VI for 2000" →
-{"intent":"ride_request","pickup":{"address":"Lekki, Lagos","area":"Lekki"},"destination":{"address":"Victoria Island, Lagos","area":"VI"},"offerNgn":2000,"paymentMethod":null}
+"I want to go from Chevron to Adeola Odeku for 2000" →
+{"intent":"ride_request","pickup":{"address":"Chevron Roundabout, Lekki, Lagos","area":"Lekki","specific":true},"destination":{"address":"Adeola Odeku Street, Victoria Island, Lagos","area":"VI","specific":true},"offerNgn":2000,"paymentMethod":null}
 
-"Book a ride to Ikeja" →
-{"intent":"ride_request","pickup":null,"destination":{"address":"Ikeja, Lagos","area":"Ikeja"},"offerNgn":null,"paymentMethod":null}
+"Take me from Lekki to VI" →
+{"intent":"ride_request","pickup":{"address":"Lekki, Lagos","area":"Lekki","specific":false},"destination":{"address":"Victoria Island, Lagos","area":"VI","specific":false},"offerNgn":null,"paymentMethod":null}
+
+"Pickup from Shoprite Ikeja to Yaba" →
+{"intent":"ride_request","pickup":{"address":"Shoprite, Ikeja, Lagos","area":"Ikeja","specific":true},"destination":{"address":"Yaba, Lagos","area":"Yaba","specific":false},"offerNgn":null,"paymentMethod":null}
 
 "Cancel my ride" →
 {"intent":"cancel_ride","pickup":null,"destination":null,"offerNgn":null,"paymentMethod":null}

@@ -1,4 +1,4 @@
-import { userClient, virtualAccountClient } from '@wheleers/db';
+import { userClient, virtualAccountClient, walletClient } from '@wheleers/db';
 import { createLocalAccessToken } from '../auth/local';
 import { GroqClient, type GroqClientConfig } from './groq.client';
 import { WHATSAPP_SYSTEM_PROMPT } from './whatsapp-system-prompt';
@@ -39,17 +39,10 @@ function buildFallbackReply(context: WhatsappBotUserContext): string {
   const name = firstName(context.name, context.phone);
 
   if (context.isNewUser) {
-    return [
-      `Hey ${name}! Welcome to Wheelers 🚗`,
-      'Your account is set up and your wallets are on the way.',
-      'I can help you with rides, wallet, payments — just ask!',
-    ].join('\n\n');
+    return `Hi ${name}! Welcome to Wheelers 🚗\n\nNeed help booking a ride?`;
   }
 
-  return [
-    `Hey ${name}! How can I help you today?`,
-    'I can assist with rides, wallet, deposits, withdrawals — just ask 🙂',
-  ].join('\n\n');
+  return `Hi ${name}! Need a ride? Where are you headed?`;
 }
 
 function buildContextMessage(context: WhatsappBotUserContext): string {
@@ -61,8 +54,20 @@ function buildContextMessage(context: WhatsappBotUserContext): string {
     `- new WhatsApp account this message: ${context.isNewUser ? 'yes' : 'no'}`,
     `- rider KYC status: ${context.riderKycStatus}`,
     `- fiat wallet exists: ${context.hasFiatWallet ? 'yes' : 'no'}`,
-    `- virtual account exists: ${context.hasVirtualAccount ? 'yes' : 'no'}`,
   ];
+
+  if (context.walletBalanceNgn !== null) {
+    lines.push(`- wallet balance: ₦${context.walletBalanceNgn.toLocaleString()}`);
+  }
+
+  lines.push(`- virtual account exists: ${context.hasVirtualAccount ? 'yes' : 'no'}`);
+
+  if (context.virtualAccountDetails) {
+    lines.push(`- virtual account for deposits (share when user asks to deposit/top up/fund wallet):`);
+    lines.push(`  Bank: ${context.virtualAccountDetails.bankName}`);
+    lines.push(`  Account Number: ${context.virtualAccountDetails.accountNumber}`);
+    lines.push(`  Account Name: ${context.virtualAccountDetails.accountName}`);
+  }
 
   if (context.riderKycStatus !== 'VERIFIED' && context.kycLink) {
     lines.push(`- KYC verification link (only share if the user asks about KYC/verification): ${context.kycLink}`);
@@ -101,8 +106,11 @@ export class WhatsappBotService {
   }
 
   async generateReply(request: WhatsappBotRequest): Promise<string> {
-    const user = await userClient.findById(request.userId);
-    const virtualAccount = await virtualAccountClient.findByUserId(request.userId);
+    const [user, virtualAccount, wallet] = await Promise.all([
+      userClient.findById(request.userId),
+      virtualAccountClient.findByUserId(request.userId),
+      walletClient.findByUserId(request.userId),
+    ]);
     const kycStatus = String(user.riderKycStatus ?? 'NONE');
     const context: WhatsappBotUserContext = {
       userId: request.userId,
@@ -110,8 +118,14 @@ export class WhatsappBotService {
       phone: request.phone,
       isNewUser: request.isNewUser,
       riderKycStatus: kycStatus,
-      hasFiatWallet: Boolean(user.wallet),
+      hasFiatWallet: Boolean(wallet),
+      walletBalanceNgn: wallet ? Number(wallet.balanceNgn) : null,
       hasVirtualAccount: Boolean(virtualAccount),
+      virtualAccountDetails: virtualAccount ? {
+        bankName: virtualAccount.bankName,
+        accountNumber: virtualAccount.accountNumber,
+        accountName: virtualAccount.accountName,
+      } : null,
       kycLink: kycStatus !== 'VERIFIED' ? this.buildKycLink(request.userId) : null,
     };
 

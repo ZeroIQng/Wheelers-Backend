@@ -20,7 +20,10 @@ const GatewayEnvSchema = z.object({
   WHATSAPP_FLOW_PRIVATE_KEY: z.string().min(1).optional(),
   WHATSAPP_FLOW_ID: z.string().min(1).optional(),
   WHATSAPP_FLOW_CONTENT_SID: z.string().min(1).optional(),
+  WHATSAPP_RIDE_SEARCH_FLOW_PRIVATE_KEY: z.string().min(1).optional(),
+  WHATSAPP_RIDE_SEARCH_FLOW_ID: z.string().min(1).optional(),
   META_ACCESS_TOKEN: z.string().min(1).optional(),
+  META_PHONE_NUMBER_ID: z.string().min(1).optional(),
   // Driver WhatsApp
   TWILIO_DRIVER_WHATSAPP_NUMBER: z.string().min(1).optional(),
   WHATSAPP_DRIVER_FLOW_PRIVATE_KEY: z.string().min(1).optional(),
@@ -39,6 +42,14 @@ const GatewayEnvSchema = z.object({
   SCHEDULED_RIDE_DISPATCH_LEAD_TIME_S: z.coerce.number().int().positive().default(300),
   CORS_ORIGINS:       z.string().default('http://localhost:19006,https://app.wheelersng.com'),
   WS_IDLE_TIMEOUT_MS: z.string().default('60000'),
+  // Social Auth
+  APPLE_BUNDLE_ID:    z.string().optional().transform(v => v?.trim() || undefined),
+  GOOGLE_CLIENT_ID:   z.string().optional().transform(v => v?.trim() || undefined),
+  // Cloudflare R2 Storage
+  R2_ACCOUNT_ID:      z.string().optional().transform(v => v?.trim() || undefined),
+  R2_ACCESS_KEY_ID:   z.string().optional().transform(v => v?.trim() || undefined),
+  R2_SECRET_ACCESS_KEY: z.string().optional().transform(v => v?.trim() || undefined),
+  R2_BUCKET:          z.string().optional().transform(v => v?.trim() || undefined),
 });
 
 export type GatewayEnv = z.infer<typeof GatewayEnvSchema>;
