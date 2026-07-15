@@ -300,8 +300,10 @@ async function getBanksFromCacheOrProvider(
 // ─── Mapping helpers ───────────────────────────────────────────────
 
 function mapBankAccount(bank: PouchBankAccount) {
+  const uuid = typeof bank.uuid === "string" ? bank.uuid : "";
   return {
-    uuid: typeof bank.uuid === "string" ? bank.uuid : "",
+    id: uuid,
+    uuid,
     name: typeof bank.name === "string" ? bank.name : "",
     code: typeof bank.code === "string" ? bank.code : null,
     country: typeof bank.country === "string" ? bank.country : null,
@@ -694,9 +696,18 @@ export async function handleListWithdrawalBankNetworksRoute(
   deps: WalletRouteDeps,
   url: URL,
 ): Promise<void> {
+  let user;
   try {
-    await authenticateHttpUser(req, deps.jwtSecret);
+    user = await authenticateHttpUser(req, deps.jwtSecret);
+  } catch (error) {
+    sendJson(res, 401, {
+      error:
+        error instanceof Error ? error.message : "Unauthorized",
+    });
+    return;
+  }
 
+  try {
     const country = parseCountryCode(url.searchParams.get("country"), "NG");
     const currency = url.searchParams.get("currency")?.toUpperCase() ?? "NGN";
     const query = url.searchParams.get("query")?.trim().toLowerCase() ?? "";
@@ -729,7 +740,8 @@ export async function handleListWithdrawalBankNetworksRoute(
         .filter((item) => item.uuid && item.name),
     });
   } catch (error) {
-    sendJson(res, 401, {
+    console.error("[api-gateway][wallet] bank networks error", error);
+    sendJson(res, 500, {
       error:
         error instanceof Error
           ? error.message
@@ -755,7 +767,7 @@ export async function handleVerifyWithdrawalBankAccountRoute(
       /\D/g,
       "",
     );
-    const bankUuid = pickString(rawBody, ["bankUuid", "networkId"]);
+    const bankUuid = pickString(rawBody, ["bankUuid", "networkId", "id"]);
 
     if (!accountNumber || !bankUuid) {
       sendJson(res, 400, {
@@ -781,6 +793,7 @@ export async function handleVerifyWithdrawalBankAccountRoute(
             : null,
         bankName:
           typeof verified.bank_name === "string" ? verified.bank_name : null,
+        networkId: bankUuid,
         bankUuid,
       },
     });
