@@ -29,6 +29,10 @@ import {
   handleGoogleAuthRoute,
 } from "./http/social-auth.route";
 import {
+  handleLogoutRoute,
+  handleDeleteAccountRoute,
+} from "./http/account.route";
+import {
   handleGetCurrentProfileRoute,
   handleUpdateCurrentProfileRoute,
 } from "./http/profile.route";
@@ -510,6 +514,32 @@ async function bootstrap(): Promise<void> {
 
       await handleUpdateCurrentProfileRoute(req, res, {
         jwtSecret: gatewayEnv.JWT_SECRET,
+      });
+      return;
+    }
+
+    if (url.pathname === "/auth/logout") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleLogoutRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+        redisClient: redisCommandClient,
+      });
+      return;
+    }
+
+    if (url.pathname === "/auth/delete-account") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleDeleteAccountRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+        redisClient: redisCommandClient,
       });
       return;
     }

@@ -185,4 +185,36 @@ export const userClient = {
       where:  { userId, consentType, revokedAt: null },
       data:   { revokedAt: new Date() },
     }),
+
+  /**
+   * Soft-delete a user account by anonymizing PII and clearing auth credentials.
+   * The row stays for referential integrity but is no longer usable.
+   */
+  softDelete: (userId: string) =>
+    prisma.$transaction([
+      // Anonymize user PII
+      prisma.user.update({
+        where: { id: userId },
+        data: {
+          username: null,
+          passwordHash: null,
+          name: 'Deleted User',
+          email: null,
+          phone: null,
+          photoUrl: null,
+          bvn: null,
+          privyDid: `deleted:${userId}:${Date.now()}`,
+        },
+      }),
+      // Disable all notification devices
+      prisma.notificationDevice.updateMany({
+        where: { userId },
+        data: { enabled: false },
+      }),
+      // Revoke all active consents
+      prisma.userConsent.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]),
 };
