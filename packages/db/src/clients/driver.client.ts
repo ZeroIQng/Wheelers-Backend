@@ -118,6 +118,12 @@ export const driverClient = {
     }),
 
 
+  incrementTotalRides: (driverId: string) =>
+    prisma.driver.update({
+      where: { id: driverId },
+      data:  { totalRides: { increment: 1 } },
+    }),
+
   updateRating: async (driverId: string) => {
     // Recalculate average from all feedback for this driver.
     // Called by compliance-worker after each FEEDBACK_LOGGED event.

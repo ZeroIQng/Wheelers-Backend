@@ -18,7 +18,6 @@ import {
   addBid,
   shouldNotify,
   clearActiveRide,
-  getRideMeta,
   cleanupRideKeys,
 } from '../whatsapp-flows/bid-state';
 import type { WhatsappBid } from '../whatsapp-flows/bid-state';
@@ -31,29 +30,12 @@ import {
   sendBidTimeoutNotification,
 } from '../whatsapp-flows/whatsapp-notifier';
 import type { WhatsappNotifierDeps } from '../whatsapp-flows/whatsapp-notifier';
-import {
-  isWhatsappDriver,
-  lookupDriverPhoneByUserId,
-  addDriverOffer,
-  setDriverActiveRide,
-  clearDriverActiveRide,
-} from '../whatsapp-flows/driver-state';
-import {
-  sendDriverRideOfferNotification,
-  sendDriverRideMatchedNotification,
-  sendDriverRideStartedNotification,
-  sendDriverRideCompletedNotification,
-  sendDriverRideCancelledNotification,
-  sendDriverRiderCounterOfferNotification,
-} from '../whatsapp-flows/driver-notifier';
-import type { DriverWhatsappNotifierDeps } from '../whatsapp-flows/driver-notifier';
 
 export interface StartGatewayConsumerDeps {
   consumer: WheelersConsumer;
   registry: SocketRegistry;
   redisClient: RedisClient;
   whatsappNotifier?: WhatsappNotifierDeps;
-  driverWhatsappNotifier?: DriverWhatsappNotifierDeps;
 }
 
 interface RideParticipantState {
@@ -142,48 +124,22 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_OFFER_SENT') {
-    const waDriver = await isWhatsappDriver(deps.redisClient, event.driverUserId);
-    if (waDriver && deps.driverWhatsappNotifier) {
-      await addDriverOffer(deps.redisClient, event.driverUserId, {
-        rideId: event.rideId,
-        riderId: event.riderId,
-        pickupAddress: event.pickup.address,
-        destinationAddress: event.destination.address,
-        riderOfferNgn: event.riderOfferNgn,
-        suggestedFareNgn: event.suggestedFareNgn,
-        fareEstimateNgn: event.fareEstimateNgn,
-        paymentMethod: event.paymentMethod,
-        plannedDistanceKm: event.plannedDistanceKm,
-        plannedDurationSeconds: event.plannedDurationSeconds,
-        expiresAt: event.expiresAt,
-        receivedAt: new Date().toISOString(),
-      });
-      const phone = await lookupDriverPhoneByUserId(deps.redisClient, event.driverUserId);
-      if (phone) {
-        await sendDriverRideOfferNotification(
-          deps.driverWhatsappNotifier, phone,
-          event.pickup.address, event.destination.address,
-          event.riderOfferNgn, event.paymentMethod, event.rideId, event.driverUserId,
-        ).catch((err) => console.warn('[consumer] Driver WhatsApp offer notification failed', err));
-      }
-    } else {
-      await registry.sendToUser(event.driverUserId, 'ride:offer', {
-        rideId: event.rideId,
-        riderId: event.riderId,
-        pickup: event.pickup,
-        destination: event.destination,
-        stops: event.stops,
-        fareEstimateNgn: event.fareEstimateNgn,
-        paymentMethod: event.paymentMethod,
-        riderOfferNgn: event.riderOfferNgn,
-        suggestedFareNgn: event.suggestedFareNgn,
-        ratePerKmNgn: event.ratePerKmNgn,
-        plannedDistanceKm: event.plannedDistanceKm,
-        plannedDurationSeconds: event.plannedDurationSeconds,
-        expiresAt: event.expiresAt,
-        route: event.route,
-      });
-    }
+    await registry.sendToUser(event.driverUserId, 'ride:offer', {
+      rideId: event.rideId,
+      riderId: event.riderId,
+      pickup: event.pickup,
+      destination: event.destination,
+      stops: event.stops,
+      fareEstimateNgn: event.fareEstimateNgn,
+      paymentMethod: event.paymentMethod,
+      riderOfferNgn: event.riderOfferNgn,
+      suggestedFareNgn: event.suggestedFareNgn,
+      ratePerKmNgn: event.ratePerKmNgn,
+      plannedDistanceKm: event.plannedDistanceKm,
+      plannedDurationSeconds: event.plannedDurationSeconds,
+      expiresAt: event.expiresAt,
+      route: event.route,
+    });
     return;
   }
 
@@ -292,20 +248,20 @@ async function handleRideEvent(
       });
     }
 
-    // Notify driver
-    const waDriver = await isWhatsappDriver(deps.redisClient, event.driverUserId);
-    if (waDriver && deps.driverWhatsappNotifier) {
-      const meta = await getRideMeta(deps.redisClient, event.rideId);
-      const driverPhone = await lookupDriverPhoneByUserId(deps.redisClient, event.driverUserId);
-      if (driverPhone) {
-        await sendDriverRideMatchedNotification(
-          deps.driverWhatsappNotifier, driverPhone,
-          meta?.pickupAddress ?? 'Pickup', meta?.destinationAddress ?? 'Destination',
-          event.agreedFareNgn,
-        ).catch(() => {});
-      }
-      await setDriverActiveRide(deps.redisClient, event.driverUserId, event.rideId);
-    }
+    // Notify driver via WebSocket (app)
+    await registry.sendToUser(event.driverUserId, 'ride:matched', {
+      rideId: event.rideId,
+      riderId: event.riderId,
+      driverId: event.driverId,
+      driverName: event.driverName,
+      driverRating: event.driverRating,
+      vehiclePlate: event.vehiclePlate,
+      vehicleModel: event.vehicleModel,
+      etaSeconds: event.etaSeconds,
+      agreedFareNgn: event.agreedFareNgn,
+      lockedFareNgn: event.lockedFareNgn,
+      paymentMethod: event.paymentMethod,
+    });
 
     return;
   }
@@ -352,20 +308,12 @@ async function handleRideEvent(
       });
     }
 
-    // Notify driver
+    // Notify driver via WebSocket (app)
     if (driverUserId) {
-      const waDriverStarted = await isWhatsappDriver(deps.redisClient, driverUserId);
-      if (waDriverStarted && deps.driverWhatsappNotifier) {
-        const driverPhone = await lookupDriverPhoneByUserId(deps.redisClient, driverUserId);
-        if (driverPhone) {
-          await sendDriverRideStartedNotification(deps.driverWhatsappNotifier, driverPhone).catch(() => {});
-        }
-      } else {
-        await registry.sendToUser(driverUserId, 'ride:started', {
-          rideId: event.rideId,
-          startedAt: event.startedAt,
-        });
-      }
+      await registry.sendToUser(driverUserId, 'ride:started', {
+        rideId: event.rideId,
+        startedAt: event.startedAt,
+      });
     }
 
     return;
@@ -395,25 +343,14 @@ async function handleRideEvent(
       });
     }
 
-    // Notify driver
-    const waDriverCompleted = await isWhatsappDriver(deps.redisClient, event.driverUserId);
-    if (waDriverCompleted && deps.driverWhatsappNotifier) {
-      const driverPhone = await lookupDriverPhoneByUserId(deps.redisClient, event.driverUserId);
-      if (driverPhone) {
-        await sendDriverRideCompletedNotification(
-          deps.driverWhatsappNotifier, driverPhone, event.fareNgn, event.distanceKm,
-        ).catch(() => {});
-      }
-      await clearDriverActiveRide(deps.redisClient, event.driverUserId);
-    } else {
-      await registry.sendToUser(event.driverUserId, 'ride:completed', {
-        rideId: event.rideId,
-        fareNgn: event.fareNgn,
-        distanceKm: event.distanceKm,
-        durationSeconds: event.durationSeconds,
-        completedAt: event.completedAt,
-      });
-    }
+    // Notify driver via WebSocket (app)
+    await registry.sendToUser(event.driverUserId, 'ride:completed', {
+      rideId: event.rideId,
+      fareNgn: event.fareNgn,
+      distanceKm: event.distanceKm,
+      durationSeconds: event.durationSeconds,
+      completedAt: event.completedAt,
+    });
 
     // Clean up WhatsApp Redis state
     await cleanupRideKeys(deps.redisClient, event.rideId);
@@ -444,30 +381,16 @@ async function handleRideEvent(
       });
     }
 
-    // Notify driver
+    // Notify driver via WebSocket (app)
     if (event.driverId) {
-      // We need driverUserId to check WhatsApp — look up from participants
       const participants = rideParticipants.get(event.rideId);
       const driverUserId = participants?.driverUserId;
-
       if (driverUserId) {
-        const waDriverCancelled = await isWhatsappDriver(deps.redisClient, driverUserId);
-        if (waDriverCancelled && deps.driverWhatsappNotifier) {
-          const driverPhone = await lookupDriverPhoneByUserId(deps.redisClient, driverUserId);
-          if (driverPhone) {
-            await sendDriverRideCancelledNotification(
-              deps.driverWhatsappNotifier, driverPhone, event.reason,
-            ).catch(() => {});
-          }
-          await clearDriverActiveRide(deps.redisClient, driverUserId);
-        } else {
-          await registry.sendToUser(driverUserId, 'ride:cancelled', {
-            rideId: event.rideId,
-            reason: event.reason,
-          });
-        }
+        await registry.sendToUser(driverUserId, 'ride:cancelled', {
+          rideId: event.rideId,
+          reason: event.reason,
+        });
       }
-      // If no driverUserId in participants, we can't notify the driver via WebSocket
     }
 
     // Clean up WhatsApp Redis state for this ride

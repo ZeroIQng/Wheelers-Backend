@@ -176,7 +176,10 @@ export function createTripLifecycleHandler(params?: {
             durationSeconds: event.durationSeconds,
             paymentMethod: event.paymentMethod,
           });
-          await driverClient.updateStatus(event.driverId, DriverStatus.ONLINE);
+          await Promise.all([
+            driverClient.updateStatus(event.driverId, DriverStatus.ONLINE),
+            driverClient.incrementTotalRides(event.driverId),
+          ]);
         } catch (err) {
           console.warn(`[ride-service] ride completion persistence skipped:`, (err as any)?.message ?? err);
         }

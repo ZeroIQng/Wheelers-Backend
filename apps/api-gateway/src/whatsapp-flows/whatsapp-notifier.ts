@@ -1,68 +1,74 @@
 export interface WhatsappNotifierDeps {
-  twilioAccountSid: string;
-  twilioAuthToken: string;
-  twilioWhatsappNumber: string;
-  twilioFlowContentSid?: string;
+  metaAccessToken: string;
+  metaPhoneNumberId: string;
   tokenSecret: string;
 }
 
-async function sendTwilioWhatsappMessage(
+async function sendMetaWhatsappMessage(
   deps: WhatsappNotifierDeps,
   to: string,
   body: string,
 ): Promise<void> {
-  const endpoint = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(deps.twilioAccountSid)}/Messages.json`;
-  const authHeader = Buffer.from(`${deps.twilioAccountSid}:${deps.twilioAuthToken}`, 'utf8').toString('base64');
-
-  const form = new URLSearchParams({
-    To: `whatsapp:${to}`,
-    From: `whatsapp:${deps.twilioWhatsappNumber}`,
-    Body: body,
-  });
+  // Strip leading '+' — Meta expects phone numbers without it
+  const recipient = to.replace(/^\+/, '');
+  const endpoint = `https://graph.facebook.com/v21.0/${deps.metaPhoneNumberId}/messages`;
 
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
-      authorization: `Basic ${authHeader}`,
-      'content-type': 'application/x-www-form-urlencoded',
+      authorization: `Bearer ${deps.metaAccessToken}`,
+      'content-type': 'application/json',
     },
-    body: form.toString(),
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: recipient,
+      type: 'text',
+      text: { body },
+    }),
   });
 
   if (!response.ok) {
     const payload = await response.text();
-    console.error('[whatsapp-notifier] Send failed', { status: response.status, payload });
+    console.error('[whatsapp-notifier] Meta send failed', { status: response.status, payload });
   }
 }
 
-async function sendTwilioContentMessage(
+async function sendMetaTemplateMessage(
   deps: WhatsappNotifierDeps,
   to: string,
-  contentSid: string,
-  contentVariables: Record<string, string>,
+  templateName: string,
+  parameters: Array<{ type: 'text'; text: string }>,
 ): Promise<void> {
-  const endpoint = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(deps.twilioAccountSid)}/Messages.json`;
-  const authHeader = Buffer.from(`${deps.twilioAccountSid}:${deps.twilioAuthToken}`, 'utf8').toString('base64');
-
-  const form = new URLSearchParams({
-    To: `whatsapp:${to}`,
-    From: `whatsapp:${deps.twilioWhatsappNumber}`,
-    ContentSid: contentSid,
-    ContentVariables: JSON.stringify(contentVariables),
-  });
+  const recipient = to.replace(/^\+/, '');
+  const endpoint = `https://graph.facebook.com/v21.0/${deps.metaPhoneNumberId}/messages`;
 
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
-      authorization: `Basic ${authHeader}`,
-      'content-type': 'application/x-www-form-urlencoded',
+      authorization: `Bearer ${deps.metaAccessToken}`,
+      'content-type': 'application/json',
     },
-    body: form.toString(),
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: recipient,
+      type: 'template',
+      template: {
+        name: templateName,
+        language: { code: 'en' },
+        components: [
+          {
+            type: 'body',
+            parameters,
+          },
+        ],
+      },
+    }),
   });
 
   if (!response.ok) {
     const payload = await response.text();
-    console.error('[whatsapp-notifier] Content send failed', { status: response.status, payload });
+    console.error('[whatsapp-notifier] Meta template send failed', { status: response.status, payload });
   }
 }
 
@@ -73,24 +79,14 @@ export async function sendBidNotification(
   bidCount: number,
   userId: string,
 ): Promise<void> {
-  if (deps.twilioFlowContentSid) {
-    // flow_token is signed so it can't be forged
-    const { signFlowToken } = await import('./encryption');
-    const flowToken = signFlowToken(`${rideId}:${userId}`, deps.tokenSecret);
-    // Send Flow CTA button so rider can tap to see bids
-    await sendTwilioContentMessage(deps, phone, deps.twilioFlowContentSid, {
-      '1': String(bidCount),
-      '2': flowToken,
-    });
-  } else {
-    // Fallback: plain text message
-    const drivers = bidCount === 1 ? 'driver is' : 'drivers are';
-    await sendTwilioWhatsappMessage(
-      deps,
-      phone,
-      `${bidCount} ${drivers} interested in your ride! Open the Wheelers app to view offers and pick a driver.`,
-    );
-  }
+  // For now, send a plain text message. Template messages can be added later
+  // once the Meta template is approved in Business Manager.
+  const drivers = bidCount === 1 ? 'driver is' : 'drivers are';
+  await sendMetaWhatsappMessage(
+    deps,
+    phone,
+    `${bidCount} ${drivers} interested in your ride! Open the Wheelers app to view offers and pick a driver.`,
+  );
 }
 
 export async function sendRideMatchedNotification(
@@ -102,7 +98,7 @@ export async function sendRideMatchedNotification(
   fareNgn: number,
 ): Promise<void> {
   const etaMin = Math.ceil(etaSeconds / 60);
-  await sendTwilioWhatsappMessage(
+  await sendMetaWhatsappMessage(
     deps,
     phone,
     `Ride confirmed! *${driverName}* is on the way in a ${vehicleModel}. ETA: ${etaMin} min. Fare: ₦${fareNgn.toLocaleString()}`,
@@ -113,7 +109,7 @@ export async function sendRideStartedNotification(
   deps: WhatsappNotifierDeps,
   phone: string,
 ): Promise<void> {
-  await sendTwilioWhatsappMessage(deps, phone, 'Your ride has started! Stay safe.');
+  await sendMetaWhatsappMessage(deps, phone, 'Your ride has started! Stay safe.');
 }
 
 export async function sendRideCompletedNotification(
@@ -122,7 +118,7 @@ export async function sendRideCompletedNotification(
   fareNgn: number,
   distanceKm: number,
 ): Promise<void> {
-  await sendTwilioWhatsappMessage(
+  await sendMetaWhatsappMessage(
     deps,
     phone,
     `Ride complete! Distance: ${distanceKm.toFixed(1)}km. Fare: ₦${fareNgn.toLocaleString()}. Thanks for riding with Wheelers!`,
@@ -137,14 +133,14 @@ export async function sendRideCancelledNotification(
   const msg = reason
     ? `Your ride was cancelled: ${reason}. You can request another ride anytime.`
     : 'Your ride was cancelled. You can request another ride anytime.';
-  await sendTwilioWhatsappMessage(deps, phone, msg);
+  await sendMetaWhatsappMessage(deps, phone, msg);
 }
 
 export async function sendBidTimeoutNotification(
   deps: WhatsappNotifierDeps,
   phone: string,
 ): Promise<void> {
-  await sendTwilioWhatsappMessage(
+  await sendMetaWhatsappMessage(
     deps,
     phone,
     'No drivers accepted your ride request. Try again with a different offer?',

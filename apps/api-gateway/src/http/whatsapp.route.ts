@@ -72,187 +72,250 @@ async function clearPendingPayment(redis: RedisClient, userId: string): Promise<
 function parsePaymentChoice(message: string): 'CASH' | 'WALLET' | null {
   const lower = message.toLowerCase().trim();
   if (/\b(cash|pay\s*cash|cash\s*payment)\b/.test(lower)) return 'CASH';
-  // "wallet" means Naira wallet by default
   if (/\b(wallet|pay\s*wallet|wallet\s*payment|use\s*wallet|from\s*wallet)\b/.test(lower)) return 'WALLET';
-  // Also match just "1" or "2" if they're replying to the choice
   if (/^1$/.test(lower)) return 'CASH';
   if (/^2$/.test(lower)) return 'WALLET';
   return null;
 }
 
-export interface TwilioWhatsappRouteDeps {
+export interface MetaWhatsappRouteDeps {
   jwtSecret: string;
   publisher: GatewayPublisher;
   pouchLiquifiaClient: PouchLiquifiaClient;
   redisClient: RedisClient;
   routePlanner: GoogleMapsRoutePlanner;
   googleMapsApiKey: string;
-  twilioAccountSid?: string;
-  twilioAuthToken?: string;
-  twilioWhatsappNumber?: string;
-  twilioKycContentSid?: string;
+  metaAccessToken?: string;
+  metaPhoneNumberId?: string;
+  metaAppSecret?: string;
+  metaWebhookVerifyToken?: string;
   groqApiKey?: string;
   groqModel: string;
   groqTimeoutMs: number;
   appBaseUrl?: string;
 }
 
+/* ─── Meta Cloud API helpers ─── */
+
 function getHeaderValue(req: IncomingMessage, name: string): string | null {
   const value = req.headers[name.toLowerCase()];
   return typeof value === 'string' ? value : null;
 }
 
-function getForwardedProto(req: IncomingMessage): string | null {
-  const value = getHeaderValue(req, 'x-forwarded-proto');
-  return value?.split(',')[0]?.trim() || null;
-}
-
-function getWebhookUrlCandidates(req: IncomingMessage): string[] {
-  const host = getHeaderValue(req, 'x-forwarded-host') ?? getHeaderValue(req, 'host');
-  if (!host) {
-    return [];
-  }
-
-  const pathname = req.url ?? '/';
-  const proto = getForwardedProto(req) ?? 'https';
-  const protocols = proto === 'https' ? ['https', 'http'] : [proto, 'https'];
-  return [...new Set(protocols)].map((protocol) => `${protocol}://${host}${pathname}`);
-}
-
-function buildTwilioSignatureBase(url: string, params: URLSearchParams): string {
-  const pairs: Array<[string, string]> = [];
-  for (const key of new Set(params.keys())) {
-    for (const value of params.getAll(key)) {
-      pairs.push([key, value]);
-    }
-  }
-
-  pairs.sort(([leftKey, leftValue], [rightKey, rightValue]) => {
-    const keyCompare = leftKey.localeCompare(rightKey);
-    return keyCompare === 0 ? leftValue.localeCompare(rightValue) : keyCompare;
-  });
-
-  return pairs.reduce((base, [key, value]) => `${base}${key}${value}`, url);
-}
-
-function isEqualSignature(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left, 'utf8');
-  const rightBuffer = Buffer.from(right, 'utf8');
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-function isValidTwilioSignature(
-  req: IncomingMessage,
-  params: URLSearchParams,
-  authToken: string | undefined,
+function isValidMetaSignature(
+  rawBody: Buffer,
+  signature: string | null,
+  appSecret: string | undefined,
 ): boolean {
-  if (!authToken) {
-    return true;
-  }
+  if (!appSecret) return true; // skip validation if no secret configured
+  if (!signature) return false;
 
-  const provided = getHeaderValue(req, 'x-twilio-signature');
-  if (!provided) {
-    return false;
-  }
+  // Meta sends: sha256=<hex>
+  const expectedPrefix = 'sha256=';
+  if (!signature.startsWith(expectedPrefix)) return false;
 
-  return getWebhookUrlCandidates(req).some((url) => {
-    const expected = createHmac('sha1', authToken)
-      .update(buildTwilioSignatureBase(url, params))
-      .digest('base64');
+  const providedHash = signature.slice(expectedPrefix.length);
+  const computedHash = createHmac('sha256', appSecret)
+    .update(rawBody)
+    .digest('hex');
 
-    return isEqualSignature(provided, expected);
-  });
+  const left = Buffer.from(providedHash, 'utf8');
+  const right = Buffer.from(computedHash, 'utf8');
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
-function normalizeWhatsappPhone(value: string | null): string | null {
-  const normalized = value?.trim().replace(/^whatsapp:/i, '');
-  if (!normalized || !/^\+[1-9]\d{6,14}$/.test(normalized)) {
-    return null;
-  }
-
-  return normalized;
+function normalizeMetaPhone(value: string | undefined): string | null {
+  if (!value) return null;
+  // Meta sends phone without '+', e.g. "2349012345678"
+  const withPlus = value.startsWith('+') ? value : `+${value}`;
+  if (!/^\+[1-9]\d{6,14}$/.test(withPlus)) return null;
+  return withPlus;
 }
 
-async function sendTwilioContentMessage(params: {
-  accountSid: string;
-  authToken: string;
-  from: string;
-  to: string;
-  contentSid: string;
-  contentVariables: Record<string, string>;
-}): Promise<void> {
-  const endpoint = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(params.accountSid)}/Messages.json`;
-  const authHeader = Buffer.from(`${params.accountSid}:${params.authToken}`, 'utf8').toString('base64');
-  const form = new URLSearchParams({
-    To: params.to,
-    From: params.from,
-    ContentSid: params.contentSid,
-    ContentVariables: JSON.stringify(params.contentVariables),
-  });
+async function sendMetaReply(
+  deps: MetaWhatsappRouteDeps,
+  to: string,
+  message: string,
+): Promise<void> {
+  if (!deps.metaAccessToken || !deps.metaPhoneNumberId) {
+    console.warn('[whatsapp] Cannot send reply — META_ACCESS_TOKEN or META_PHONE_NUMBER_ID not configured');
+    return;
+  }
+
+  const recipient = to.replace(/^\+/, '');
+  const endpoint = `https://graph.facebook.com/v21.0/${deps.metaPhoneNumberId}/messages`;
 
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
-      authorization: `Basic ${authHeader}`,
-      'content-type': 'application/x-www-form-urlencoded',
+      authorization: `Bearer ${deps.metaAccessToken}`,
+      'content-type': 'application/json',
     },
-    body: form.toString(),
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: recipient,
+      type: 'text',
+      text: { body: message },
+    }),
   });
 
   if (!response.ok) {
     const payload = await response.text();
-    console.error('[whatsapp] Content template send failed', { status: response.status, payload });
+    console.error('[whatsapp] Meta reply failed', { status: response.status, payload });
   }
 }
 
-function sendEmptyTwiml(res: ServerResponse): void {
-  const body = '<?xml version="1.0" encoding="UTF-8"?><Response/>';
+function sendOk(res: ServerResponse): void {
   res.statusCode = 200;
-  res.setHeader('content-type', 'text/xml; charset=utf-8');
-  res.setHeader('content-length', Buffer.byteLength(body));
-  res.end(body);
+  res.setHeader('content-type', 'text/plain');
+  res.end('OK');
 }
 
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
+/* ─── Webhook verification (GET) ─── */
 
-function sendTwiml(res: ServerResponse, message: string): void {
-  const body = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(message)}</Message></Response>`;
-  console.info('[whatsapp] Sending TwiML reply', { messageLength: message.length, reply: message.slice(0, 200) });
-  res.statusCode = 200;
-  res.setHeader('content-type', 'text/xml; charset=utf-8');
-  res.setHeader('content-length', Buffer.byteLength(body));
-  res.end(body);
-}
-
-export async function handleTwilioWhatsappWebhookRoute(
+export function handleMetaWhatsappVerify(
   req: IncomingMessage,
   res: ServerResponse,
-  deps: TwilioWhatsappRouteDeps,
+  deps: MetaWhatsappRouteDeps,
+): void {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const mode = url.searchParams.get('hub.mode');
+  const token = url.searchParams.get('hub.verify_token');
+  const challenge = url.searchParams.get('hub.challenge');
+
+  console.info('[whatsapp] Verify attempt', { mode, token: token?.slice(0, 10), expected: deps.metaWebhookVerifyToken?.slice(0, 10) });
+  if (mode === 'subscribe' && token === deps.metaWebhookVerifyToken) {
+    console.info('[whatsapp] Webhook verified');
+    res.statusCode = 200;
+    res.setHeader('content-type', 'text/plain');
+    res.end(challenge ?? '');
+    return;
+  }
+
+  sendJson(res, 403, { error: 'Verification failed' });
+}
+
+/* ─── Extract message from Meta webhook payload ─── */
+
+interface MetaMessageInfo {
+  phone: string;
+  profileName?: string;
+  messageBody: string;
+}
+
+function extractMetaMessage(body: unknown): MetaMessageInfo | null {
+  // Meta webhook payload structure:
+  // { object: "whatsapp_business_account", entry: [{ changes: [{ value: { messages: [...], contacts: [...] } }] }] }
+  const payload = body as Record<string, unknown>;
+  if (payload.object !== 'whatsapp_business_account') return null;
+
+  const entries = payload.entry as Array<Record<string, unknown>> | undefined;
+  if (!entries?.length) return null;
+
+  for (const entry of entries) {
+    const changes = entry.changes as Array<Record<string, unknown>> | undefined;
+    if (!changes?.length) continue;
+
+    for (const change of changes) {
+      const value = change.value as Record<string, unknown> | undefined;
+      if (!value) continue;
+
+      const messages = value.messages as Array<Record<string, unknown>> | undefined;
+      if (!messages?.length) continue;
+
+      const msg = messages[0];
+      const from = msg.from as string | undefined;
+      const phone = normalizeMetaPhone(from);
+      if (!phone) continue;
+
+      // Get profile name from contacts array
+      const contacts = value.contacts as Array<Record<string, unknown>> | undefined;
+      const profileName = contacts?.[0]?.profile
+        ? (contacts[0].profile as Record<string, unknown>).name as string | undefined
+        : undefined;
+
+      // Handle text messages
+      if (msg.type === 'text') {
+        const text = msg.text as Record<string, unknown> | undefined;
+        return {
+          phone,
+          profileName,
+          messageBody: (text?.body as string | undefined)?.trim() ?? '',
+        };
+      }
+
+      // Handle interactive messages (button replies, list replies)
+      if (msg.type === 'interactive') {
+        const interactive = msg.interactive as Record<string, unknown> | undefined;
+        if (interactive?.type === 'button_reply') {
+          const buttonReply = interactive.button_reply as Record<string, unknown>;
+          return {
+            phone,
+            profileName,
+            messageBody: (buttonReply?.title as string) ?? '',
+          };
+        }
+        if (interactive?.type === 'list_reply') {
+          const listReply = interactive.list_reply as Record<string, unknown>;
+          return {
+            phone,
+            profileName,
+            messageBody: (listReply?.title as string) ?? '',
+          };
+        }
+      }
+
+      // Handle location messages
+      if (msg.type === 'location') {
+        const location = msg.location as Record<string, unknown> | undefined;
+        return {
+          phone,
+          profileName,
+          messageBody: `[Location: ${location?.latitude},${location?.longitude}]`,
+        };
+      }
+
+      // Default: treat as empty
+      return { phone, profileName, messageBody: '' };
+    }
+  }
+
+  return null;
+}
+
+/* ─── Main POST webhook handler ─── */
+
+export async function handleMetaWhatsappWebhookRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MetaWhatsappRouteDeps,
 ): Promise<void> {
   try {
     const rawBody = await readRawBody(req);
-    const params = new URLSearchParams(rawBody.toString('utf8'));
 
-    if (!isValidTwilioSignature(req, params, deps.twilioAuthToken)) {
-      sendJson(res, 403, { error: 'Invalid Twilio signature' });
+    if (!isValidMetaSignature(rawBody, getHeaderValue(req, 'x-hub-signature-256'), deps.metaAppSecret)) {
+      sendJson(res, 403, { error: 'Invalid signature' });
       return;
     }
 
-    const phone = normalizeWhatsappPhone(params.get('From'));
-    if (!phone) {
-      sendJson(res, 400, { error: 'Missing valid WhatsApp sender' });
+    // Always respond 200 quickly — Meta requires fast acknowledgement
+    sendOk(res);
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawBody.toString('utf8'));
+    } catch {
+      console.warn('[whatsapp] Invalid JSON in Meta webhook');
       return;
     }
 
-    const profileName = params.get('ProfileName') ?? undefined;
-    const incomingMessage = params.get('Body')?.trim() ?? '';
+    // Meta sends status updates (delivered, read) — ignore them
+    const msgInfo = extractMetaMessage(parsed);
+    if (!msgInfo) return;
+
+    const { phone, profileName, messageBody: incomingMessage } = msgInfo;
+
     const user = await onboardWhatsappUser({
       phone,
       profileName,
@@ -262,37 +325,6 @@ export async function handleTwilioWhatsappWebhookRoute(
         pouchLiquifiaClient: deps.pouchLiquifiaClient,
       },
     });
-
-    // Send KYC button template once for brand-new users (non-blocking)
-    if (user.created) {
-      const freshUser = await userClient.findById(user.id);
-      const isVerified = String(freshUser.riderKycStatus ?? 'NONE') === 'VERIFIED';
-      const canSendButtonTemplate = Boolean(
-        !isVerified &&
-        deps.twilioAccountSid &&
-        deps.twilioAuthToken &&
-        deps.twilioWhatsappNumber &&
-        deps.twilioKycContentSid &&
-        deps.appBaseUrl,
-      );
-
-      if (canSendButtonTemplate) {
-        const token = createLocalAccessToken(user.id, deps.jwtSecret);
-        const kycPath = `widget/index.html?token=${token}&apiBase=${deps.appBaseUrl}`;
-        const displayName = freshUser.name ?? profileName ?? phone;
-        const first = displayName.trim().split(/\s+/)[0] ?? displayName;
-
-        // Fire-and-forget — don't block the AI reply
-        sendTwilioContentMessage({
-          accountSid: deps.twilioAccountSid!,
-          authToken: deps.twilioAuthToken!,
-          from: `whatsapp:${deps.twilioWhatsappNumber}`,
-          to: `whatsapp:${phone}`,
-          contentSid: deps.twilioKycContentSid!,
-          contentVariables: { '1': first, '2': kycPath },
-        }).catch((err) => console.warn('[whatsapp] KYC button send failed', err));
-      }
-    }
 
     // Store phone lookup for Kafka consumer notifications
     await setPhoneLookup(deps.redisClient, user.id, phone).catch(() => {});
@@ -307,7 +339,6 @@ export async function handleTwilioWhatsappWebhookRoute(
         await clearPendingPayment(deps.redisClient, user.id);
 
         if (paymentChoice === 'WALLET') {
-          // Check wallet balance
           const wallet = await walletClient.findByUserId(user.id);
           if (!wallet || Number(wallet.balanceNgn) < pendingPayment.finalOffer) {
             const balance = wallet ? `₦${Number(wallet.balanceNgn).toLocaleString()}` : '₦0';
@@ -316,13 +347,11 @@ export async function handleTwilioWhatsappWebhookRoute(
               { role: 'user', content: incomingMessage },
               { role: 'assistant', content: reply },
             ]);
-            // Re-store the pending payment so they can try again
             await storePendingPayment(deps.redisClient, user.id, pendingPayment);
-            sendTwiml(res, reply);
+            await sendMetaReply(deps, phone, reply);
             return;
           }
 
-          // Lock funds in wallet
           try {
             await walletClient.createRideHold({
               rideId: pendingPayment.rideId,
@@ -338,7 +367,7 @@ export async function handleTwilioWhatsappWebhookRoute(
               { role: 'assistant', content: reply },
             ]);
             await storePendingPayment(deps.redisClient, user.id, pendingPayment);
-            sendTwiml(res, reply);
+            await sendMetaReply(deps, phone, reply);
             return;
           }
         }
@@ -384,7 +413,7 @@ export async function handleTwilioWhatsappWebhookRoute(
           { role: 'user', content: incomingMessage },
           { role: 'assistant', content: reply },
         ]);
-        sendTwiml(res, reply);
+        await sendMetaReply(deps, phone, reply);
         return;
       }
       // User didn't say cash/wallet — remind them
@@ -393,7 +422,7 @@ export async function handleTwilioWhatsappWebhookRoute(
         { role: 'user', content: incomingMessage },
         { role: 'assistant', content: reply },
       ]);
-      sendTwiml(res, reply);
+      await sendMetaReply(deps, phone, reply);
       return;
     }
 
@@ -415,7 +444,7 @@ export async function handleTwilioWhatsappWebhookRoute(
           { role: 'user', content: incomingMessage },
           { role: 'assistant', content: reply },
         ]);
-        sendTwiml(res, reply);
+        await sendMetaReply(deps, phone, reply);
         return;
       }
 
@@ -439,14 +468,12 @@ export async function handleTwilioWhatsappWebhookRoute(
 
         // If user already said payment method in their message, skip the question
         if (rideIntent.paymentMethod) {
-          // Normalize CRYPTO_WALLET to WALLET — both use the Naira wallet for ride payments
           const paymentMethod: 'CASH' | 'WALLET' = rideIntent.paymentMethod === 'CASH' ? 'CASH' : 'WALLET';
 
           if (paymentMethod === 'WALLET') {
             const wallet = await walletClient.findByUserId(user.id);
             if (!wallet || Number(wallet.balanceNgn) < finalOffer) {
               const balance = wallet ? `₦${Number(wallet.balanceNgn).toLocaleString()}` : '₦0';
-              // Store pending so they can switch to cash
               await storePendingPayment(deps.redisClient, user.id, {
                 rideId, riderId: user.id, phone,
                 pickupLat: pickupGeo.lat, pickupLng: pickupGeo.lng, pickupAddress: pickupGeo.formattedAddress, pickupArea: rideIntent.pickup.area,
@@ -460,7 +487,7 @@ export async function handleTwilioWhatsappWebhookRoute(
                 { role: 'user', content: incomingMessage },
                 { role: 'assistant', content: reply },
               ]);
-              sendTwiml(res, reply);
+              await sendMetaReply(deps, phone, reply);
               return;
             }
 
@@ -480,7 +507,7 @@ export async function handleTwilioWhatsappWebhookRoute(
                 { role: 'user', content: incomingMessage },
                 { role: 'assistant', content: reply },
               ]);
-              sendTwiml(res, reply);
+              await sendMetaReply(deps, phone, reply);
               return;
             }
           }
@@ -509,7 +536,7 @@ export async function handleTwilioWhatsappWebhookRoute(
             { role: 'user', content: incomingMessage },
             { role: 'assistant', content: reply },
           ]);
-          sendTwiml(res, reply);
+          await sendMetaReply(deps, phone, reply);
           return;
         }
 
@@ -529,7 +556,7 @@ export async function handleTwilioWhatsappWebhookRoute(
           { role: 'user', content: incomingMessage },
           { role: 'assistant', content: reply },
         ]);
-        sendTwiml(res, reply);
+        await sendMetaReply(deps, phone, reply);
         return;
       }
       // Geocoding failed — fall through to AI conversation for clarification
@@ -555,7 +582,7 @@ export async function handleTwilioWhatsappWebhookRoute(
         { role: 'user', content: incomingMessage },
         { role: 'assistant', content: reply },
       ]);
-      sendTwiml(res, reply);
+      await sendMetaReply(deps, phone, reply);
       return;
     }
 
@@ -578,7 +605,7 @@ export async function handleTwilioWhatsappWebhookRoute(
           { role: 'user', content: incomingMessage },
           { role: 'assistant', content: reply },
         ]);
-        sendTwiml(res, reply);
+        await sendMetaReply(deps, phone, reply);
         return;
       }
     }
@@ -605,12 +632,9 @@ export async function handleTwilioWhatsappWebhookRoute(
       { role: 'assistant', content: reply },
     ]);
 
-    sendTwiml(res, reply);
+    await sendMetaReply(deps, phone, reply);
   } catch (error) {
     console.error('[whatsapp] webhook handling failed', error);
-    sendTwiml(
-      res,
-      'Sorry, Wheelers could not process your message right now. Please try again shortly.',
-    );
+    // Don't try to send error — we already responded 200
   }
 }

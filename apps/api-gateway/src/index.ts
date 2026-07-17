@@ -101,7 +101,7 @@ import {
   handleSendPhoneOtpRoute,
   handleVerifyPhoneOtpRoute,
 } from "./http/phone.route";
-import { handleTwilioWhatsappWebhookRoute } from "./http/whatsapp.route";
+import { handleMetaWhatsappWebhookRoute, handleMetaWhatsappVerify } from "./http/whatsapp.route";
 import {
   handleApplyReferralCodeRoute,
   handleGetReferralSummaryRoute,
@@ -117,9 +117,7 @@ import { handleGetRideChatMessagesRoute } from "./http/chat.route";
 import { applyCorsHeaders, sendJson } from "./http/utils";
 import { startGatewayKafkaConsumer } from "./kafka/consumer";
 import { handleWhatsappFlowEndpoint } from "./whatsapp-flows/flow-endpoint";
-import { handleDriverFlowEndpoint } from "./whatsapp-flows/driver-flow-endpoint";
 import { handleRideSearchFlowEndpoint } from "./whatsapp-flows/ride-search-flow-endpoint";
-import { handleDriverWhatsappWebhookRoute } from "./http/driver-whatsapp.route";
 import { RedisClient } from "./redis/client";
 import { asRawProducer, startOutboxPublisher } from "./outbox/outbox-publisher";
 import { GatewayPublisher } from "./websocket/publisher";
@@ -660,29 +658,35 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname === "/webhooks/twilio/whatsapp") {
-      if (req.method !== "POST") {
-        sendMethodNotAllowed(res);
-        return;
-      }
-
-      await handleTwilioWhatsappWebhookRoute(req, res, {
+    if (url.pathname === "/webhooks/whatsapp") {
+      const metaWhatsappDeps = {
         jwtSecret: gatewayEnv.JWT_SECRET,
         publisher,
         pouchLiquifiaClient,
         redisClient: redisCommandClient,
         routePlanner,
         googleMapsApiKey: gatewayEnv.GOOGLE_MAPS_API_KEY,
-        twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
-        twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
-        twilioWhatsappNumber: gatewayEnv.TWILIO_WHATSAPP_NUMBER,
-        twilioKycContentSid: gatewayEnv.TWILIO_KYC_CONTENT_SID,
+        metaAccessToken: gatewayEnv.META_ACCESS_TOKEN,
+        metaPhoneNumberId: gatewayEnv.META_PHONE_NUMBER_ID,
+        metaAppSecret: gatewayEnv.META_APP_SECRET,
+        metaWebhookVerifyToken: gatewayEnv.META_WEBHOOK_VERIFY_TOKEN,
         groqApiKey: gatewayEnv.GROQ_API_KEY,
         groqModel: gatewayEnv.GROQ_MODEL,
         groqTimeoutMs: gatewayEnv.GROQ_TIMEOUT_MS,
         appBaseUrl: gatewayEnv.APP_BASE_URL,
-      });
+      };
 
+      if (req.method === "GET") {
+        handleMetaWhatsappVerify(req, res, metaWhatsappDeps);
+        return;
+      }
+
+      if (req.method === "POST") {
+        await handleMetaWhatsappWebhookRoute(req, res, metaWhatsappDeps);
+        return;
+      }
+
+      sendMethodNotAllowed(res);
       return;
     }
 
@@ -732,49 +736,7 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname === "/webhooks/twilio/driver-whatsapp") {
-      if (req.method !== "POST") {
-        sendMethodNotAllowed(res);
-        return;
-      }
 
-      await handleDriverWhatsappWebhookRoute(req, res, {
-        jwtSecret: gatewayEnv.JWT_SECRET,
-        publisher,
-        pouchLiquifiaClient,
-        redisClient: redisCommandClient,
-        twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
-        twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
-        twilioDriverWhatsappNumber: gatewayEnv.TWILIO_DRIVER_WHATSAPP_NUMBER,
-        groqApiKey: gatewayEnv.GROQ_API_KEY,
-        groqModel: gatewayEnv.GROQ_MODEL,
-        groqTimeoutMs: gatewayEnv.GROQ_TIMEOUT_MS,
-      });
-
-      return;
-    }
-
-    if (url.pathname === "/webhooks/whatsapp-driver-flow") {
-      if (req.method !== "POST") {
-        sendMethodNotAllowed(res);
-        return;
-      }
-
-      const driverFlowKey = gatewayEnv.WHATSAPP_DRIVER_FLOW_PRIVATE_KEY;
-      if (!driverFlowKey) {
-        sendJson(res, 503, { error: "Driver WhatsApp Flow not configured" });
-        return;
-      }
-
-      await handleDriverFlowEndpoint(req, res, {
-        redisClient: redisCommandClient,
-        publisher,
-        privateKeyPem: Buffer.from(driverFlowKey, "base64").toString("utf8"),
-        tokenSecret: gatewayEnv.JWT_SECRET,
-      });
-
-      return;
-    }
 
     if (url.pathname === "/auth/phone/verify-otp") {
       if (req.method !== "POST") {
@@ -1408,22 +1370,10 @@ async function bootstrap(): Promise<void> {
     registry,
     redisClient: redisCommandClient,
     whatsappNotifier:
-      gatewayEnv.TWILIO_ACCOUNT_SID && gatewayEnv.TWILIO_AUTH_TOKEN && gatewayEnv.TWILIO_WHATSAPP_NUMBER
+      gatewayEnv.META_ACCESS_TOKEN && gatewayEnv.META_PHONE_NUMBER_ID
         ? {
-            twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
-            twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
-            twilioWhatsappNumber: gatewayEnv.TWILIO_WHATSAPP_NUMBER,
-            twilioFlowContentSid: gatewayEnv.WHATSAPP_FLOW_CONTENT_SID,
-            tokenSecret: gatewayEnv.JWT_SECRET,
-          }
-        : undefined,
-    driverWhatsappNotifier:
-      gatewayEnv.TWILIO_ACCOUNT_SID && gatewayEnv.TWILIO_AUTH_TOKEN && gatewayEnv.TWILIO_DRIVER_WHATSAPP_NUMBER
-        ? {
-            twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
-            twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
-            twilioDriverWhatsappNumber: gatewayEnv.TWILIO_DRIVER_WHATSAPP_NUMBER,
-            twilioDriverFlowContentSid: gatewayEnv.WHATSAPP_DRIVER_FLOW_CONTENT_SID,
+            metaAccessToken: gatewayEnv.META_ACCESS_TOKEN,
+            metaPhoneNumberId: gatewayEnv.META_PHONE_NUMBER_ID,
             tokenSecret: gatewayEnv.JWT_SECRET,
           }
         : undefined,
