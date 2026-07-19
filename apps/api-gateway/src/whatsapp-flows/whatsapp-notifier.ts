@@ -114,6 +114,7 @@ async function sendFlowInteractiveMessage(
             flow_cta: ctaText,
             flow_token: flowToken,
             mode: 'draft',
+            flow_message_version: '3',
             flow_action: 'data_exchange',
             flow_action_payload: {
               screen: 'BID_LIST',
@@ -188,6 +189,7 @@ export async function sendBookRideFlowMessage(
             flow_cta: 'Book This Ride',
             flow_token: flowToken,
             mode: 'draft',
+            flow_message_version: '3',
             flow_action: 'data_exchange',
             flow_action_payload: {
               screen: 'RIDE_SETUP',
@@ -248,6 +250,7 @@ export async function sendRideMatchedNotification(
             flow_cta: 'View Driver',
             flow_token: flowToken,
             mode: 'draft',
+            flow_message_version: '3',
             flow_action: 'data_exchange',
             flow_action_payload: {
               screen: 'DRIVER_PROFILE',

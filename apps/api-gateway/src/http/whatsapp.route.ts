@@ -14,7 +14,7 @@ import {
 import { WhatsappBotService } from '../LLM/whatsapp-bot.service';
 import { GroqClient } from '../LLM/groq.client';
 import { parseRideIntent } from '../LLM/ride-intent-parser';
-import { geocodeAddress } from '../LLM/geocoding';
+import { geocodeAddress, reverseGeocode } from '../LLM/geocoding';
 import {
   storeWhatsappRide,
   setActiveRide,
@@ -342,7 +342,7 @@ export async function handleMetaWhatsappWebhookRoute(
 
       if (!isNaN(lat) && !isNaN(lng)) {
         // Reverse geocode to get address
-        const reverseGeo = await geocodeAddress(deps.googleMapsApiKey, `${lat},${lng}`);
+        const reverseGeo = await reverseGeocode(deps.googleMapsApiKey, lat, lng);
         const address = reverseGeo?.formattedAddress ?? `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
 
         await setPendingLocation(deps.redisClient, user.id, {
@@ -352,12 +352,32 @@ export async function handleMetaWhatsappWebhookRoute(
           savedAt: new Date().toISOString(),
         });
 
-        const reply = `Got it — *${address}*\n\nWhere are you headed? Type a destination (street, landmark, bus stop) or share another location pin 📍`;
-        await appendWhatsappConversation(deps.redisClient, phone, [
-          { role: 'user', content: `[Shared location: ${address}]` },
-          { role: 'assistant', content: reply },
-        ]);
-        await sendMetaReply(deps, phone, reply);
+        // Send flow button immediately so rider can enter destination in the flow
+        if (deps.metaAccessToken && deps.metaPhoneNumberId && deps.flowId) {
+          const msg = `📍 Pickup: *${address}*\n\nTap below to enter your destination and book a ride!`;
+          await sendBookRideFlowMessage(
+            {
+              metaAccessToken: deps.metaAccessToken,
+              metaPhoneNumberId: deps.metaPhoneNumberId,
+              tokenSecret: deps.jwtSecret,
+              flowId: deps.flowId,
+            },
+            phone,
+            user.id,
+            msg,
+          );
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: `[Shared location: ${address}]` },
+            { role: 'assistant', content: msg },
+          ]);
+        } else {
+          const reply = `Got it — *${address}*\n\nWhere are you headed? Type a destination (street, landmark, bus stop) or share another location pin 📍`;
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: `[Shared location: ${address}]` },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
+        }
         return;
       }
     }

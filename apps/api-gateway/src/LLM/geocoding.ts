@@ -17,6 +17,36 @@ interface GoogleGeocodingResponse {
   }>;
 }
 
+export async function reverseGeocode(
+  apiKey: string,
+  lat: number,
+  lng: number,
+): Promise<GeocodeResult | null> {
+  const params = new URLSearchParams({
+    latlng: `${lat},${lng}`,
+    key: apiKey,
+  });
+
+  const url = `https://maps.googleapis.com/maps/api/geocode/json?${params.toString()}`;
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as GoogleGeocodingResponse;
+    if (data.status !== 'OK' || !data.results?.length) return null;
+
+    const result = data.results[0];
+    return {
+      lat,
+      lng,
+      formattedAddress: result.formatted_address ?? `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function geocodeAddress(
   apiKey: string,
   address: string,
