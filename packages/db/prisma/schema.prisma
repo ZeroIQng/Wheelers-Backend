@@ -89,10 +89,11 @@ model Driver {
 model DriverKycSubmission {
   id              String    @id @default(uuid())
   driverId        String    @unique
-  ninImageKey     String?
-  licenceImageKey String?
-  selfieKey       String?
-  vehicleMake     String?
+  ninImageKey       String?
+  licenceImageKey   String?
+  selfieKey         String?
+  vehicleImageKeys  String[]  @default([])
+  vehicleMake       String?
   vehicleModel    String?
   vehiclePlate    String?
   vehicleYear     Int?

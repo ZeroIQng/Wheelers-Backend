@@ -22,7 +22,11 @@ import {
   clearActiveRide,
   setPhoneLookup,
   cleanupRideKeys,
+  setPendingLocation,
+  getPendingLocation,
+  clearPendingLocation,
 } from '../whatsapp-flows/bid-state';
+import { sendBookRideFlowMessage } from '../whatsapp-flows/whatsapp-notifier';
 import type { RedisClient } from '../redis/client';
 import { readRawBody, sendJson } from './utils';
 
@@ -93,6 +97,7 @@ export interface MetaWhatsappRouteDeps {
   groqModel: string;
   groqTimeoutMs: number;
   appBaseUrl?: string;
+  flowId?: string;
 }
 
 /* ─── Meta Cloud API helpers ─── */
@@ -329,7 +334,81 @@ export async function handleMetaWhatsappWebhookRoute(
     // Store phone lookup for Kafka consumer notifications
     await setPhoneLookup(deps.redisClient, user.id, phone).catch(() => {});
 
+    // ── Handle location pin shares ──────────────────────────────────────
+    const locationMatch = incomingMessage.match(/^\[Location:\s*([-\d.]+),([-\d.]+)\]$/);
+    if (locationMatch) {
+      const lat = parseFloat(locationMatch[1]);
+      const lng = parseFloat(locationMatch[2]);
+
+      if (!isNaN(lat) && !isNaN(lng)) {
+        // Reverse geocode to get address
+        const reverseGeo = await geocodeAddress(deps.googleMapsApiKey, `${lat},${lng}`);
+        const address = reverseGeo?.formattedAddress ?? `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+
+        await setPendingLocation(deps.redisClient, user.id, {
+          lat,
+          lng,
+          address,
+          savedAt: new Date().toISOString(),
+        });
+
+        const reply = `Got it — *${address}*\n\nWhere are you headed? Type a destination (street, landmark, bus stop) or share another location pin 📍`;
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: `[Shared location: ${address}]` },
+          { role: 'assistant', content: reply },
+        ]);
+        await sendMetaReply(deps, phone, reply);
+        return;
+      }
+    }
+
     const recentMessages = await getWhatsappConversation(deps.redisClient, phone);
+
+    // ── Check if we have a pending pickup location and this is the destination ──
+    const pendingLocation = await getPendingLocation(deps.redisClient, user.id);
+    if (pendingLocation && incomingMessage && !incomingMessage.startsWith('[')) {
+      // User just shared location, now they're typing the destination
+      const existingRide = await getActiveRide(deps.redisClient, user.id);
+      if (!existingRide) {
+        const destGeo = await geocodeAddress(deps.googleMapsApiKey, `${incomingMessage}, Lagos, Nigeria`);
+        if (destGeo) {
+          const plannedRoute = await deps.routePlanner.planRoute({
+            origin: { lat: pendingLocation.lat, lng: pendingLocation.lng },
+            destination: destGeo,
+          });
+
+          const distanceKm = plannedRoute.distanceKm;
+          const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
+          const suggestedFare = `₦${plannedRoute.suggestedFareNgn.toLocaleString()}`;
+
+          const routeSummary = `*${pendingLocation.address}* → *${destGeo.formattedAddress}*\n${distanceKm.toFixed(1)} km · ~${durationMin} min\nSuggested fare: ${suggestedFare}`;
+
+          // Send flow button to open the booking flow
+          if (deps.metaAccessToken && deps.metaPhoneNumberId) {
+            await sendBookRideFlowMessage(
+              {
+                metaAccessToken: deps.metaAccessToken,
+                metaPhoneNumberId: deps.metaPhoneNumberId,
+                tokenSecret: deps.jwtSecret,
+                flowId: deps.flowId,
+              },
+              phone,
+              user.id,
+              routeSummary,
+            );
+          } else {
+            await sendMetaReply(deps, phone, `${routeSummary}\n\nSend your offer amount to book!`);
+          }
+
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: routeSummary },
+          ]);
+          return;
+        }
+        // Geocoding failed — fall through to normal handling
+      }
+    }
 
     // Check if the user is replying to a payment method question
     const pendingPayment = await getPendingPayment(deps.redisClient, user.id);

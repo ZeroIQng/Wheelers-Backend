@@ -1,10 +1,25 @@
 import type { RedisClient } from '../redis/client';
 
+export type RideState = 'setup' | 'searching' | 'bidding' | 'confirmed' | 'in_progress' | 'completed';
+
+export interface PendingLocation {
+  lat: number;
+  lng: number;
+  address: string;
+  savedAt: string;
+}
+
 export interface WhatsappRideMeta {
   riderId: string;
   phone: string;
   pickupAddress: string;
+  pickupLat?: number;
+  pickupLng?: number;
   destinationAddress: string;
+  destinationLat?: number;
+  destinationLng?: number;
+  distanceKm?: number;
+  durationSeconds?: number;
   offerNgn: number;
   suggestedFareNgn: number;
   paymentMethod: 'CASH' | 'WALLET';
@@ -23,11 +38,13 @@ export interface WhatsappBid {
   receivedAt: string;
 }
 
-const RIDE_META_TTL = 900;       // 15 minutes
-const BIDS_TTL = 900;            // 15 minutes
-const ACTIVE_RIDE_TTL = 1800;    // 30 minutes
-const PHONE_LOOKUP_TTL = 86400;  // 24 hours
-const DEBOUNCE_TTL = 30;         // 30 seconds
+const RIDE_META_TTL = 900;           // 15 minutes
+const BIDS_TTL = 900;                // 15 minutes
+const RIDE_STATE_TTL = 1800;         // 30 minutes
+const ACTIVE_RIDE_TTL = 1800;        // 30 minutes
+const PENDING_LOCATION_TTL = 600;    // 10 minutes
+const PHONE_LOOKUP_TTL = 86400;      // 24 hours
+const DEBOUNCE_TTL = 30;             // 30 seconds
 
 function rideMetaKey(rideId: string): string {
   return `whatsapp:ride:${rideId}:meta`;
@@ -37,8 +54,16 @@ function rideBidsKey(rideId: string): string {
   return `whatsapp:ride:${rideId}:bids`;
 }
 
+function rideStateKey(rideId: string): string {
+  return `whatsapp:ride:${rideId}:state`;
+}
+
 function activeRideKey(userId: string): string {
   return `whatsapp:user:${userId}:active_ride`;
+}
+
+function pendingLocationKey(userId: string): string {
+  return `whatsapp:user:${userId}:pending_location`;
 }
 
 function phoneLookupKey(userId: string): string {
@@ -54,8 +79,11 @@ export async function storeWhatsappRide(
   rideId: string,
   meta: WhatsappRideMeta,
 ): Promise<void> {
-  await redis.set(rideMetaKey(rideId), JSON.stringify(meta), RIDE_META_TTL);
-  await redis.set(rideBidsKey(rideId), JSON.stringify([]), BIDS_TTL);
+  await Promise.all([
+    redis.set(rideMetaKey(rideId), JSON.stringify(meta), RIDE_META_TTL),
+    redis.set(rideBidsKey(rideId), JSON.stringify([]), BIDS_TTL),
+    redis.set(rideStateKey(rideId), 'searching' as RideState, RIDE_STATE_TTL),
+  ]);
 }
 
 export async function getRideMeta(
@@ -103,6 +131,24 @@ export async function getBids(
     await redis.del(rideBidsKey(rideId)).catch(() => {});
     return [];
   }
+}
+
+export async function clearBids(
+  redis: RedisClient,
+  rideId: string,
+): Promise<void> {
+  await redis.set(rideBidsKey(rideId), JSON.stringify([]), BIDS_TTL);
+}
+
+export async function removeBid(
+  redis: RedisClient,
+  rideId: string,
+  driverId: string,
+): Promise<WhatsappBid[]> {
+  const bids = await getBids(redis, rideId);
+  const filtered = bids.filter((b) => b.driverId !== driverId);
+  await redis.set(rideBidsKey(rideId), JSON.stringify(filtered), BIDS_TTL);
+  return filtered;
 }
 
 export async function setActiveRide(
@@ -157,6 +203,7 @@ export async function cleanupRideKeys(
   await Promise.all([
     redis.del(rideMetaKey(rideId)),
     redis.del(rideBidsKey(rideId)),
+    redis.del(rideStateKey(rideId)),
     redis.del(debounceKey(rideId)),
   ]).catch(() => {});
 }
@@ -169,4 +216,92 @@ export async function shouldNotify(
   if (existing) return false;
   await redis.set(debounceKey(rideId), Date.now().toString(), DEBOUNCE_TTL);
   return true;
+}
+
+// ── Accepted bid (stored so driver profile flow can read it) ──────────────
+
+export interface AcceptedBidInfo {
+  driverName: string;
+  driverPhone: string;
+  driverUserId: string;
+  vehicleModel: string;
+  vehiclePlate: string;
+  vehicleColor: string;
+  driverRating: number;
+  totalRides: number;
+  etaSeconds: number;
+  fareNgn: number;
+}
+
+function acceptedBidKey(rideId: string): string {
+  return `whatsapp:ride:${rideId}:accepted_bid`;
+}
+
+export async function storeAcceptedBid(
+  redis: RedisClient,
+  rideId: string,
+  info: AcceptedBidInfo,
+): Promise<void> {
+  await redis.set(acceptedBidKey(rideId), JSON.stringify(info), RIDE_STATE_TTL);
+}
+
+export async function getAcceptedBid(
+  redis: RedisClient,
+  rideId: string,
+): Promise<AcceptedBidInfo | null> {
+  const raw = await redis.get(acceptedBidKey(rideId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as AcceptedBidInfo;
+  } catch {
+    return null;
+  }
+}
+
+// ── Ride state machine ─────────────────────────────────────────────────────
+
+export async function setRideState(
+  redis: RedisClient,
+  rideId: string,
+  state: RideState,
+): Promise<void> {
+  await redis.set(rideStateKey(rideId), state, RIDE_STATE_TTL);
+}
+
+export async function getRideState(
+  redis: RedisClient,
+  rideId: string,
+): Promise<RideState | null> {
+  const raw = await redis.get(rideStateKey(rideId));
+  return (raw as RideState) ?? null;
+}
+
+// ── Pending location (saved when rider shares WhatsApp location pin) ────
+
+export async function setPendingLocation(
+  redis: RedisClient,
+  userId: string,
+  location: PendingLocation,
+): Promise<void> {
+  await redis.set(pendingLocationKey(userId), JSON.stringify(location), PENDING_LOCATION_TTL);
+}
+
+export async function getPendingLocation(
+  redis: RedisClient,
+  userId: string,
+): Promise<PendingLocation | null> {
+  const raw = await redis.get(pendingLocationKey(userId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as PendingLocation;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearPendingLocation(
+  redis: RedisClient,
+  userId: string,
+): Promise<void> {
+  await redis.del(pendingLocationKey(userId));
 }

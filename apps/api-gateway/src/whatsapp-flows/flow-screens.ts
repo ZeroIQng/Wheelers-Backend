@@ -2,6 +2,8 @@ import type { WhatsappRideMeta, WhatsappBid } from './bid-state';
 
 const MAX_FLOW_LIST_ITEMS = 10;
 
+// ── BID_LIST screen ───────────────────────────────────────────────────────
+
 export function buildBidListData(
   meta: WhatsappRideMeta,
   bids: WhatsappBid[],
@@ -22,56 +24,126 @@ export function buildBidListData(
     offer_amount: `₦${meta.offerNgn.toLocaleString()}`,
     bids: bidItems,
     bid_count: countLabel,
+    bid_actions: [
+      { id: 'accept', title: 'Accept' },
+      { id: 'decline', title: 'Decline' },
+    ],
   };
 }
 
-export function buildBidDetailData(bid: WhatsappBid, index: number): Record<string, unknown> {
+// ── RIDE_CONFIRMED screen (driver info only) ─────────────────────────────
+
+export function buildConfirmationData(params: {
+  driverName: string;
+  vehicleModel: string;
+  vehiclePlate: string;
+  etaSeconds: number;
+  fareNgn: number;
+  driverRating: number;
+}): Record<string, unknown> {
+  const etaMin = Math.ceil(params.etaSeconds / 60);
+
   return {
-    driver_name: bid.driverName,
-    vehicle_info: `${bid.vehicleModel} (${bid.vehiclePlate})`,
-    rating: `${bid.driverRating.toFixed(1)}★`,
-    eta: `${Math.ceil(bid.etaSeconds / 60)} minutes`,
-    offer_price: `₦${bid.counterOfferNgn.toLocaleString()}`,
-    bid_id: `bid-${index}`,
+    driver_name: params.driverName,
+    vehicle_info: `${params.vehicleModel} (${params.vehiclePlate})`,
+    rating: `${params.driverRating.toFixed(1)}★`,
+    eta: `${etaMin} minute${etaMin === 1 ? '' : 's'}`,
+    fare: `₦${params.fareNgn.toLocaleString()}`,
   };
 }
 
-export function buildCounterOfferData(
-  meta: WhatsappRideMeta,
-  bid: WhatsappBid,
-  bidIndex: number,
-): Record<string, unknown> {
+// ── PAYMENT screen ────────────────────────────────────────────────────────
+
+export function buildPaymentData(params: {
+  fareNgn: number;
+  walletBalanceNgn: number;
+  virtualAccount?: {
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+  } | null;
+}): Record<string, unknown> {
+  const needsFunding = params.walletBalanceNgn < params.fareNgn;
+
   return {
-    current_offer: `₦${meta.offerNgn.toLocaleString()}`,
-    suggested_fare: `₦${meta.suggestedFareNgn.toLocaleString()}`,
-    driver_name: bid.driverName,
-    driver_offer: `₦${bid.counterOfferNgn.toLocaleString()}`,
-    bid_id: `bid-${bidIndex}`,
+    fare: `Ride fare: ₦${params.fareNgn.toLocaleString()}`,
+    wallet_balance: `Wallet: ₦${params.walletBalanceNgn.toLocaleString()}`,
+    status: needsFunding
+      ? `You need ₦${(params.fareNgn - params.walletBalanceNgn).toLocaleString()} more. Transfer to your virtual account below.`
+      : 'Your wallet has enough funds. Payment will be deducted automatically.',
+    bank_name: params.virtualAccount?.bankName ?? '',
+    account_number: params.virtualAccount?.accountNumber ?? '',
+    account_name: params.virtualAccount?.accountName ?? '',
+    has_virtual_account: !!params.virtualAccount,
+    transfer_note: needsFunding
+      ? 'Transfer to this account to fund your wallet. Your driver will be notified once payment is received.'
+      : 'Transfer to this account anytime to top up your wallet.',
   };
 }
 
-export function buildConfirmationData(
-  driverName: string,
-  vehicleModel: string,
-  etaSeconds: number,
-  fareNgn: number,
-): Record<string, unknown> {
+// ── RIDE_SETUP screen ─────────────────────────────────────────────────────
+
+export function buildRideSetupData(params: {
+  pickupAddress: string;
+  destinationAddress: string;
+  suggestedFareNgn: number;
+  distanceKm?: number;
+  durationSeconds?: number;
+  error?: string;
+}): Record<string, unknown> {
+  const routeInfo = params.distanceKm && params.durationSeconds
+    ? `${params.distanceKm.toFixed(1)} km · ~${Math.ceil(params.durationSeconds / 60)} min`
+    : '';
+
   return {
-    message: `${driverName} is on the way in a ${vehicleModel}! ETA: ${Math.ceil(etaSeconds / 60)} min. Fare: ₦${fareNgn.toLocaleString()}`,
+    pickup_address: params.pickupAddress,
+    destination_address: params.destinationAddress,
+    suggested_fare: `₦${params.suggestedFareNgn.toLocaleString()}`,
+    suggested_fare_value: String(params.suggestedFareNgn),
+    route_info: routeInfo,
+    has_route_info: routeInfo.length > 0,
+    payment_options: [
+      { id: 'WALLET', title: 'Wallet' },
+    ],
+    error: params.error ?? '',
+    has_error: !!params.error,
   };
 }
 
-export function buildNoBidsData(meta: WhatsappRideMeta): Record<string, unknown> {
+// ── DRIVER_PROFILE screen ────────────────────────────────────────────────
+
+export function buildDriverProfileData(params: {
+  driverName: string;
+  phoneNumber: string;
+  vehicleInfo: string;
+  vehiclePlate: string;
+  ratingInfo: string;
+  eta: string;
+  fare: string;
+  driverPhoto: string;
+  vehiclePhoto: string;
+}): Record<string, unknown> {
   return {
-    route_summary: `${meta.pickupAddress} → ${meta.destinationAddress}`,
-    offer_amount: `₦${meta.offerNgn.toLocaleString()}`,
-    bids: [],
-    bid_count: 'No offers yet — check back shortly',
+    driver_name: params.driverName,
+    phone_number: params.phoneNumber || 'Not available',
+    vehicle_info: params.vehicleInfo,
+    vehicle_plate: params.vehiclePlate,
+    rating_info: params.ratingInfo,
+    eta: params.eta,
+    fare: params.fare,
+    driver_photo: params.driverPhoto,
+    has_driver_photo: params.driverPhoto.length > 0,
+    vehicle_photo: params.vehiclePhoto,
+    has_vehicle_photo: params.vehiclePhoto.length > 0,
   };
+}
+
+// ── Utility screens ───────────────────────────────────────────────────────
+
+export function buildNotifyExitData(message: string): Record<string, unknown> {
+  return { message };
 }
 
 export function buildErrorData(message: string): Record<string, unknown> {
-  return {
-    message,
-  };
+  return { message };
 }

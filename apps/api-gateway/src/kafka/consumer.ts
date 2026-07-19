@@ -1,11 +1,12 @@
 import type { WheelersConsumer } from '@wheleers/kafka-client';
-import { referralClient } from '@wheleers/db';
+import { referralClient, walletClient, virtualAccountClient, driverClient } from '@wheleers/db';
 import {
   ComplianceEvent,
   GroupRideEvent,
   GpsProcessedEvent,
   NotificationEvent,
   RideEvent,
+  RideOfferAcceptedEvent,
   WalletEvent,
   TOPICS,
 } from '@wheleers/kafka-schemas';
@@ -19,6 +20,10 @@ import {
   shouldNotify,
   clearActiveRide,
   cleanupRideKeys,
+  setRideState,
+  getRideMeta,
+  getBids,
+  storeAcceptedBid,
 } from '../whatsapp-flows/bid-state';
 import type { WhatsappBid } from '../whatsapp-flows/bid-state';
 import {
@@ -28,13 +33,16 @@ import {
   sendRideCompletedNotification,
   sendRideCancelledNotification,
   sendBidTimeoutNotification,
+  sendRiderPaidNotification,
 } from '../whatsapp-flows/whatsapp-notifier';
 import type { WhatsappNotifierDeps } from '../whatsapp-flows/whatsapp-notifier';
+import type { GatewayPublisher } from '../websocket/publisher';
 
 export interface StartGatewayConsumerDeps {
   consumer: WheelersConsumer;
   registry: SocketRegistry;
   redisClient: RedisClient;
+  publisher: GatewayPublisher;
   whatsappNotifier?: WhatsappNotifierDeps;
 }
 
@@ -70,7 +78,7 @@ export async function startGatewayKafkaConsumer(deps: StartGatewayConsumerDeps):
         if (!parsed.success) {
           throw new Error(`Invalid wallet event: ${parsed.error.message}`);
         }
-        await handleWalletEvent(parsed.data, deps.registry);
+        await handleWalletEvent(parsed.data, deps, rideParticipants);
         return;
       }
 
@@ -158,6 +166,52 @@ async function handleRideEvent(
         receivedAt: new Date().toISOString(),
       };
       const bidCount = await addBid(deps.redisClient, event.rideId, bid);
+      await setRideState(deps.redisClient, event.rideId, 'bidding');
+
+      // Auto-accept: if driver's price <= rider's offer, auto-confirm
+      const meta = await getRideMeta(deps.redisClient, event.rideId);
+      if (meta && event.counterOfferNgn <= meta.offerNgn) {
+        console.log('[consumer] Auto-accepting bid — driver price matches rider offer', {
+          rideId: event.rideId, driverOffer: event.counterOfferNgn, riderOffer: meta.offerNgn,
+        });
+
+        const acceptEvent = RideOfferAcceptedEvent.parse({
+          eventType: 'RIDE_OFFER_ACCEPTED',
+          rideId: event.rideId,
+          riderId: event.riderId,
+          driverId: event.driverId,
+          driverUserId: event.driverUserId,
+          agreedFareNgn: event.counterOfferNgn,
+          paymentMethod: meta.paymentMethod,
+          timestamp: new Date().toISOString(),
+        });
+
+        // Publish acceptance — triggers RIDE_DRIVER_ASSIGNED which sends the notification
+        await deps.publisher.publishRideEvent(acceptEvent);
+        await setRideState(deps.redisClient, event.rideId, 'confirmed');
+
+        // Store accepted bid info for driver profile flow
+        try {
+          const driver = await driverClient.findById(event.driverId);
+          await storeAcceptedBid(deps.redisClient, event.rideId, {
+            driverName: event.driverName,
+            driverPhone: driver.user.phone ?? '',
+            driverUserId: event.driverUserId,
+            vehicleModel: event.vehicleModel,
+            vehiclePlate: event.vehiclePlate,
+            vehicleColor: '',
+            driverRating: event.driverRating,
+            totalRides: driver.totalRides ?? 0,
+            etaSeconds: event.etaSeconds,
+            fareNgn: event.counterOfferNgn,
+          });
+        } catch {
+          // Non-critical — profile flow will show fallback
+        }
+
+        return;
+      }
+
       const phone = await lookupPhoneByUserId(deps.redisClient, event.riderId);
       if (phone && await shouldNotify(deps.redisClient, event.rideId)) {
         await sendBidNotification(deps.whatsappNotifier, phone, event.rideId, bidCount, event.riderId)
@@ -226,10 +280,32 @@ async function handleRideEvent(
     // Notify rider
     const waRider = await isWhatsappRider(deps.redisClient, event.riderId);
     if (waRider && deps.whatsappNotifier) {
+      await setRideState(deps.redisClient, event.rideId, 'confirmed');
+
+      // Store accepted bid for driver profile flow
+      try {
+        const driver = await driverClient.findById(event.driverId);
+        await storeAcceptedBid(deps.redisClient, event.rideId, {
+          driverName: event.driverName,
+          driverPhone: driver.user.phone ?? '',
+          driverUserId: event.driverUserId,
+          vehicleModel: event.vehicleModel,
+          vehiclePlate: event.vehiclePlate ?? '',
+          vehicleColor: '',
+          driverRating: event.driverRating ?? 0,
+          totalRides: driver.totalRides ?? 0,
+          etaSeconds: event.etaSeconds,
+          fareNgn: event.agreedFareNgn,
+        });
+      } catch {
+        // Non-critical
+      }
+
       const phone = await lookupPhoneByUserId(deps.redisClient, event.riderId);
       if (phone) {
         await sendRideMatchedNotification(
           deps.whatsappNotifier, phone,
+          event.rideId, event.riderId,
           event.driverName, event.vehicleModel, event.etaSeconds, event.agreedFareNgn,
         ).catch(() => {});
       }
@@ -297,6 +373,7 @@ async function handleRideEvent(
     // Notify rider
     const waRider = await isWhatsappRider(deps.redisClient, event.riderId);
     if (waRider && deps.whatsappNotifier) {
+      await setRideState(deps.redisClient, event.rideId, 'in_progress');
       const phone = await lookupPhoneByUserId(deps.redisClient, event.riderId);
       if (phone) {
         await sendRideStartedNotification(deps.whatsappNotifier, phone).catch(() => {});
@@ -430,7 +507,13 @@ async function handleRideEvent(
   }
 }
 
-async function handleWalletEvent(event: WalletEvent, registry: SocketRegistry): Promise<void> {
+async function handleWalletEvent(
+  event: WalletEvent,
+  deps: StartGatewayConsumerDeps,
+  rideParticipants: Map<string, RideParticipantState>,
+): Promise<void> {
+  const registry = deps.registry;
+
   if (event.eventType === 'WALLET_CREDITED') {
     await registry.sendToUser(event.userId, 'wallet:updated', {
       walletId: event.walletId,
@@ -440,6 +523,33 @@ async function handleWalletEvent(event: WalletEvent, registry: SocketRegistry): 
       direction: 'credit',
       referenceId: event.referenceId,
     });
+
+    // Check if this rider has an active ride — notify driver that rider funded wallet
+    const waRider = await isWhatsappRider(deps.redisClient, event.userId);
+    if (waRider && deps.whatsappNotifier) {
+      // Find the active ride and its driver
+      for (const [rideId, participants] of rideParticipants) {
+        if (participants.riderId === event.userId && participants.driverUserId) {
+          const meta = await getRideMeta(deps.redisClient, rideId);
+          if (meta && event.newBalanceNgn >= meta.offerNgn) {
+            // Rider has enough funds — notify driver via app
+            await registry.sendToUser(participants.driverUserId, 'ride:rider_paid', {
+              rideId,
+              riderFunded: true,
+              message: 'Rider has funded their wallet. You can start heading to pickup!',
+            });
+            // Also send WhatsApp confirmation to rider
+            const phone = await lookupPhoneByUserId(deps.redisClient, event.userId);
+            if (phone) {
+              await sendRiderPaidNotification(deps.whatsappNotifier, phone, event.newBalanceNgn)
+                .catch(() => {});
+            }
+          }
+          break;
+        }
+      }
+    }
+
     return;
   }
 

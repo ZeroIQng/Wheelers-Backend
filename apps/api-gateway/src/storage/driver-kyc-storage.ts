@@ -22,7 +22,7 @@ export class DriverKycStorage {
 
   async upload(params: {
     driverId: string;
-    type: 'nin' | 'licence' | 'selfie';
+    type: string;
     imageBuffer: Buffer;
     mimeType: string;
   }): Promise<string> {
@@ -48,5 +48,26 @@ export class DriverKycStorage {
     });
 
     return getSignedUrl(this.s3, command, { expiresIn: expiresInSeconds });
+  }
+
+  async getImageAsBase64(key: string): Promise<string | null> {
+    try {
+      const command = new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+      });
+      const response = await this.s3.send(command);
+      if (!response.Body) return null;
+
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+        chunks.push(chunk);
+      }
+      const buffer = Buffer.concat(chunks);
+      const mimeType = key.endsWith('.png') ? 'image/png' : 'image/jpeg';
+      return `data:${mimeType};base64,${buffer.toString('base64')}`;
+    } catch {
+      return null;
+    }
   }
 }

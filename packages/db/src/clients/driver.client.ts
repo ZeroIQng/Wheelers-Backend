@@ -144,13 +144,14 @@ export const driverClient = {
   // ── KYC submissions ────────────────────────────────────────────────────────
 
   upsertKycSubmission: (driverId: string, data: {
-    ninImageKey?:     string;
-    licenceImageKey?: string;
-    selfieKey?:       string;
-    vehicleMake?:     string;
-    vehicleModel?:    string;
-    vehiclePlate?:    string;
-    vehicleYear?:     number;
+    ninImageKey?:      string;
+    licenceImageKey?:  string;
+    selfieKey?:        string;
+    vehicleImageKeys?: string[];
+    vehicleMake?:      string;
+    vehicleModel?:     string;
+    vehiclePlate?:     string;
+    vehicleYear?:      number;
   }) =>
     prisma.driverKycSubmission.upsert({
       where:  { driverId },

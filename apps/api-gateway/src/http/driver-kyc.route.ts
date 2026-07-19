@@ -54,6 +54,7 @@ export async function handleDriverKycSubmitRoute(
     const ninImage = getString(rawBody, 'ninImage'); // base64
     const licenceImage = getString(rawBody, 'licenceImage'); // base64
     const selfieImage = getString(rawBody, 'selfieImage'); // base64
+    const vehicleImages = Array.isArray(rawBody.vehicleImages) ? rawBody.vehicleImages as string[] : [];
     const vehicleMake = getString(rawBody, 'vehicleMake');
     const vehicleModel = getString(rawBody, 'vehicleModel');
     const vehiclePlate = getString(rawBody, 'vehiclePlate');
@@ -70,7 +71,12 @@ export async function handleDriverKycSubmitRoute(
       return;
     }
 
-    // Upload images to S3
+    if (vehicleImages.length < 7) {
+      sendJson(res, 400, { error: 'At least 7 vehicle photos are required' });
+      return;
+    }
+
+    // Upload document images to S3
     const [ninKey, licenceKey, selfieKey] = await Promise.all([
       deps.kycStorage.upload({
         driverId: driver.id,
@@ -92,11 +98,24 @@ export async function handleDriverKycSubmitRoute(
       }),
     ]);
 
+    // Upload vehicle photos
+    const vehicleImageKeys = await Promise.all(
+      vehicleImages.slice(0, 10).map((img, i) =>
+        deps.kycStorage.upload({
+          driverId: driver.id,
+          type: `vehicle-${i}`,
+          imageBuffer: Buffer.from(img as string, 'base64'),
+          mimeType: 'image/jpeg',
+        }),
+      ),
+    );
+
     // Upsert submission record
     await driverClient.upsertKycSubmission(driver.id, {
       ninImageKey: ninKey,
       licenceImageKey: licenceKey,
       selfieKey,
+      vehicleImageKeys,
       vehicleMake,
       vehicleModel,
       vehiclePlate,

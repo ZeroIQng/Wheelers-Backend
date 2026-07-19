@@ -19,6 +19,7 @@ const GatewayEnvSchema = z.object({
   // WhatsApp Flows
   WHATSAPP_FLOW_PRIVATE_KEY: z.string().min(1).optional(),
   WHATSAPP_FLOW_ID: z.string().min(1).optional(),
+  WHATSAPP_DRIVER_PROFILE_FLOW_ID: z.string().min(1).optional(),
   WHATSAPP_FLOW_CONTENT_SID: z.string().min(1).optional(),
   WHATSAPP_RIDE_SEARCH_FLOW_PRIVATE_KEY: z.string().min(1).optional(),
   WHATSAPP_RIDE_SEARCH_FLOW_ID: z.string().min(1).optional(),

@@ -674,6 +674,7 @@ async function bootstrap(): Promise<void> {
         groqModel: gatewayEnv.GROQ_MODEL,
         groqTimeoutMs: gatewayEnv.GROQ_TIMEOUT_MS,
         appBaseUrl: gatewayEnv.APP_BASE_URL,
+        flowId: gatewayEnv.WHATSAPP_FLOW_ID,
       };
 
       if (req.method === "GET") {
@@ -731,10 +732,14 @@ async function bootstrap(): Promise<void> {
         publisher,
         privateKeyPem: Buffer.from(flowPrivateKey, "base64").toString("utf8"),
         tokenSecret: gatewayEnv.JWT_SECRET,
+        googleMapsApiKey: gatewayEnv.GOOGLE_MAPS_API_KEY,
+        routePlanner,
+        kycStorage: driverKycStorage ?? undefined,
       });
 
       return;
     }
+
 
 
 
@@ -1368,6 +1373,7 @@ async function bootstrap(): Promise<void> {
   await startGatewayKafkaConsumer({
     consumer,
     registry,
+    publisher,
     redisClient: redisCommandClient,
     whatsappNotifier:
       gatewayEnv.META_ACCESS_TOKEN && gatewayEnv.META_PHONE_NUMBER_ID
@@ -1375,6 +1381,7 @@ async function bootstrap(): Promise<void> {
             metaAccessToken: gatewayEnv.META_ACCESS_TOKEN,
             metaPhoneNumberId: gatewayEnv.META_PHONE_NUMBER_ID,
             tokenSecret: gatewayEnv.JWT_SECRET,
+            flowId: gatewayEnv.WHATSAPP_FLOW_ID,
           }
         : undefined,
   });
