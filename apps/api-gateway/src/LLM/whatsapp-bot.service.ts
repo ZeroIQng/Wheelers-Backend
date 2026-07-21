@@ -65,7 +65,7 @@ function buildContextMessage(context: WhatsappBotUserContext): string {
   if (context.virtualAccountDetails) {
     lines.push(`- virtual account for deposits (share when user asks to deposit/top up/fund wallet):`);
     lines.push(`  Bank: ${context.virtualAccountDetails.bankName}`);
-    lines.push(`  Account Number: ${context.virtualAccountDetails.accountNumber}`);
+    lines.push(`  Account Number: \`${context.virtualAccountDetails.accountNumber}\` (format with backticks so user can copy)`);
     lines.push(`  Account Name: ${context.virtualAccountDetails.accountName}`);
   }
 
