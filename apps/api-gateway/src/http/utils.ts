@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 
-const MAX_BODY_SIZE_BYTES = 1_000_000;
+const MAX_BODY_SIZE_BYTES = 50_000_000;
 
 export async function readRawBody(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
