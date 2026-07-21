@@ -51,12 +51,10 @@ export async function geocodeAddress(
   apiKey: string,
   address: string,
 ): Promise<GeocodeResult | null> {
+  // TODO: restore country:NG bias once done testing outside Nigeria
   const params = new URLSearchParams({
     address,
     key: apiKey,
-    // Bias results towards Lagos, Nigeria
-    components: 'country:NG',
-    region: 'ng',
   });
 
   const url = `https://maps.googleapis.com/maps/api/geocode/json?${params.toString()}`;

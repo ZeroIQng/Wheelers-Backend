@@ -16,7 +16,7 @@ export interface RideIntent {
 }
 
 const RIDE_INTENT_SYSTEM_PROMPT = `
-You extract ride request details from Nigerian WhatsApp messages.
+You extract ride request details from WhatsApp messages.
 Return ONLY a JSON object with these fields:
 - "intent": "ride_request" | "ride_status" | "cancel_ride" | "other"
 - "pickup": { "address": string, "area": string, "specific": boolean } | null
@@ -25,10 +25,10 @@ Return ONLY a JSON object with these fields:
 - "paymentMethod": "WALLET" | "CRYPTO_WALLET" | "CASH" | null
 
 "specific" field:
-- true = the location is precise enough to find on a map (a street, landmark, estate, bus stop, mall, hotel, school, hospital, market, plaza, roundabout, junction, bridge, gate, etc.)
-- false = just a broad area/neighborhood name with no specific point (e.g. "Lekki", "VI", "Ikeja", "Ajah", "Yaba", "Wuse", "Garki")
-- Examples of SPECIFIC (true): "Chevron roundabout Lekki", "Shoprite Ikeja", "Palms Mall", "Lekki Phase 1 gate", "Adeola Odeku VI", "Computer Village", "Unilag main gate", "Third Mainland Bridge", "Obalende bus stop"
-- Examples of NOT SPECIFIC (false): "Lekki", "VI", "Ikeja", "Ajah", "Ikoyi", "Surulere", "Festac", "Abuja", "Wuse"
+- true = the location is precise enough to find on a map (a street, landmark, building, mall, hotel, school, hospital, market, plaza, station, airport, bridge, gate, pier, park, etc.)
+- false = just a broad area/neighborhood/city name with no specific point (e.g. "Lekki", "VI", "Ikeja", "downtown", "midtown")
+- Examples of SPECIFIC (true): "Chevron roundabout Lekki", "Shoprite Ikeja", "Palms Mall", "Golden Gate Bridge", "Pier 39 San Francisco", "Union Square San Francisco", "1 Market Street San Francisco", "Unilag main gate", "SFO Airport"
+- Examples of NOT SPECIFIC (false): "Lekki", "VI", "Ikeja", "San Francisco", "downtown", "Abuja"
 
 Rules:
 - If the message is about booking a ride, going somewhere, or requesting a trip → "ride_request"
@@ -36,9 +36,9 @@ Rules:
 - If cancelling a ride → "cancel_ride"
 - Everything else (greetings, wallet questions, general chat) → "other"
 - For "other" intent, set all other fields to null
-- Normalize Nigerian locations and always include city/state:
-  "VI" → "Victoria Island, Lagos", "Lekki" → "Lekki, Lagos", "Ikeja" → "Ikeja, Lagos", etc.
-  For non-Lagos cities, include the state (e.g., "Garki, Abuja", "Wuse, Abuja")
+- Normalize locations: include city/state/country for clarity
+  Nigerian: "VI" → "Victoria Island, Lagos", "Lekki" → "Lekki, Lagos"
+  International: "Pier 39" → "Pier 39, San Francisco, CA", "Golden Gate Bridge" → "Golden Gate Bridge, San Francisco, CA"
 - Extract price if mentioned (e.g., "2000", "₦2,000", "2k" → 2000, "5k" → 5000)
 - If payment method not mentioned, set to null
 - "wallet" or "use wallet" = "WALLET" (means Naira wallet by default)
@@ -52,8 +52,8 @@ Examples:
 "Take me from Lekki to VI" →
 {"intent":"ride_request","pickup":{"address":"Lekki, Lagos","area":"Lekki","specific":false},"destination":{"address":"Victoria Island, Lagos","area":"VI","specific":false},"offerNgn":null,"paymentMethod":null}
 
-"Pickup from Shoprite Ikeja to Yaba" →
-{"intent":"ride_request","pickup":{"address":"Shoprite, Ikeja, Lagos","area":"Ikeja","specific":true},"destination":{"address":"Yaba, Lagos","area":"Yaba","specific":false},"offerNgn":null,"paymentMethod":null}
+"From Union Square to Pier 39" →
+{"intent":"ride_request","pickup":{"address":"Union Square, San Francisco, CA","area":"San Francisco","specific":true},"destination":{"address":"Pier 39, San Francisco, CA","area":"San Francisco","specific":true},"offerNgn":null,"paymentMethod":null}
 
 "Cancel my ride" →
 {"intent":"cancel_ride","pickup":null,"destination":null,"offerNgn":null,"paymentMethod":null}
