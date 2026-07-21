@@ -23,6 +23,7 @@ export { GPS }                         from './constants/gps';
 export { RIDE }                        from './constants/ride';
 export {
   RATE_PER_KM_NGN,
+  PLATFORM_FEE_NGN,
   MIN_OFFER_DISCOUNT,
   FARE_ROUNDING_INCREMENT,
   calculateSuggestedFare,

@@ -1,4 +1,5 @@
 export const RATE_PER_KM_NGN = 300;
+export const PLATFORM_FEE_NGN = 200;
 export const MIN_OFFER_DISCOUNT = 0.28;
 export const FARE_ROUNDING_INCREMENT = 100;
 
@@ -21,7 +22,7 @@ export function calculateSuggestedFare(distanceKm: number): SuggestedFare {
     throw new TypeError('distanceKm must be a finite number >= 0');
   }
 
-  const rawFare = RATE_PER_KM_NGN * distanceKm;
+  const rawFare = RATE_PER_KM_NGN * distanceKm + PLATFORM_FEE_NGN;
   const suggestedFareNgn = roundUpToIncrement(rawFare, FARE_ROUNDING_INCREMENT);
   const minOfferNgn = round2(suggestedFareNgn * (1 - MIN_OFFER_DISCOUNT));
 
