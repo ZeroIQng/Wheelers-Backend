@@ -79,6 +79,15 @@ export async function handleAdminGetDriverRoute(
     submission.selfieKey ? deps.kycStorage.getSignedUrl(submission.selfieKey) : null,
   ]);
 
+  // Generate signed URLs for vehicle images
+  const vehicleImageUrls: string[] = [];
+  if (submission.vehicleImageKeys?.length) {
+    const urls = await Promise.all(
+      submission.vehicleImageKeys.map((key) => deps.kycStorage.getSignedUrl(key)),
+    );
+    vehicleImageUrls.push(...urls);
+  }
+
   sendJson(res, 200, {
     driverId: driver.id,
     userId: driver.userId,
@@ -96,6 +105,7 @@ export async function handleAdminGetDriverRoute(
       ninImageUrl: ninUrl,
       licenceImageUrl: licenceUrl,
       selfieUrl,
+      vehicleImageUrls,
       rejectionReason: submission.rejectionReason,
       rejectedFields: submission.rejectedFields ?? [],
       fieldStatuses: (submission.fieldStatuses as Record<string, unknown>) ?? {},
