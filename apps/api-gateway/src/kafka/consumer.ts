@@ -24,6 +24,7 @@ import {
   getRideMeta,
   getBids,
   storeAcceptedBid,
+  storeLastBatch,
 } from '../whatsapp-flows/bid-state';
 import type { WhatsappBid } from '../whatsapp-flows/bid-state';
 import {
@@ -213,8 +214,11 @@ async function handleRideEvent(
       }
 
       const phone = await lookupPhoneByUserId(deps.redisClient, event.riderId);
-      if (phone && await shouldNotify(deps.redisClient, event.rideId)) {
-        await sendBidNotification(deps.whatsappNotifier, phone, event.rideId, bidCount, event.riderId)
+      if (phone && meta && await shouldNotify(deps.redisClient, event.rideId)) {
+        // Fetch ALL bids and send as one batched message
+        const allBids = await getBids(deps.redisClient, event.rideId);
+        await storeLastBatch(deps.redisClient, event.rideId, allBids);
+        await sendBidNotification(deps.whatsappNotifier, phone, allBids, meta.offerNgn)
           .catch((err) => console.warn('[consumer] WhatsApp bid notification failed', err));
       }
     } else {
@@ -305,8 +309,9 @@ async function handleRideEvent(
       if (phone) {
         await sendRideMatchedNotification(
           deps.whatsappNotifier, phone,
-          event.rideId, event.riderId,
-          event.driverName, event.vehicleModel, event.etaSeconds, event.agreedFareNgn,
+          event.driverName, event.vehicleModel,
+          event.vehiclePlate ?? '', event.etaSeconds,
+          event.agreedFareNgn, event.driverRating ?? 0,
         ).catch(() => {});
       }
     } else {

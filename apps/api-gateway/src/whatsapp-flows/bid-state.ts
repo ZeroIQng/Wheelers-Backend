@@ -45,6 +45,7 @@ const ACTIVE_RIDE_TTL = 1800;        // 30 minutes
 const PENDING_LOCATION_TTL = 600;    // 10 minutes
 const PHONE_LOOKUP_TTL = 86400;      // 24 hours
 const DEBOUNCE_TTL = 30;             // 30 seconds
+const BID_BATCH_TTL = 900;           // 15 minutes — stores last batch sent to rider
 
 function rideMetaKey(rideId: string): string {
   return `whatsapp:ride:${rideId}:meta`;
@@ -304,4 +305,62 @@ export async function clearPendingLocation(
   userId: string,
 ): Promise<void> {
   await redis.del(pendingLocationKey(userId));
+}
+
+// ── Rider booking stage (tracks where the rider is in the booking flow) ───
+
+export type BookingStage = 'awaiting_pickup' | 'awaiting_destination' | 'awaiting_payment' | 'searching' | 'bidding';
+
+function bookingStageKey(userId: string): string {
+  return `whatsapp:user:${userId}:booking_stage`;
+}
+
+export async function setBookingStage(
+  redis: RedisClient,
+  userId: string,
+  stage: BookingStage,
+): Promise<void> {
+  await redis.set(bookingStageKey(userId), stage, PENDING_LOCATION_TTL);
+}
+
+export async function getBookingStage(
+  redis: RedisClient,
+  userId: string,
+): Promise<BookingStage | null> {
+  const raw = await redis.get(bookingStageKey(userId));
+  return (raw as BookingStage) ?? null;
+}
+
+export async function clearBookingStage(
+  redis: RedisClient,
+  userId: string,
+): Promise<void> {
+  await redis.del(bookingStageKey(userId));
+}
+
+// ── Last bid batch sent to rider (for numbered accept/counter) ────────────
+
+function lastBatchKey(rideId: string): string {
+  return `whatsapp:ride:${rideId}:last_batch`;
+}
+
+export async function storeLastBatch(
+  redis: RedisClient,
+  rideId: string,
+  bids: WhatsappBid[],
+): Promise<void> {
+  await redis.set(lastBatchKey(rideId), JSON.stringify(bids), BID_BATCH_TTL);
+}
+
+export async function getLastBatch(
+  redis: RedisClient,
+  rideId: string,
+): Promise<WhatsappBid[]> {
+  const raw = await redis.get(lastBatchKey(rideId));
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as WhatsappBid[];
+  } catch {
+    return [];
+  }
 }

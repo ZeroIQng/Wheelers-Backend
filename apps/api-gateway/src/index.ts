@@ -116,8 +116,9 @@ import {
 import { handleGetRideChatMessagesRoute } from "./http/chat.route";
 import { applyCorsHeaders, sendJson } from "./http/utils";
 import { startGatewayKafkaConsumer } from "./kafka/consumer";
-import { handleWhatsappFlowEndpoint } from "./whatsapp-flows/flow-endpoint";
-import { handleRideSearchFlowEndpoint } from "./whatsapp-flows/ride-search-flow-endpoint";
+// COMMENTED OUT: WhatsApp Flows — using pure chat-based ride booking instead
+// import { handleWhatsappFlowEndpoint } from "./whatsapp-flows/flow-endpoint";
+// import { handleRideSearchFlowEndpoint } from "./whatsapp-flows/ride-search-flow-endpoint";
 import { RedisClient } from "./redis/client";
 import { asRawProducer, startOutboxPublisher } from "./outbox/outbox-publisher";
 import { GatewayPublisher } from "./websocket/publisher";
@@ -674,7 +675,6 @@ async function bootstrap(): Promise<void> {
         groqModel: gatewayEnv.GROQ_MODEL,
         groqTimeoutMs: gatewayEnv.GROQ_TIMEOUT_MS,
         appBaseUrl: gatewayEnv.APP_BASE_URL,
-        flowId: gatewayEnv.WHATSAPP_FLOW_ID,
       };
 
       if (req.method === "GET") {
@@ -691,54 +691,9 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (url.pathname === "/webhooks/whatsapp-ride-search-flow") {
-      if (req.method !== "POST") {
-        sendMethodNotAllowed(res);
-        return;
-      }
-
-      const rideSearchFlowKey = gatewayEnv.WHATSAPP_RIDE_SEARCH_FLOW_PRIVATE_KEY;
-      if (!rideSearchFlowKey) {
-        sendJson(res, 503, { error: "Ride search WhatsApp Flow not configured" });
-        return;
-      }
-
-      await handleRideSearchFlowEndpoint(req, res, {
-        redisClient: redisCommandClient,
-        publisher,
-        privateKeyPem: Buffer.from(rideSearchFlowKey, "base64").toString("utf8"),
-        tokenSecret: gatewayEnv.JWT_SECRET,
-        googleMapsApiKey: gatewayEnv.GOOGLE_MAPS_API_KEY,
-        routePlanner,
-      });
-
-      return;
-    }
-
-    if (url.pathname === "/webhooks/whatsapp-flow") {
-      if (req.method !== "POST") {
-        sendMethodNotAllowed(res);
-        return;
-      }
-
-      const flowPrivateKey = gatewayEnv.WHATSAPP_FLOW_PRIVATE_KEY;
-      if (!flowPrivateKey) {
-        sendJson(res, 503, { error: "WhatsApp Flow not configured" });
-        return;
-      }
-
-      await handleWhatsappFlowEndpoint(req, res, {
-        redisClient: redisCommandClient,
-        publisher,
-        privateKeyPem: Buffer.from(flowPrivateKey, "base64").toString("utf8"),
-        tokenSecret: gatewayEnv.JWT_SECRET,
-        googleMapsApiKey: gatewayEnv.GOOGLE_MAPS_API_KEY,
-        routePlanner,
-        kycStorage: driverKycStorage ?? undefined,
-      });
-
-      return;
-    }
+    // COMMENTED OUT: WhatsApp Flows endpoints — using pure chat-based ride booking
+    // if (url.pathname === "/webhooks/whatsapp-ride-search-flow") { ... }
+    // if (url.pathname === "/webhooks/whatsapp-flow") { ... }
 
 
 
@@ -1380,8 +1335,6 @@ async function bootstrap(): Promise<void> {
         ? {
             metaAccessToken: gatewayEnv.META_ACCESS_TOKEN,
             metaPhoneNumberId: gatewayEnv.META_PHONE_NUMBER_ID,
-            tokenSecret: gatewayEnv.JWT_SECRET,
-            flowId: gatewayEnv.WHATSAPP_FLOW_ID,
           }
         : undefined,
   });

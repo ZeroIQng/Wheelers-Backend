@@ -1,10 +1,11 @@
-import { signFlowToken } from './encryption';
+// COMMENTED OUT: Flow-based encryption imports — using pure chat-based messaging
+// import { signFlowToken } from './encryption';
+
+import type { WhatsappBid } from './bid-state';
 
 export interface WhatsappNotifierDeps {
   metaAccessToken: string;
   metaPhoneNumberId: string;
-  tokenSecret: string;
-  flowId?: string;
 }
 
 async function sendMetaWhatsappMessage(
@@ -37,241 +38,77 @@ async function sendMetaWhatsappMessage(
   }
 }
 
-async function sendMetaTemplateMessage(
-  deps: WhatsappNotifierDeps,
-  to: string,
-  templateName: string,
-  parameters: Array<{ type: 'text'; text: string }>,
-): Promise<void> {
-  const recipient = to.replace(/^\+/, '');
-  const endpoint = `https://graph.facebook.com/v21.0/${deps.metaPhoneNumberId}/messages`;
+// ── Build a single message listing all driver bids ────────────────────────
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${deps.metaAccessToken}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      to: recipient,
-      type: 'template',
-      template: {
-        name: templateName,
-        language: { code: 'en' },
-        components: [
-          {
-            type: 'body',
-            parameters,
-          },
-        ],
-      },
-    }),
+function formatBidList(bids: WhatsappBid[], riderOfferNgn: number): string {
+  const count = bids.length;
+  const header = `🚗 *${count} driver${count === 1 ? '' : 's'} found!*\n\nYour offer: ₦${riderOfferNgn.toLocaleString()}\n`;
+
+  const lines = bids.map((bid, i) => {
+    const num = i + 1;
+    const etaMin = Math.ceil(bid.etaSeconds / 60);
+    return `*${num}.* ${bid.driverName} — ₦${bid.counterOfferNgn.toLocaleString()}\n    ${bid.vehicleModel} · ${bid.driverRating.toFixed(1)}★ · ${etaMin} min away`;
   });
 
-  if (!response.ok) {
-    const payload = await response.text();
-    console.error('[whatsapp-notifier] Meta template send failed', { status: response.status, payload });
-  }
+  const footer = [
+    '',
+    '━━━━━━━━━━━━━━━━━━━━━━',
+    'Reply with:',
+    '• *accept 1* — to accept driver #1',
+    '• *accept 3* — to accept driver #3',
+    '• A *price* (e.g. "1500") — to counter-offer and get new drivers',
+    '• *more* — to see more drivers',
+    '• *cancel* — to cancel the ride',
+  ];
+
+  return [header, ...lines, ...footer].join('\n');
 }
 
-async function sendFlowInteractiveMessage(
-  deps: WhatsappNotifierDeps,
-  to: string,
-  bodyText: string,
-  ctaText: string,
-  rideId: string,
-  userId: string,
-): Promise<void> {
-  // If flow ID isn't configured, fall back to plain text
-  if (!deps.flowId) {
-    await sendMetaWhatsappMessage(deps, to, bodyText);
-    return;
-  }
+export { formatBidList };
 
-  const recipient = to.replace(/^\+/, '');
-  const endpoint = `https://graph.facebook.com/v21.0/${deps.metaPhoneNumberId}/messages`;
-  const flowToken = signFlowToken(`${rideId}:${userId}`, deps.tokenSecret);
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${deps.metaAccessToken}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: recipient,
-      type: 'interactive',
-      interactive: {
-        type: 'flow',
-        body: { text: bodyText },
-        action: {
-          name: 'flow',
-          parameters: {
-            flow_id: deps.flowId,
-            flow_cta: ctaText,
-            flow_token: flowToken,
-            mode: 'draft',
-            flow_message_version: '3',
-            flow_action: 'data_exchange',
-            flow_action_payload: {
-              screen: 'BID_LIST',
-            },
-          },
-        },
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const payload = await response.text();
-    console.error('[whatsapp-notifier] Meta flow send failed', { status: response.status, payload });
-  }
-}
+// ── Send batched bid notification (1 message with all drivers) ────────────
 
 export async function sendBidNotification(
   deps: WhatsappNotifierDeps,
   phone: string,
-  rideId: string,
-  bidCount: number,
-  userId: string,
+  bids: WhatsappBid[],
+  riderOfferNgn: number,
 ): Promise<void> {
-  const drivers = bidCount === 1 ? 'driver is' : 'drivers are';
-  const bodyText = `${bidCount} ${drivers} interested in your ride!`;
-
-  await sendFlowInteractiveMessage(
-    deps,
-    phone,
-    bodyText,
-    'View Offers',
-    rideId,
-    userId,
-  );
-}
-
-export async function sendBookRideFlowMessage(
-  deps: WhatsappNotifierDeps,
-  phone: string,
-  userId: string,
-  routeSummary: string,
-): Promise<void> {
-  // If flow ID isn't configured, fall back to plain text
-  if (!deps.flowId) {
-    await sendMetaWhatsappMessage(deps, phone, `${routeSummary}\n\nSend your offer amount to book!`);
-    return;
-  }
-
-  const recipient = phone.replace(/^\+/, '');
-  const endpoint = `https://graph.facebook.com/v21.0/${deps.metaPhoneNumberId}/messages`;
-  // Use 'new' as rideId since ride hasn't been created yet
-  const flowToken = signFlowToken(`new:${userId}`, deps.tokenSecret);
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${deps.metaAccessToken}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: recipient,
-      type: 'interactive',
-      interactive: {
-        type: 'flow',
-        body: { text: routeSummary },
-        action: {
-          name: 'flow',
-          parameters: {
-            flow_id: deps.flowId,
-            flow_cta: 'Book This Ride',
-            flow_token: flowToken,
-            mode: 'draft',
-            flow_message_version: '3',
-            flow_action: 'data_exchange',
-            flow_action_payload: {
-              screen: 'RIDE_SETUP',
-            },
-          },
-        },
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const payload = await response.text();
-    console.error('[whatsapp-notifier] Meta book-ride flow send failed', { status: response.status, payload });
-  }
+  const message = formatBidList(bids, riderOfferNgn);
+  await sendMetaWhatsappMessage(deps, phone, message);
 }
 
 export async function sendRideMatchedNotification(
   deps: WhatsappNotifierDeps,
   phone: string,
-  rideId: string,
-  userId: string,
   driverName: string,
   vehicleModel: string,
+  vehiclePlate: string,
   etaSeconds: number,
   fareNgn: number,
+  driverRating: number,
 ): Promise<void> {
   const etaMin = Math.ceil(etaSeconds / 60);
-  const bodyText = `Ride confirmed! *${driverName}* is on the way in a ${vehicleModel}. ETA: ${etaMin} min. Fare: ₦${fareNgn.toLocaleString()}`;
+  const msg = [
+    `✅ *Ride confirmed!*`,
+    ``,
+    `Driver: *${driverName}*`,
+    `Vehicle: ${vehicleModel} (${vehiclePlate})`,
+    `Rating: ${driverRating.toFixed(1)}★`,
+    `ETA: ${etaMin} min`,
+    `Fare: ₦${fareNgn.toLocaleString()}`,
+    ``,
+    `Your driver is on the way! 🚗`,
+  ].join('\n');
 
-  // Send flow button to view driver profile (part of main ride flow)
-  if (!deps.flowId) {
-    await sendMetaWhatsappMessage(deps, phone, bodyText);
-    return;
-  }
-
-  const recipient = phone.replace(/^\+/, '');
-  const endpoint = `https://graph.facebook.com/v21.0/${deps.metaPhoneNumberId}/messages`;
-  const flowToken = signFlowToken(`${rideId}:${userId}`, deps.tokenSecret);
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${deps.metaAccessToken}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: recipient,
-      type: 'interactive',
-      interactive: {
-        type: 'flow',
-        body: { text: bodyText },
-        action: {
-          name: 'flow',
-          parameters: {
-            flow_id: deps.flowId,
-            flow_cta: 'View Driver',
-            flow_token: flowToken,
-            mode: 'draft',
-            flow_message_version: '3',
-            flow_action: 'data_exchange',
-            flow_action_payload: {
-              screen: 'DRIVER_PROFILE',
-            },
-          },
-        },
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const payload = await response.text();
-    console.error('[whatsapp-notifier] Meta ride flow send failed', { status: response.status, payload });
-  }
+  await sendMetaWhatsappMessage(deps, phone, msg);
 }
 
 export async function sendRideStartedNotification(
   deps: WhatsappNotifierDeps,
   phone: string,
 ): Promise<void> {
-  await sendMetaWhatsappMessage(deps, phone, 'Your ride has started! Stay safe.');
+  await sendMetaWhatsappMessage(deps, phone, 'Your ride has started! Stay safe. 🚗');
 }
 
 export async function sendRideCompletedNotification(
@@ -283,7 +120,7 @@ export async function sendRideCompletedNotification(
   await sendMetaWhatsappMessage(
     deps,
     phone,
-    `Ride complete! Distance: ${distanceKm.toFixed(1)}km. Fare: ₦${fareNgn.toLocaleString()}. Thanks for riding with Wheelers!`,
+    `Ride complete! Distance: ${distanceKm.toFixed(1)}km. Fare: ₦${fareNgn.toLocaleString()}. Thanks for riding with Wheelers! 🎉`,
   );
 }
 
@@ -305,7 +142,7 @@ export async function sendBidTimeoutNotification(
   await sendMetaWhatsappMessage(
     deps,
     phone,
-    'No drivers accepted your ride request. Try again with a different offer?',
+    'No drivers accepted your ride request. Try again — share your location to book a new ride!',
   );
 }
 
@@ -319,4 +156,28 @@ export async function sendRiderPaidNotification(
     phone,
     `Payment received! Your wallet balance is now ₦${newBalanceNgn.toLocaleString()}. Your driver has been notified and is on the way.`,
   );
+}
+
+export async function sendSearchingNotification(
+  deps: WhatsappNotifierDeps,
+  phone: string,
+  pickupAddress: string,
+  destAddress: string,
+  offerNgn: number,
+  paymentMethod: string,
+): Promise<void> {
+  const payLabel = paymentMethod === 'WALLET' ? 'Wallet' : 'Cash';
+  const msg = [
+    `🔍 *Looking for drivers!*`,
+    ``,
+    `📍 ${pickupAddress}`,
+    `📍 ${destAddress}`,
+    ``,
+    `Offer: ₦${offerNgn.toLocaleString()}`,
+    `Payment: ${payLabel}`,
+    ``,
+    `I'll message you when drivers respond! 🚗`,
+  ].join('\n');
+
+  await sendMetaWhatsappMessage(deps, phone, msg);
 }
