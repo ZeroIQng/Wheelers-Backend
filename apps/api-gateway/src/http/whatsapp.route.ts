@@ -767,11 +767,76 @@ export async function handleMetaWhatsappWebhookRoute(
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // 3. AWAITING DESTINATION — user sent text instead of location pin
+    // 3. AWAITING DESTINATION — user can type an address or share a pin
     // ══════════════════════════════════════════════════════════════════════
 
     if (bookingStage === 'awaiting_destination' && !isLocation) {
-      const reply = 'Please share your *destination* as a location pin! 📍\n\nTap the attachment (📎) button → Location → Share your destination.';
+      const pendingPickup = await getPendingLocation(deps.redisClient, user.id);
+      if (!pendingPickup) {
+        await clearBookingStage(deps.redisClient, user.id);
+        const reply = 'Session expired. Type your pickup and destination like:\n\n*"From [pickup] to [destination]"*\n\nOr share a location pin 📍';
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage },
+          { role: 'assistant', content: reply },
+        ]);
+        await sendMetaReply(deps, phone, reply);
+        return;
+      }
+
+      // Try to geocode the typed destination
+      const destGeo = await geocodeAddress(deps.googleMapsApiKey, incomingMessage.trim());
+      if (!destGeo) {
+        const reply = `Could not find "${incomingMessage.trim()}" on the map.\n\nPlease type a more specific destination address or share a location pin 📍`;
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage },
+          { role: 'assistant', content: reply },
+        ]);
+        await sendMetaReply(deps, phone, reply);
+        return;
+      }
+
+      // Destination geocoded — plan route
+      const pickup = { lat: pendingPickup.lat, lng: pendingPickup.lng, address: pendingPickup.address };
+      const destination = { lat: destGeo.lat, lng: destGeo.lng, address: destGeo.formattedAddress };
+
+      await clearPendingLocation(deps.redisClient, user.id);
+      await clearBookingStage(deps.redisClient, user.id);
+
+      const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
+      const distanceKm = plannedRoute.distanceKm;
+      const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
+      const suggestedFare = plannedRoute.suggestedFareNgn;
+      const minFare = plannedRoute.minOfferNgn;
+
+      await storePendingRoute(deps.redisClient, user.id, {
+        pickupLat: pickup.lat,
+        pickupLng: pickup.lng,
+        pickupAddress: pickup.address,
+        destLat: destination.lat,
+        destLng: destination.lng,
+        destAddress: destination.address,
+        distanceKm,
+        durationSeconds: plannedRoute.durationSeconds,
+        suggestedFareNgn: suggestedFare,
+        minOfferNgn: minFare,
+        ratePerKmNgn: plannedRoute.ratePerKmNgn,
+        route: plannedRoute.geometry,
+      });
+      await setBookingStage(deps.redisClient, user.id, 'awaiting_price');
+
+      const reply = [
+        `Pickup: *${pickup.address}*`,
+        ``,
+        `Destination: *${destination.address}*`,
+        ``,
+        `${distanceKm.toFixed(1)} km · ~${durationMin} min`,
+        `Minimum fare: ₦${minFare.toLocaleString()}`,
+        `Suggested fare: ₦${suggestedFare.toLocaleString()}`,
+        ``,
+        `Negotiate your price and we'll find you a driver!`,
+        `Send your offer (e.g. *${suggestedFare.toLocaleString()}* or *${Math.round(suggestedFare * 0.85).toLocaleString()}*)`,
+      ].join('\n');
+
       await appendWhatsappConversation(deps.redisClient, phone, [
         { role: 'user', content: incomingMessage },
         { role: 'assistant', content: reply },
@@ -909,8 +974,180 @@ export async function handleMetaWhatsappWebhookRoute(
     const rideIntent = await parseRideIntent(groq, incomingMessage, recentMessages);
 
     if (rideIntent?.intent === 'ride_request') {
-      // User wants a ride but hasn't shared location — tell them to share location pin
-      const reply = 'To book a ride, share your *pickup location* as a location pin! 📍\n\nTap the attachment (📎) button → Location → Send your current location.';
+      const hasPickup = rideIntent.pickup?.specific && rideIntent.pickup.address.trim();
+      const hasDestination = rideIntent.destination?.specific && rideIntent.destination.address.trim();
+
+      // ── Both pickup & destination typed → geocode both and plan route ──
+      if (hasPickup && hasDestination) {
+        const [pickupGeo, destGeo] = await Promise.all([
+          geocodeAddress(deps.googleMapsApiKey, rideIntent.pickup!.address),
+          geocodeAddress(deps.googleMapsApiKey, rideIntent.destination!.address),
+        ]);
+
+        if (!pickupGeo) {
+          const reply = `Could not find "${rideIntent.pickup!.address}" on the map.\n\nPlease try a more specific pickup address, or share a location pin 📍`;
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
+          return;
+        }
+
+        if (!destGeo) {
+          // Pickup worked — save it and ask for destination again
+          await setPendingLocation(deps.redisClient, user.id, {
+            lat: pickupGeo.lat,
+            lng: pickupGeo.lng,
+            address: pickupGeo.formattedAddress,
+            savedAt: new Date().toISOString(),
+          });
+          await setBookingStage(deps.redisClient, user.id, 'awaiting_destination');
+
+          const reply = `📍 Pickup: *${pickupGeo.formattedAddress}*\n\nCould not find "${rideIntent.destination!.address}" on the map.\n\nPlease type a more specific destination or share a destination location pin 📍`;
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
+          return;
+        }
+
+        // Both geocoded — plan route and ask for price
+        const pickup = { lat: pickupGeo.lat, lng: pickupGeo.lng, address: pickupGeo.formattedAddress };
+        const destination = { lat: destGeo.lat, lng: destGeo.lng, address: destGeo.formattedAddress };
+
+        const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
+        const distanceKm = plannedRoute.distanceKm;
+        const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
+        const suggestedFare = plannedRoute.suggestedFareNgn;
+        const minFare = plannedRoute.minOfferNgn;
+
+        await storePendingRoute(deps.redisClient, user.id, {
+          pickupLat: pickup.lat,
+          pickupLng: pickup.lng,
+          pickupAddress: pickup.address,
+          destLat: destination.lat,
+          destLng: destination.lng,
+          destAddress: destination.address,
+          distanceKm,
+          durationSeconds: plannedRoute.durationSeconds,
+          suggestedFareNgn: suggestedFare,
+          minOfferNgn: minFare,
+          ratePerKmNgn: plannedRoute.ratePerKmNgn,
+          route: plannedRoute.geometry,
+        });
+
+        // If rider already included a price and it meets minimum, skip awaiting_price
+        if (rideIntent.offerNgn && rideIntent.offerNgn >= minFare) {
+          await clearPendingRoute(deps.redisClient, user.id);
+
+          const rideId = randomUUID();
+          const event = RideRequestedEvent.parse({
+            eventType: 'RIDE_REQUESTED',
+            rideId,
+            riderId: user.id,
+            pickup,
+            destination,
+            stops: [],
+            plannedDistanceKm: distanceKm,
+            plannedDurationSeconds: plannedRoute.durationSeconds,
+            fareEstimateNgn: suggestedFare,
+            paymentMethod: 'WALLET',
+            riderOfferNgn: rideIntent.offerNgn,
+            suggestedFareNgn: suggestedFare,
+            minOfferNgn: minFare,
+            ratePerKmNgn: plannedRoute.ratePerKmNgn,
+            route: plannedRoute.geometry,
+            timestamp: new Date().toISOString(),
+          });
+
+          await deps.publisher.publishRideEvent(event);
+
+          await storeWhatsappRide(deps.redisClient, rideId, {
+            riderId: user.id,
+            phone,
+            pickupAddress: pickup.address,
+            pickupLat: pickup.lat,
+            pickupLng: pickup.lng,
+            destinationAddress: destination.address,
+            destinationLat: destination.lat,
+            destinationLng: destination.lng,
+            distanceKm,
+            durationSeconds: plannedRoute.durationSeconds,
+            offerNgn: rideIntent.offerNgn,
+            suggestedFareNgn: suggestedFare,
+            paymentMethod: 'WALLET',
+            createdAt: new Date().toISOString(),
+          });
+          await setActiveRide(deps.redisClient, user.id, rideId);
+
+          const reply = [
+            `🔍 *Finding you a driver!*`,
+            ``,
+            `Pickup: *${pickup.address}*`,
+            `Destination: *${destination.address}*`,
+            `${distanceKm.toFixed(1)} km · ~${durationMin} min`,
+            `Your offer: ₦${rideIntent.offerNgn.toLocaleString()}`,
+            ``,
+            `We'll send you all available drivers! 🚗`,
+          ].join('\n');
+
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
+          return;
+        }
+
+        await setBookingStage(deps.redisClient, user.id, 'awaiting_price');
+
+        const reply = [
+          `Pickup: *${pickup.address}*`,
+          ``,
+          `Destination: *${destination.address}*`,
+          ``,
+          `${distanceKm.toFixed(1)} km · ~${durationMin} min`,
+          `Minimum fare: ₦${minFare.toLocaleString()}`,
+          `Suggested fare: ₦${suggestedFare.toLocaleString()}`,
+          ``,
+          `Negotiate your price and we'll find you a driver!`,
+          `Send your offer (e.g. *${suggestedFare.toLocaleString()}* or *${Math.round(suggestedFare * 0.85).toLocaleString()}*)`,
+        ].join('\n');
+
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage },
+          { role: 'assistant', content: reply },
+        ]);
+        await sendMetaReply(deps, phone, reply);
+        return;
+      }
+
+      // ── Only pickup typed → save it, ask for destination ──
+      if (hasPickup) {
+        const pickupGeo = await geocodeAddress(deps.googleMapsApiKey, rideIntent.pickup!.address);
+        if (pickupGeo) {
+          await setPendingLocation(deps.redisClient, user.id, {
+            lat: pickupGeo.lat,
+            lng: pickupGeo.lng,
+            address: pickupGeo.formattedAddress,
+            savedAt: new Date().toISOString(),
+          });
+          await setBookingStage(deps.redisClient, user.id, 'awaiting_destination');
+
+          const reply = `📍 Pickup: *${pickupGeo.formattedAddress}*\n\nNow send your *destination* — type the address or share a location pin 📍`;
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
+          return;
+        }
+      }
+
+      // ── Only destination typed, or addresses not specific enough → ask for pickup ──
+      const reply = 'To book a ride, type your pickup and destination like:\n\n*"From [pickup address] to [destination]"*\n\nOr share your pickup location pin 📍';
       await appendWhatsappConversation(deps.redisClient, phone, [
         { role: 'user', content: incomingMessage },
         { role: 'assistant', content: reply },
