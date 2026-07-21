@@ -309,7 +309,7 @@ export async function clearPendingLocation(
 
 // ── Rider booking stage (tracks where the rider is in the booking flow) ───
 
-export type BookingStage = 'awaiting_pickup' | 'awaiting_destination' | 'awaiting_payment' | 'searching' | 'bidding';
+export type BookingStage = 'awaiting_pickup' | 'awaiting_destination' | 'awaiting_price' | 'awaiting_payment' | 'searching' | 'bidding';
 
 function bookingStageKey(userId: string): string {
   return `whatsapp:user:${userId}:booking_stage`;
@@ -336,6 +336,107 @@ export async function clearBookingStage(
   userId: string,
 ): Promise<void> {
   await redis.del(bookingStageKey(userId));
+}
+
+// ── Pending route (stored after destination pin, awaiting rider's price) ──
+
+export interface PendingRouteData {
+  pickupLat: number;
+  pickupLng: number;
+  pickupAddress: string;
+  destLat: number;
+  destLng: number;
+  destAddress: string;
+  distanceKm: number;
+  durationSeconds: number;
+  suggestedFareNgn: number;
+  minOfferNgn: number;
+  ratePerKmNgn: number;
+  route: unknown;
+}
+
+const PENDING_ROUTE_TTL = 600; // 10 minutes
+
+function pendingRouteKey(userId: string): string {
+  return `whatsapp:user:${userId}:pending_route`;
+}
+
+export async function storePendingRoute(
+  redis: RedisClient,
+  userId: string,
+  data: PendingRouteData,
+): Promise<void> {
+  await redis.set(pendingRouteKey(userId), JSON.stringify(data), PENDING_ROUTE_TTL);
+}
+
+export async function getPendingRoute(
+  redis: RedisClient,
+  userId: string,
+): Promise<PendingRouteData | null> {
+  const raw = await redis.get(pendingRouteKey(userId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as PendingRouteData;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearPendingRoute(
+  redis: RedisClient,
+  userId: string,
+): Promise<void> {
+  await redis.del(pendingRouteKey(userId));
+}
+
+// ── Pending accept (rider picked a driver, awaiting wallet payment) ───────
+
+export interface PendingAcceptData {
+  rideId: string;
+  driverId: string;
+  driverUserId: string;
+  driverName: string;
+  driverPhone: string;
+  driverRating: number;
+  totalRides: number;
+  vehicleModel: string;
+  vehiclePlate: string;
+  etaSeconds: number;
+  fareNgn: number;
+}
+
+const PENDING_ACCEPT_TTL = 300; // 5 minutes
+
+function pendingAcceptKey(userId: string): string {
+  return `whatsapp:user:${userId}:pending_accept`;
+}
+
+export async function storePendingAccept(
+  redis: RedisClient,
+  userId: string,
+  data: PendingAcceptData,
+): Promise<void> {
+  await redis.set(pendingAcceptKey(userId), JSON.stringify(data), PENDING_ACCEPT_TTL);
+}
+
+export async function getPendingAccept(
+  redis: RedisClient,
+  userId: string,
+): Promise<PendingAcceptData | null> {
+  const raw = await redis.get(pendingAcceptKey(userId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as PendingAcceptData;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearPendingAccept(
+  redis: RedisClient,
+  userId: string,
+): Promise<void> {
+  await redis.del(pendingAcceptKey(userId));
 }
 
 // ── Last bid batch sent to rider (for numbered accept/counter) ────────────

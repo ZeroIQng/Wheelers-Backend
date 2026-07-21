@@ -675,6 +675,7 @@ async function bootstrap(): Promise<void> {
         groqModel: gatewayEnv.GROQ_MODEL,
         groqTimeoutMs: gatewayEnv.GROQ_TIMEOUT_MS,
         appBaseUrl: gatewayEnv.APP_BASE_URL,
+        driverKycStorage: driverKycStorage ?? undefined,
       };
 
       if (req.method === "GET") {
