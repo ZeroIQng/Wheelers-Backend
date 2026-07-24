@@ -971,6 +971,19 @@ export async function handleMetaWhatsappWebhookRoute(
     // ══════════════════════════════════════════════════════════════════════
 
     if (bookingStage === 'awaiting_destination' && !isLocation) {
+      if (isCancelCommand(incomingMessage)) {
+        await clearPendingLocation(deps.redisClient, user.id);
+        await clearBookingStage(deps.redisClient, user.id);
+
+        const reply = 'Booking cancelled. Share your location anytime to book a new ride! 📍';
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage },
+          { role: 'assistant', content: reply },
+        ]);
+        await sendMetaReply(deps, phone, reply);
+        return;
+      }
+
       const pendingPickup = await getPendingLocation(deps.redisClient, user.id);
       if (!pendingPickup) {
         await clearBookingStage(deps.redisClient, user.id);
@@ -1050,6 +1063,21 @@ export async function handleMetaWhatsappWebhookRoute(
     // ══════════════════════════════════════════════════════════════════════
 
     if ((bookingStage === 'editing_pickup' || bookingStage === 'editing_destination') && !isLocation) {
+      // Cancel during editing — clear everything
+      if (isCancelCommand(incomingMessage)) {
+        await clearPendingRoute(deps.redisClient, user.id);
+        await clearBookingStage(deps.redisClient, user.id);
+        await clearPendingLocation(deps.redisClient, user.id);
+
+        const reply = 'Booking cancelled. Share your location anytime to book a new ride! 📍';
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage },
+          { role: 'assistant', content: reply },
+        ]);
+        await sendMetaReply(deps, phone, reply);
+        return;
+      }
+
       const pendingRoute = await getPendingRoute(deps.redisClient, user.id);
       if (!pendingRoute) {
         await clearBookingStage(deps.redisClient, user.id);
@@ -1331,6 +1359,21 @@ export async function handleMetaWhatsappWebhookRoute(
             `Send your offer (e.g. *${suggestedFare.toLocaleString()}* or *${Math.round(suggestedFare * 0.85).toLocaleString()}*)`,
           ].join('\n');
 
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
+          return;
+        }
+
+        // ── Cancel during awaiting_price ──
+        if (isCancelCommand(incomingMessage)) {
+          await clearPendingRoute(deps.redisClient, user.id);
+          await clearBookingStage(deps.redisClient, user.id);
+          await clearPendingLocation(deps.redisClient, user.id);
+
+          const reply = 'Booking cancelled. Share your location anytime to book a new ride! 📍';
           await appendWhatsappConversation(deps.redisClient, phone, [
             { role: 'user', content: incomingMessage },
             { role: 'assistant', content: reply },
