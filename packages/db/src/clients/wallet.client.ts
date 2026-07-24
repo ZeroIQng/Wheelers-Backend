@@ -1,6 +1,7 @@
 import { prisma }   from '../prisma';
 import { Prisma }   from '@prisma/client';
 import type { TransactionType } from '@prisma/client';
+import { calculateRideFees } from '@wheleers/config';
 
 // The type of the transactional client Prisma passes into $transaction callbacks
 type TxClient = Prisma.TransactionClient;
@@ -275,17 +276,22 @@ export const walletClient = {
           },
         });
 
-        // 2. Debit rider
-        if (Number(unlockedRiderWallet.balanceNgn) < fareNgn) {
+        // 2. Calculate fees — rider pays fare + tax + state levy
+        const fees = calculateRideFees(fareNgn);
+        const riderTotalNgn = fees.totalNgn;
+        const platformFeeNgn = fees.vatNgn + fees.stateLevyNgn;
+
+        // 3. Debit rider (fare + fees)
+        if (Number(unlockedRiderWallet.balanceNgn) < riderTotalNgn) {
           throw new Error(
             `Insufficient balance on rider wallet ${hold.walletId} after unlocking: ` +
-            `has ${unlockedRiderWallet.balanceNgn} NGN, needs ${fareNgn} NGN`,
+            `has ${unlockedRiderWallet.balanceNgn} NGN, needs ${riderTotalNgn} NGN`,
           );
         }
 
         const riderWallet = await tx.wallet.update({
           where: { id: hold.walletId },
-          data: { balanceNgn: { decrement: fareNgn } },
+          data: { balanceNgn: { decrement: riderTotalNgn } },
         });
 
         const riderTransaction = await tx.transaction.create({
@@ -293,13 +299,13 @@ export const walletClient = {
             walletId: hold.walletId,
             type: 'RIDE_PAYMENT',
             direction: 'DEBIT',
-            amountNgn: fareNgn,
+            amountNgn: riderTotalNgn,
             balanceAfterNgn: riderWallet.balanceNgn,
             referenceId: rideId,
           },
         });
 
-        // 3. Credit driver
+        // 4. Credit driver (fare only — no tax/levy)
         const driverWallet = await tx.wallet.update({
           where: { userId: driverUserId },
           data: { balanceNgn: { increment: fareNgn } },
@@ -316,10 +322,16 @@ export const walletClient = {
           },
         });
 
-        // 4. Update driver earnings
+        // 5. Update driver earnings
         await tx.driver.update({
           where: { userId: driverUserId },
           data: { totalEarningsNgn: { increment: fareNgn } },
+        });
+
+        // 6. Store platform fee on the ride record
+        await tx.ride.update({
+          where: { id: rideId },
+          data: { platformFeeNgn: platformFeeNgn },
         });
 
         // 5. Mark hold as charged

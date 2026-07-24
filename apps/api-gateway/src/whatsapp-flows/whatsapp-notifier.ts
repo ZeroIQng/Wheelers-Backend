@@ -1,6 +1,7 @@
 // COMMENTED OUT: Flow-based encryption imports — using pure chat-based messaging
 // import { signFlowToken } from './encryption';
 
+import { calculateRideFees } from '@wheleers/config';
 import type { WhatsappBid } from './bid-state';
 
 export interface WhatsappNotifierDeps {
@@ -89,6 +90,7 @@ export async function sendRideMatchedNotification(
   driverRating: number,
 ): Promise<void> {
   const etaMin = Math.ceil(etaSeconds / 60);
+  const fees = calculateRideFees(fareNgn);
   const msg = [
     `✅ *Ride confirmed!*`,
     ``,
@@ -96,7 +98,7 @@ export async function sendRideMatchedNotification(
     `Vehicle: ${vehicleModel} (${vehiclePlate})`,
     `Rating: ${driverRating.toFixed(1)}★`,
     `ETA: ${etaMin} min`,
-    `Fare: ₦${fareNgn.toLocaleString()}`,
+    `Fare: ₦${fees.totalNgn.toLocaleString()}`,
     ``,
     `Your driver is on the way! 🚗`,
   ].join('\n');
@@ -117,10 +119,11 @@ export async function sendRideCompletedNotification(
   fareNgn: number,
   distanceKm: number,
 ): Promise<void> {
+  const fees = calculateRideFees(fareNgn);
   await sendMetaWhatsappMessage(
     deps,
     phone,
-    `Ride complete! Distance: ${distanceKm.toFixed(1)}km. Fare: ₦${fareNgn.toLocaleString()}. Thanks for riding with Wheelers! 🎉`,
+    `Ride complete! Distance: ${distanceKm.toFixed(1)}km. Fare: ₦${fees.totalNgn.toLocaleString()}. Thanks for riding with Wheelers! 🎉`,
   );
 }
 

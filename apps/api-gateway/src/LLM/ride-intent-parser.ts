@@ -8,7 +8,7 @@ export interface RideLocation {
 }
 
 export interface RideIntent {
-  intent: 'ride_request' | 'ride_status' | 'cancel_ride' | 'other';
+  intent: 'ride_request' | 'ride_status' | 'cancel_ride' | 'edit_pickup' | 'edit_destination' | 'other';
   pickup: RideLocation | null;
   destination: RideLocation | null;
   offerNgn: number | null;
@@ -18,7 +18,7 @@ export interface RideIntent {
 const RIDE_INTENT_SYSTEM_PROMPT = `
 You extract ride request details from WhatsApp messages.
 Return ONLY a JSON object with these fields:
-- "intent": "ride_request" | "ride_status" | "cancel_ride" | "other"
+- "intent": "ride_request" | "ride_status" | "cancel_ride" | "edit_pickup" | "edit_destination" | "other"
 - "pickup": { "address": string, "area": string, "specific": boolean } | null
 - "destination": { "address": string, "area": string, "specific": boolean } | null
 - "offerNgn": number | null
@@ -32,6 +32,10 @@ Return ONLY a JSON object with these fields:
 
 Rules:
 - If the message is about booking a ride, going somewhere, or requesting a trip → "ride_request"
+- If the user wants to CHANGE/EDIT/UPDATE only the pickup location → "edit_pickup"
+  Set "pickup" to the NEW pickup location. Set "destination" to null (do NOT fill destination from history).
+- If the user wants to CHANGE/EDIT/UPDATE only the destination location → "edit_destination"
+  Set "destination" to the NEW destination location. Set "pickup" to null (do NOT fill pickup from history).
 - If asking about an ongoing ride status → "ride_status"
 - If cancelling a ride → "cancel_ride"
 - Everything else (greetings, wallet questions, general chat) → "other"
@@ -43,7 +47,8 @@ Rules:
 - If payment method not mentioned, set to null
 - "wallet" or "use wallet" = "WALLET" (means Naira wallet by default)
 - "crypto wallet" or "pay with crypto" or "USDC" = "CRYPTO_WALLET"
-- Look at conversation history to fill in missing pickup/destination if mentioned earlier
+- For "ride_request" intent ONLY, look at conversation history to fill in missing pickup/destination if mentioned earlier
+- For "edit_pickup" / "edit_destination" intents, ONLY extract the location being changed. Do NOT fill in the other location from history.
 
 Examples:
 "I want to go from Chevron to Adeola Odeku for 2000" →
@@ -54,6 +59,12 @@ Examples:
 
 "From Union Square to Pier 39" →
 {"intent":"ride_request","pickup":{"address":"Union Square, San Francisco, CA","area":"San Francisco","specific":true},"destination":{"address":"Pier 39, San Francisco, CA","area":"San Francisco","specific":true},"offerNgn":null,"paymentMethod":null}
+
+"Change my pickup to Fiora garden" →
+{"intent":"edit_pickup","pickup":{"address":"Fiora Garden, Lagos","area":"Lagos","specific":true},"destination":null,"offerNgn":null,"paymentMethod":null}
+
+"Edit the destination to Shoprite Lekki" →
+{"intent":"edit_destination","pickup":null,"destination":{"address":"Shoprite, Lekki, Lagos","area":"Lekki","specific":true},"offerNgn":null,"paymentMethod":null}
 
 "Cancel my ride" →
 {"intent":"cancel_ride","pickup":null,"destination":null,"offerNgn":null,"paymentMethod":null}
@@ -98,7 +109,7 @@ export async function parseRideIntent(
     if (!result) return null;
 
     const intent = result as unknown as RideIntent;
-    if (!intent.intent || !['ride_request', 'ride_status', 'cancel_ride', 'other'].includes(intent.intent)) {
+    if (!intent.intent || !['ride_request', 'ride_status', 'cancel_ride', 'edit_pickup', 'edit_destination', 'other'].includes(intent.intent)) {
       return null;
     }
 

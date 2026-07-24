@@ -1,7 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { driverClient, walletClient } from '@wheleers/db';
-import { GoogleMapsRoutePlanner } from '@wheleers/config';
+import { GoogleMapsRoutePlanner, calculateRideFees } from '@wheleers/config';
 import { RideRequestedEvent, RideCancelledEvent, RideOfferAcceptedEvent } from '@wheleers/kafka-schemas';
 import type { PouchLiquifiaClient } from '@wheleers/pouch-client';
 import type { GatewayPublisher } from '../websocket/publisher';
@@ -421,11 +421,12 @@ export async function handleMetaWhatsappWebhookRoute(
       // ── Pay/confirm — user is confirming after seeing driver details ──
       const pendingAccept = await getPendingAccept(deps.redisClient, user.id);
       if (pendingAccept && /^(pay|confirm|yes|proceed)$/i.test(incomingMessage.trim())) {
-        // Deduct from wallet
+        // Deduct from wallet (fare + tax + state levy)
+        const rideFees = calculateRideFees(pendingAccept.fareNgn);
         const wallet = await walletClient.findByUserId(user.id);
-        if (!wallet || Number(wallet.balanceNgn) < pendingAccept.fareNgn) {
+        if (!wallet || Number(wallet.balanceNgn) < rideFees.totalNgn) {
           const balance = wallet ? `₦${Number(wallet.balanceNgn).toLocaleString()}` : '₦0';
-          const reply = `Your wallet balance is ${balance} but the ride costs ₦${pendingAccept.fareNgn.toLocaleString()}.\n\nPlease top up your wallet and reply *pay* to confirm.`;
+          const reply = `Your wallet balance is ${balance} but the ride costs ₦${rideFees.totalNgn.toLocaleString()}.\n\nPlease top up your wallet and reply *pay* to confirm.`;
           await appendWhatsappConversation(deps.redisClient, phone, [
             { role: 'user', content: incomingMessage },
             { role: 'assistant', content: reply },
@@ -439,7 +440,7 @@ export async function handleMetaWhatsappWebhookRoute(
             rideId: pendingAccept.rideId,
             walletId: wallet.id,
             riderId: user.id,
-            amountNgn: pendingAccept.fareNgn,
+            amountNgn: rideFees.totalNgn,
           });
         } catch {
           const reply = 'Could not lock funds in your wallet. Please try again — reply *pay*.';
@@ -488,7 +489,7 @@ export async function handleMetaWhatsappWebhookRoute(
           `Vehicle: ${pendingAccept.vehicleModel} (${pendingAccept.vehiclePlate})`,
           `Rating: ${pendingAccept.driverRating.toFixed(1)}★`,
           `ETA: ${etaMin} min`,
-          `Fare: ₦${pendingAccept.fareNgn.toLocaleString()} (from wallet)`,
+          `Fare: ₦${rideFees.totalNgn.toLocaleString()} (from wallet)`,
           ``,
           `Your driver is on the way! 🚗`,
         ].join('\n');
@@ -503,7 +504,8 @@ export async function handleMetaWhatsappWebhookRoute(
 
       // If pending accept but user said something else, remind them
       if (pendingAccept) {
-        const reply = `Reply *pay* to confirm and pay ₦${pendingAccept.fareNgn.toLocaleString()} from your wallet.\n\nOr reply *cancel* to cancel.`;
+        const reminderFees = calculateRideFees(pendingAccept.fareNgn);
+        const reply = `Reply *pay* to confirm and pay ₦${reminderFees.totalNgn.toLocaleString()} from your wallet, or reply *cancel* to cancel.`;
         await appendWhatsappConversation(deps.redisClient, phone, [
           { role: 'user', content: incomingMessage },
           { role: 'assistant', content: reply },
@@ -579,6 +581,7 @@ export async function handleMetaWhatsappWebhookRoute(
         const etaMin = Math.ceil(selectedBid.etaSeconds / 60);
         const wallet = await walletClient.findByUserId(user.id);
         const balance = wallet ? Number(wallet.balanceNgn) : 0;
+        const bidFees = calculateRideFees(selectedBid.counterOfferNgn);
 
         const reply = [
           `🚗 *Driver Details*`,
@@ -587,13 +590,13 @@ export async function handleMetaWhatsappWebhookRoute(
           `Vehicle: ${selectedBid.vehicleModel} (${selectedBid.vehiclePlate})`,
           `Rating: ${selectedBid.driverRating.toFixed(1)}★ · ${totalRides} rides`,
           `ETA: ${etaMin} min`,
-          `Fare: ₦${selectedBid.counterOfferNgn.toLocaleString()}`,
+          `Fare: ₦${bidFees.totalNgn.toLocaleString()}`,
           ``,
           `Wallet balance: ₦${balance.toLocaleString()}`,
           ``,
-          balance >= selectedBid.counterOfferNgn
-            ? `Reply *pay* to confirm and pay ₦${selectedBid.counterOfferNgn.toLocaleString()} from your wallet`
-            : `You need ₦${(selectedBid.counterOfferNgn - balance).toLocaleString()} more. Top up your wallet and reply *pay*`,
+          balance >= bidFees.totalNgn
+            ? `Reply *pay* to confirm and pay ₦${bidFees.totalNgn.toLocaleString()} from your wallet`
+            : `You need ₦${(bidFees.totalNgn - balance).toLocaleString()} more. Top up your wallet and reply *pay*`,
         ].join('\n');
 
         await appendWhatsappConversation(deps.redisClient, phone, [
@@ -852,6 +855,129 @@ export async function handleMetaWhatsappWebhookRoute(
     if (bookingStage === 'awaiting_price' && !isLocation) {
       const pendingRoute = await getPendingRoute(deps.redisClient, user.id);
       if (pendingRoute) {
+        // ── Check if user wants to edit pickup or destination ──
+        const recentMsgs = await getWhatsappConversation(deps.redisClient, phone);
+        const groqForEdit = new GroqClient({
+          apiKey: deps.groqApiKey,
+          model: deps.groqModel,
+          timeoutMs: deps.groqTimeoutMs,
+        });
+        const editIntent = await parseRideIntent(groqForEdit, incomingMessage, recentMsgs);
+
+        if (editIntent?.intent === 'edit_pickup' && editIntent.pickup?.address.trim()) {
+          const pickupGeo = await geocodeAddress(deps.googleMapsApiKey, editIntent.pickup.address);
+          if (!pickupGeo) {
+            const reply = `Could not find "${editIntent.pickup.address}" on the map.\n\nPlease try a more specific pickup address.`;
+            await appendWhatsappConversation(deps.redisClient, phone, [
+              { role: 'user', content: incomingMessage },
+              { role: 'assistant', content: reply },
+            ]);
+            await sendMetaReply(deps, phone, reply);
+            return;
+          }
+
+          const pickup = { lat: pickupGeo.lat, lng: pickupGeo.lng, address: pickupGeo.formattedAddress };
+          const destination = { lat: pendingRoute.destLat, lng: pendingRoute.destLng, address: pendingRoute.destAddress };
+
+          const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
+          const distanceKm = plannedRoute.distanceKm;
+          const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
+          const suggestedFare = plannedRoute.suggestedFareNgn;
+          const minFare = plannedRoute.minOfferNgn;
+
+          await storePendingRoute(deps.redisClient, user.id, {
+            pickupLat: pickup.lat,
+            pickupLng: pickup.lng,
+            pickupAddress: pickup.address,
+            destLat: destination.lat,
+            destLng: destination.lng,
+            destAddress: destination.address,
+            distanceKm,
+            durationSeconds: plannedRoute.durationSeconds,
+            suggestedFareNgn: suggestedFare,
+            minOfferNgn: minFare,
+            ratePerKmNgn: plannedRoute.ratePerKmNgn,
+            route: plannedRoute.geometry,
+          });
+
+          const reply = [
+            `Pickup: *${pickup.address}*`,
+            ``,
+            `Destination: *${destination.address}*`,
+            ``,
+            `${distanceKm.toFixed(1)} km · ~${durationMin} min`,
+            `Minimum fare: ₦${minFare.toLocaleString()}`,
+            `Suggested fare: ₦${suggestedFare.toLocaleString()}`,
+            ``,
+            `Negotiate your price and we'll find you a driver!`,
+            `Send your offer (e.g. *${suggestedFare.toLocaleString()}* or *${Math.round(suggestedFare * 0.85).toLocaleString()}*)`,
+          ].join('\n');
+
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
+          return;
+        }
+
+        if (editIntent?.intent === 'edit_destination' && editIntent.destination?.address.trim()) {
+          const destGeo = await geocodeAddress(deps.googleMapsApiKey, editIntent.destination.address);
+          if (!destGeo) {
+            const reply = `Could not find "${editIntent.destination.address}" on the map.\n\nPlease try a more specific destination address.`;
+            await appendWhatsappConversation(deps.redisClient, phone, [
+              { role: 'user', content: incomingMessage },
+              { role: 'assistant', content: reply },
+            ]);
+            await sendMetaReply(deps, phone, reply);
+            return;
+          }
+
+          const pickup = { lat: pendingRoute.pickupLat, lng: pendingRoute.pickupLng, address: pendingRoute.pickupAddress };
+          const destination = { lat: destGeo.lat, lng: destGeo.lng, address: destGeo.formattedAddress };
+
+          const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
+          const distanceKm = plannedRoute.distanceKm;
+          const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
+          const suggestedFare = plannedRoute.suggestedFareNgn;
+          const minFare = plannedRoute.minOfferNgn;
+
+          await storePendingRoute(deps.redisClient, user.id, {
+            pickupLat: pickup.lat,
+            pickupLng: pickup.lng,
+            pickupAddress: pickup.address,
+            destLat: destination.lat,
+            destLng: destination.lng,
+            destAddress: destination.address,
+            distanceKm,
+            durationSeconds: plannedRoute.durationSeconds,
+            suggestedFareNgn: suggestedFare,
+            minOfferNgn: minFare,
+            ratePerKmNgn: plannedRoute.ratePerKmNgn,
+            route: plannedRoute.geometry,
+          });
+
+          const reply = [
+            `Pickup: *${pickup.address}*`,
+            ``,
+            `Destination: *${destination.address}*`,
+            ``,
+            `${distanceKm.toFixed(1)} km · ~${durationMin} min`,
+            `Minimum fare: ₦${minFare.toLocaleString()}`,
+            `Suggested fare: ₦${suggestedFare.toLocaleString()}`,
+            ``,
+            `Negotiate your price and we'll find you a driver!`,
+            `Send your offer (e.g. *${suggestedFare.toLocaleString()}* or *${Math.round(suggestedFare * 0.85).toLocaleString()}*)`,
+          ].join('\n');
+
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
+          return;
+        }
+
         const offerNgn = parseCounterOffer(incomingMessage);
 
         if (offerNgn === null) {
@@ -972,6 +1098,17 @@ export async function handleMetaWhatsappWebhookRoute(
 
     // Try to parse ride intent
     const rideIntent = await parseRideIntent(groq, incomingMessage, recentMessages);
+
+    // ── Edit pickup/destination with no pending route → tell user to start fresh ──
+    if (rideIntent?.intent === 'edit_pickup' || rideIntent?.intent === 'edit_destination') {
+      const reply = 'No ride in progress to edit. Start a new ride by typing:\n\n*"From [pickup] to [destination]"*\n\nOr share a location pin 📍';
+      await appendWhatsappConversation(deps.redisClient, phone, [
+        { role: 'user', content: incomingMessage },
+        { role: 'assistant', content: reply },
+      ]);
+      await sendMetaReply(deps, phone, reply);
+      return;
+    }
 
     if (rideIntent?.intent === 'ride_request') {
       const hasPickup = rideIntent.pickup?.specific && rideIntent.pickup.address.trim();

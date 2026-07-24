@@ -10,6 +10,7 @@ import {
   WalletEvent,
   TOPICS,
 } from '@wheleers/kafka-schemas';
+import { calculateRideFees } from '@wheleers/config';
 import { buildRideEstimatePricing } from '../pricing/ride-estimate';
 import { SocketRegistry } from '../websocket/registry';
 import type { RedisClient } from '../redis/client';
@@ -315,6 +316,7 @@ async function handleRideEvent(
         ).catch(() => {});
       }
     } else {
+      const riderMatchFees = calculateRideFees(event.agreedFareNgn);
       await registry.sendToUser(event.riderId, 'ride:matched', {
         rideId: event.rideId,
         driverId: event.driverId,
@@ -323,13 +325,14 @@ async function handleRideEvent(
         vehiclePlate: event.vehiclePlate,
         vehicleModel: event.vehicleModel,
         etaSeconds: event.etaSeconds,
-        agreedFareNgn: event.agreedFareNgn,
+        agreedFareNgn: riderMatchFees.totalNgn,
         lockedFareNgn: event.lockedFareNgn,
         paymentMethod: event.paymentMethod,
       });
     }
 
-    // Notify driver via WebSocket (app)
+    // Notify driver via WebSocket (app) — include fee breakdown
+    const matchFees = calculateRideFees(event.agreedFareNgn);
     await registry.sendToUser(event.driverUserId, 'ride:matched', {
       rideId: event.rideId,
       riderId: event.riderId,
@@ -340,6 +343,9 @@ async function handleRideEvent(
       vehicleModel: event.vehicleModel,
       etaSeconds: event.etaSeconds,
       agreedFareNgn: event.agreedFareNgn,
+      vatNgn: matchFees.vatNgn,
+      stateLevyNgn: matchFees.stateLevyNgn,
+      driverEarningsNgn: event.agreedFareNgn,
       lockedFareNgn: event.lockedFareNgn,
       paymentMethod: event.paymentMethod,
     });
@@ -415,9 +421,10 @@ async function handleRideEvent(
       }
       await clearActiveRide(deps.redisClient, event.riderId);
     } else {
+      const riderFees = calculateRideFees(event.fareNgn);
       await registry.sendToUser(event.riderId, 'ride:completed', {
         rideId: event.rideId,
-        fareNgn: event.fareNgn,
+        fareNgn: riderFees.totalNgn,
         distanceKm: event.distanceKm,
         durationSeconds: event.durationSeconds,
         completedAt: event.completedAt,
@@ -425,10 +432,15 @@ async function handleRideEvent(
       });
     }
 
-    // Notify driver via WebSocket (app)
+    // Notify driver via WebSocket (app) — show earnings breakdown
+    const completionFees = calculateRideFees(event.fareNgn);
     await registry.sendToUser(event.driverUserId, 'ride:completed', {
       rideId: event.rideId,
       fareNgn: event.fareNgn,
+      vatNgn: completionFees.vatNgn,
+      stateLevyNgn: completionFees.stateLevyNgn,
+      totalChargedNgn: completionFees.totalNgn,
+      driverEarningsNgn: event.fareNgn,
       distanceKm: event.distanceKm,
       durationSeconds: event.durationSeconds,
       completedAt: event.completedAt,

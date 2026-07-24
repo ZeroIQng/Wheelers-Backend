@@ -2,6 +2,8 @@ export const RATE_PER_KM_NGN = 300;
 export const PLATFORM_FEE_NGN = 200;
 export const MIN_OFFER_DISCOUNT = 0.28;
 export const FARE_ROUNDING_INCREMENT = 100;
+export const VAT_RATE = 0.075; // 7.5% VAT
+export const LAGOS_STATE_FEE_NGN = 30; // ₦30 flat per ride
 
 export type SuggestedFare = {
   distanceKm: number;
@@ -53,6 +55,20 @@ export function validateRiderOffer(
   }
 
   return { valid: true, minOfferNgn };
+}
+
+export type RideFeeBreakdown = {
+  fareNgn: number;
+  vatNgn: number;
+  stateLevyNgn: number;
+  totalNgn: number;
+};
+
+export function calculateRideFees(fareNgn: number): RideFeeBreakdown {
+  const vatNgn = round2(fareNgn * VAT_RATE);
+  const stateLevyNgn = LAGOS_STATE_FEE_NGN;
+  const totalNgn = round2(fareNgn + vatNgn + stateLevyNgn);
+  return { fareNgn, vatNgn, stateLevyNgn, totalNgn };
 }
 
 function round2(value: number): number {

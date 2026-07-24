@@ -1,4 +1,4 @@
-import { calculateSuggestedFare, type SuggestedFare } from '@wheleers/config';
+import { calculateSuggestedFare, calculateRideFees, type SuggestedFare, type RideFeeBreakdown } from '@wheleers/config';
 
 export const RIDE_PRICING_CURRENCY = 'NGN' as const;
 
@@ -9,6 +9,7 @@ export type RideEstimatePricingFields = {
   ratePerKmNgn: number | null;
   pricingCurrency: typeof RIDE_PRICING_CURRENCY | null;
   pricingBreakdown: SuggestedFare | null;
+  fees: RideFeeBreakdown | null;
 };
 
 export function buildRideEstimatePricing(
@@ -22,10 +23,12 @@ export function buildRideEstimatePricing(
       ratePerKmNgn: null,
       pricingCurrency: null,
       pricingBreakdown: null,
+      fees: null,
     };
   }
 
   const pricing = calculateSuggestedFare(distanceKm);
+  const fees = calculateRideFees(pricing.suggestedFareNgn);
 
   return {
     fareEstimateNgn: pricing.suggestedFareNgn,
@@ -34,5 +37,6 @@ export function buildRideEstimatePricing(
     ratePerKmNgn: pricing.ratePerKmNgn,
     pricingCurrency: RIDE_PRICING_CURRENCY,
     pricingBreakdown: pricing,
+    fees,
   };
 }

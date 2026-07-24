@@ -1,5 +1,6 @@
 import type { MessageContext } from '@wheleers/kafka-client';
 import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
+import { calculateRideFees } from '@wheleers/config';
 
 import type { WalletRepository } from '../types';
 import type { WalletEventsProducer } from '../producers/wallet-events.producer';
@@ -33,12 +34,13 @@ export function createRideEventsConsumer(params: {
             return;
           }
 
+          const fees = calculateRideFees(event.agreedFareNgn);
           const holdResult = await walletRepository.createRideHold({
             rideId: event.rideId,
             walletId: wallet.id,
             riderId: event.riderId,
             driverUserId: event.driverUserId,
-            amountNgn: event.agreedFareNgn,
+            amountNgn: fees.totalNgn,
           });
 
           if (!holdResult.applied) {
@@ -65,9 +67,10 @@ export function createRideEventsConsumer(params: {
         }
 
         try {
+          const routeFees = calculateRideFees(event.fareEstimateNgn);
           const holdResult = await walletRepository.adjustRideHold({
             rideId: event.rideId,
-            targetAmountNgn: event.fareEstimateNgn,
+            targetAmountNgn: routeFees.totalNgn,
           });
 
           if (!holdResult || !holdResult.applied) {
@@ -96,6 +99,8 @@ export function createRideEventsConsumer(params: {
         }
 
         try {
+          const completionFees = calculateRideFees(event.fareNgn);
+
           const result = await walletRepository.completeRideHoldWithDriverPayout({
             rideId: event.rideId,
             fareNgn: event.fareNgn,
@@ -106,17 +111,17 @@ export function createRideEventsConsumer(params: {
             return;
           }
 
-          // Publish rider debit event
+          // Publish rider debit event (total including tax + levy)
           await walletEventsProducer.publishDebited({
             walletId: result.riderWallet.id,
             userId: result.riderWallet.userId,
-            amountNgn: event.fareNgn,
+            amountNgn: completionFees.totalNgn,
             newBalanceNgn: Number(result.riderWallet.balanceNgn),
             debitType: 'ride_payment',
             referenceId: event.rideId,
           }, { key: event.rideId });
 
-          // Publish driver credit event
+          // Publish driver credit event (fare only — no tax/levy)
           await walletEventsProducer.publishCredited({
             walletId: result.driverWallet.id,
             userId: result.driverWallet.userId,

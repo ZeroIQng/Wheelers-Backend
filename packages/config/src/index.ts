@@ -26,10 +26,13 @@ export {
   PLATFORM_FEE_NGN,
   MIN_OFFER_DISCOUNT,
   FARE_ROUNDING_INCREMENT,
+  VAT_RATE,
+  LAGOS_STATE_FEE_NGN,
   calculateSuggestedFare,
   validateRiderOffer,
+  calculateRideFees,
 } from './pricing';
-export type { SuggestedFare, RidePriceBreakdown } from './pricing';
+export type { SuggestedFare, RidePriceBreakdown, RideFeeBreakdown } from './pricing';
 export {
   GoogleMapsRoutePlanner,
   RoutePlanningError,
