@@ -323,6 +323,20 @@ function parseCounterOffer(message: string): number | null {
   // Match "1.5k", "2k"
   const kMatch = lower.match(/^(\d+(?:\.\d+)?)\s*k$/);
   if (kMatch) return Math.round(parseFloat(kMatch[1]) * 1000);
+  // Match natural language with a number: "I rebid 1300", "counter offer to 1400", "my offer is ₦1200"
+  const nlNum = lower.match(/(?:bid|offer|counter|price|pay)\b.*?[₦n]?\s*(\d{3,6})\b/);
+  if (nlNum) return parseInt(nlNum[1], 10);
+  // Match natural language with "k" shorthand: "I'll do 1.5k", "offer 2k"
+  const nlK = lower.match(/(?:bid|offer|counter|price|pay)\b.*?(\d+(?:\.\d+)?)\s*k\b/);
+  if (nlK) return Math.round(parseFloat(nlK[1]) * 1000);
+  // Last resort: message with a number + negotiation keyword (e.g. "how about 1300", "I'll do 1.5k")
+  const hasNegotiationWord = /\b(bid|offer|counter|price|pay|how\s*about|what\s*about|do|make\s*it|set|change)\b/.test(lower);
+  if (hasNegotiationWord) {
+    const anyK = lower.match(/\b(\d+(?:\.\d+)?)\s*k\b/);
+    if (anyK) return Math.round(parseFloat(anyK[1]) * 1000);
+    const anyNum = lower.match(/\b(\d{3,6})\b/);
+    if (anyNum) return parseInt(anyNum[1], 10);
+  }
   return null;
 }
 
