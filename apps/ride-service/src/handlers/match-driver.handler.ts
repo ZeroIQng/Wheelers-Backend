@@ -16,12 +16,11 @@ export async function matchDriver(params: {
 }): Promise<MatchDriverResult> {
   const { rideEnv, onlineDrivers, rideRequested } = params;
 
-  if (onlineDrivers.size === 0) return { ok: false, reason: 'no_drivers_online' };
-
   const radiusKm = Number(rideEnv.MATCH_RADIUS_KM);
   const limit = Number(rideEnv.MAX_MATCH_ATTEMPTS);
 
-  // Prefer DB proximity search when possible (falls back if DB is not ready).
+  // DB is the source of truth — find all ONLINE drivers nearby,
+  // regardless of whether they're in the in-memory map.
   try {
     const candidates = await driverClient.findNearby(
       rideRequested.pickup.lat,
@@ -30,19 +29,27 @@ export async function matchDriver(params: {
       limit,
     );
 
-    const drivers: OnlineDriver[] = [];
-    for (const d of candidates) {
-      const inMemory = onlineDrivers.get(d.id);
-      if (!inMemory) continue;
-      drivers.push(inMemory);
+    if (candidates.length > 0) {
+      const drivers: OnlineDriver[] = candidates.map((d) => {
+        const inMemory = onlineDrivers.get(d.id);
+        return inMemory ?? {
+          driverId: d.id,
+          userId: d.userId,
+          lat: d.lat,
+          lng: d.lng,
+          vehiclePlate: d.vehiclePlate ?? '',
+          vehicleModel: d.vehicleModel ?? '',
+        };
+      });
+      return { ok: true, drivers };
     }
-
-    if (drivers.length > 0) return { ok: true, drivers };
   } catch {
     // ignore and fall back to in-memory pool
   }
 
   // Fallback: nearest in-memory drivers inside the configured radius.
+  if (onlineDrivers.size === 0) return { ok: false, reason: 'no_drivers_online' };
+
   const drivers = Array.from(onlineDrivers.values())
     .map((driver) => ({
       driver,
