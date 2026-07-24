@@ -1,5 +1,5 @@
 export const RATE_PER_KM_NGN = 300;
-export const PLATFORM_FEE_NGN = 200;
+export const PLATFORM_FEE_NGN = 0;
 export const MIN_OFFER_DISCOUNT = 0.28;
 export const FARE_ROUNDING_INCREMENT = 100;
 export const VAT_RATE = 0.075; // 7.5% VAT
