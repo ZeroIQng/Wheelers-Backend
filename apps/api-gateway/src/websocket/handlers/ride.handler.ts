@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { GoogleMapsRoutePlanner, validateRiderOffer } from '@wheleers/config';
-import { chatClient, referralClient } from '@wheleers/db';
+import { chatClient, driverClient, referralClient } from '@wheleers/db';
 import {
   ChatMessageSentEvent,
   DisputeOpenedEvent,
@@ -430,9 +430,26 @@ export async function handleRideMessage(
   }
 
   if (type === 'driver:accept') {
-    // Driver accepts at the rider's offered price — publish as counter-offer
-    // at the same amount, then let ride-service handle assignment uniformly.
+    // Driver accepts / bids — look up real driver profile from DB
     const driverId = getString(payload, 'driverId') ?? auth.driverId ?? auth.userId;
+
+    let driverName = getString(payload, 'driverName') ?? 'Driver';
+    let driverRating = getNumber(payload, 'driverRating') ?? 5.0;
+    let vehiclePlate = getString(payload, 'vehiclePlate') ?? '';
+    let vehicleModel = getString(payload, 'vehicleModel') ?? '';
+
+    try {
+      const driver = await driverClient.findByUserId(auth.userId);
+      if (driver) {
+        driverName = driver.user.name ?? driver.user.phone ?? driverName;
+        driverRating = driver.rating ?? driverRating;
+        vehiclePlate = driver.vehiclePlate ?? vehiclePlate;
+        vehicleModel = driver.vehicleModel ?? vehicleModel;
+      }
+    } catch {
+      // Use client-provided fallbacks
+    }
+
     const counterOfferEvent = RideCounterOfferEvent.parse({
       eventType: 'RIDE_COUNTER_OFFER',
       rideId: requireString(payload, 'rideId'),
@@ -440,10 +457,10 @@ export async function handleRideMessage(
       driverId,
       driverUserId: auth.userId,
       counterOfferNgn: requireNumber(payload, 'agreedFareNgn'),
-      driverName: requireString(payload, 'driverName'),
-      driverRating: requireNumber(payload, 'driverRating'),
-      vehiclePlate: requireString(payload, 'vehiclePlate'),
-      vehicleModel: requireString(payload, 'vehicleModel'),
+      driverName,
+      driverRating,
+      vehiclePlate,
+      vehicleModel,
       etaSeconds: requireNumber(payload, 'etaSeconds'),
       timestamp,
     });
