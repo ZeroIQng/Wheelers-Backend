@@ -331,7 +331,10 @@ function isMoreCommand(message: string): boolean {
 }
 
 function isCancelCommand(message: string): boolean {
-  return /^(cancel|cancel\s*(my\s*)?ride|stop\s*(my\s*)?ride)$/i.test(message.trim());
+  const m = message.trim().toLowerCase();
+  if (/^cancel$/i.test(m)) return true;
+  return /\b(cancel|stop|end)\b.*\b(ride|trip|booking)\b/i.test(m)
+    || /\b(ride|trip|booking)\b.*\b(cancel|stop|end)\b/i.test(m);
 }
 
 /* ─── Main POST webhook handler ─── */
