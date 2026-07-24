@@ -1031,7 +1031,7 @@ export async function handleMetaWhatsappWebhookRoute(
           stops: [],
           plannedDistanceKm: pendingRoute.distanceKm,
           plannedDurationSeconds: pendingRoute.durationSeconds,
-          fareEstimateNgn: pendingRoute.suggestedFareNgn,
+          fareEstimateNgn: offerNgn,
           paymentMethod: 'WALLET',
           riderOfferNgn: offerNgn,
           suggestedFareNgn: pendingRoute.suggestedFareNgn,
