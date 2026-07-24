@@ -6,7 +6,6 @@ import {
   GpsProcessedEvent,
   NotificationEvent,
   RideEvent,
-  RideOfferAcceptedEvent,
   WalletEvent,
   TOPICS,
 } from '@wheleers/kafka-schemas';
@@ -170,51 +169,8 @@ async function handleRideEvent(
       const bidCount = await addBid(deps.redisClient, event.rideId, bid);
       await setRideState(deps.redisClient, event.rideId, 'bidding');
 
-      // Auto-accept: if driver's price <= rider's offer, auto-confirm
-      const meta = await getRideMeta(deps.redisClient, event.rideId);
-      if (meta && event.counterOfferNgn <= meta.offerNgn) {
-        console.log('[consumer] Auto-accepting bid — driver price matches rider offer', {
-          rideId: event.rideId, driverOffer: event.counterOfferNgn, riderOffer: meta.offerNgn,
-        });
-
-        const acceptEvent = RideOfferAcceptedEvent.parse({
-          eventType: 'RIDE_OFFER_ACCEPTED',
-          rideId: event.rideId,
-          riderId: event.riderId,
-          driverId: event.driverId,
-          driverUserId: event.driverUserId,
-          agreedFareNgn: event.counterOfferNgn,
-          paymentMethod: meta.paymentMethod,
-          timestamp: new Date().toISOString(),
-        });
-
-        // Publish acceptance — triggers RIDE_DRIVER_ASSIGNED which sends the notification
-        await deps.publisher.publishRideEvent(acceptEvent);
-        await setRideState(deps.redisClient, event.rideId, 'confirmed');
-
-        // Store accepted bid info for driver profile flow
-        try {
-          const driver = await driverClient.findById(event.driverId);
-          await storeAcceptedBid(deps.redisClient, event.rideId, {
-            driverName: event.driverName,
-            driverPhone: driver.user.phone ?? '',
-            driverUserId: event.driverUserId,
-            vehicleModel: event.vehicleModel,
-            vehiclePlate: event.vehiclePlate,
-            vehicleColor: '',
-            driverRating: event.driverRating,
-            totalRides: driver.totalRides ?? 0,
-            etaSeconds: event.etaSeconds,
-            fareNgn: event.counterOfferNgn,
-          });
-        } catch {
-          // Non-critical — profile flow will show fallback
-        }
-
-        return;
-      }
-
       const phone = await lookupPhoneByUserId(deps.redisClient, event.riderId);
+      const meta = await getRideMeta(deps.redisClient, event.rideId);
       if (phone && meta && await shouldNotify(deps.redisClient, event.rideId)) {
         // Fetch ALL bids and send as one batched message
         const allBids = await getBids(deps.redisClient, event.rideId);
@@ -333,6 +289,7 @@ async function handleRideEvent(
 
     // Notify driver via WebSocket (app) — include fee breakdown
     const matchFees = calculateRideFees(event.agreedFareNgn);
+    const driverEarningsNgn = event.agreedFareNgn - matchFees.vatNgn - matchFees.stateLevyNgn;
     await registry.sendToUser(event.driverUserId, 'ride:matched', {
       rideId: event.rideId,
       riderId: event.riderId,
@@ -345,9 +302,10 @@ async function handleRideEvent(
       agreedFareNgn: event.agreedFareNgn,
       vatNgn: matchFees.vatNgn,
       stateLevyNgn: matchFees.stateLevyNgn,
-      driverEarningsNgn: event.agreedFareNgn,
+      driverEarningsNgn,
       lockedFareNgn: event.lockedFareNgn,
       paymentMethod: event.paymentMethod,
+      riderPaid: true,
     });
 
     return;
@@ -440,7 +398,7 @@ async function handleRideEvent(
       vatNgn: completionFees.vatNgn,
       stateLevyNgn: completionFees.stateLevyNgn,
       totalChargedNgn: completionFees.totalNgn,
-      driverEarningsNgn: event.fareNgn,
+      driverEarningsNgn: event.fareNgn - completionFees.vatNgn - completionFees.stateLevyNgn,
       distanceKm: event.distanceKm,
       durationSeconds: event.durationSeconds,
       completedAt: event.completedAt,
@@ -454,6 +412,9 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_CANCELLED') {
+    // Release wallet hold so locked funds return to rider's balance
+    await walletClient.cancelRideHold(event.rideId).catch(() => {});
+
     const releasedReferralCashback = await referralClient.releaseRideCashback(
       event.rideId,
     );

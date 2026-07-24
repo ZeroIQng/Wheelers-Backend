@@ -64,10 +64,16 @@ export type RideFeeBreakdown = {
   totalNgn: number;
 };
 
+/**
+ * Rider's offer is inclusive of all taxes.
+ * fareNgn = what the rider offered / agreed to pay (total).
+ * VAT and state levy are deducted from this amount.
+ * Driver receives fareNgn minus taxes.
+ */
 export function calculateRideFees(fareNgn: number): RideFeeBreakdown {
-  const vatNgn = round2(fareNgn * VAT_RATE);
   const stateLevyNgn = LAGOS_STATE_FEE_NGN;
-  const totalNgn = round2(fareNgn + vatNgn + stateLevyNgn);
+  const vatNgn = round2(fareNgn * VAT_RATE);
+  const totalNgn = fareNgn;
   return { fareNgn, vatNgn, stateLevyNgn, totalNgn };
 }
 

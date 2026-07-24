@@ -276,12 +276,13 @@ export const walletClient = {
           },
         });
 
-        // 2. Calculate fees — rider pays fare + tax + state levy
+        // 2. Calculate fees — rider's offer is inclusive of taxes
         const fees = calculateRideFees(fareNgn);
-        const riderTotalNgn = fees.totalNgn;
+        const riderTotalNgn = fees.totalNgn; // same as fareNgn
         const platformFeeNgn = fees.vatNgn + fees.stateLevyNgn;
+        const driverPayoutNgn = fareNgn - platformFeeNgn;
 
-        // 3. Debit rider (fare + fees)
+        // 3. Debit rider (their offer amount)
         if (Number(unlockedRiderWallet.balanceNgn) < riderTotalNgn) {
           throw new Error(
             `Insufficient balance on rider wallet ${hold.walletId} after unlocking: ` +
@@ -305,10 +306,10 @@ export const walletClient = {
           },
         });
 
-        // 4. Credit driver (fare only — no tax/levy)
+        // 4. Credit driver (fare minus taxes)
         const driverWallet = await tx.wallet.update({
           where: { userId: driverUserId },
-          data: { balanceNgn: { increment: fareNgn } },
+          data: { balanceNgn: { increment: driverPayoutNgn } },
         });
 
         const driverTransaction = await tx.transaction.create({
@@ -316,7 +317,7 @@ export const walletClient = {
             walletId: driverWallet.id,
             type: 'DRIVER_PAYOUT',
             direction: 'CREDIT',
-            amountNgn: fareNgn,
+            amountNgn: driverPayoutNgn,
             balanceAfterNgn: driverWallet.balanceNgn,
             referenceId: rideId,
           },
@@ -325,7 +326,7 @@ export const walletClient = {
         // 5. Update driver earnings
         await tx.driver.update({
           where: { userId: driverUserId },
-          data: { totalEarningsNgn: { increment: fareNgn } },
+          data: { totalEarningsNgn: { increment: driverPayoutNgn } },
         });
 
         // 6. Store platform fee on the ride record

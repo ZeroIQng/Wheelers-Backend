@@ -309,7 +309,7 @@ export async function clearPendingLocation(
 
 // ── Rider booking stage (tracks where the rider is in the booking flow) ───
 
-export type BookingStage = 'awaiting_pickup' | 'awaiting_destination' | 'awaiting_price' | 'awaiting_payment' | 'searching' | 'bidding';
+export type BookingStage = 'awaiting_pickup' | 'awaiting_destination' | 'awaiting_price' | 'awaiting_payment' | 'searching' | 'bidding' | 'editing_pickup' | 'editing_destination';
 
 function bookingStageKey(userId: string): string {
   return `whatsapp:user:${userId}:booking_stage`;
