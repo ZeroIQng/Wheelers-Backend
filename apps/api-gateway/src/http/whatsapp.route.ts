@@ -456,20 +456,81 @@ export async function handleMetaWhatsappWebhookRoute(
           await cleanupRideKeys(deps.redisClient, activeRideId);
           await clearPendingAccept(deps.redisClient, user.id);
 
-          // Store current route as pending so editing handlers can replan
+          const inlineAddress = extractEditAddress(incomingMessage);
+
+          if (inlineAddress) {
+            // Address provided inline — geocode and replan immediately
+            const geo = await geocodeAddress(deps.googleMapsApiKey, inlineAddress);
+            if (!geo) {
+              // Store route so they can retry
+              await storePendingRoute(deps.redisClient, user.id, {
+                pickupLat: rideMeta.pickupLat, pickupLng: rideMeta.pickupLng, pickupAddress: rideMeta.pickupAddress,
+                destLat: rideMeta.destinationLat, destLng: rideMeta.destinationLng, destAddress: rideMeta.destinationAddress,
+                distanceKm: rideMeta.distanceKm ?? 0, durationSeconds: rideMeta.durationSeconds ?? 0,
+                suggestedFareNgn: rideMeta.suggestedFareNgn, minOfferNgn: 0, ratePerKmNgn: 0, route: null,
+              });
+              const label = isPickup ? 'pickup' : 'destination';
+              await setBookingStage(deps.redisClient, user.id, isPickup ? 'editing_pickup' : 'editing_destination');
+              const reply = `Could not find "${inlineAddress}" on the map.\n\nPlease try a more specific ${label} address or share a location pin 📍`;
+              await appendWhatsappConversation(deps.redisClient, phone, [
+                { role: 'user', content: incomingMessage },
+                { role: 'assistant', content: reply },
+              ]);
+              await sendMetaReply(deps, phone, reply);
+              return;
+            }
+
+            const pickup = isPickup
+              ? { lat: geo.lat, lng: geo.lng, address: geo.formattedAddress }
+              : { lat: rideMeta.pickupLat, lng: rideMeta.pickupLng, address: rideMeta.pickupAddress };
+            const destination = !isPickup
+              ? { lat: geo.lat, lng: geo.lng, address: geo.formattedAddress }
+              : { lat: rideMeta.destinationLat, lng: rideMeta.destinationLng, address: rideMeta.destinationAddress };
+
+            const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
+            const distanceKm = plannedRoute.distanceKm;
+            const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
+            const suggestedFare = plannedRoute.suggestedFareNgn;
+            const minFare = plannedRoute.minOfferNgn;
+
+            await storePendingRoute(deps.redisClient, user.id, {
+              pickupLat: pickup.lat, pickupLng: pickup.lng, pickupAddress: pickup.address,
+              destLat: destination.lat, destLng: destination.lng, destAddress: destination.address,
+              distanceKm, durationSeconds: plannedRoute.durationSeconds,
+              suggestedFareNgn: suggestedFare, minOfferNgn: minFare,
+              ratePerKmNgn: plannedRoute.ratePerKmNgn, route: plannedRoute.geometry,
+            });
+            await setBookingStage(deps.redisClient, user.id, 'awaiting_price');
+
+            const editedLabel = isPickup ? 'Pickup updated!' : 'Destination updated!';
+            const reply = [
+              `✅ *${editedLabel}*`,
+              ``,
+              `Pickup: *${pickup.address}*`,
+              ``,
+              `Destination: *${destination.address}*`,
+              ``,
+              `${distanceKm.toFixed(1)} km · ~${durationMin} min`,
+              `Minimum fare: ₦${minFare.toLocaleString()}`,
+              `Suggested fare: ₦${suggestedFare.toLocaleString()}`,
+              ``,
+              `Send your offer (e.g. *${suggestedFare.toLocaleString()}* or *${Math.round(suggestedFare * 0.85).toLocaleString()}*)`,
+            ].join('\n');
+
+            await appendWhatsappConversation(deps.redisClient, phone, [
+              { role: 'user', content: incomingMessage },
+              { role: 'assistant', content: reply },
+            ]);
+            await sendMetaReply(deps, phone, reply);
+            return;
+          }
+
+          // No inline address — store route and ask for it
           await storePendingRoute(deps.redisClient, user.id, {
-            pickupLat: rideMeta.pickupLat,
-            pickupLng: rideMeta.pickupLng,
-            pickupAddress: rideMeta.pickupAddress,
-            destLat: rideMeta.destinationLat,
-            destLng: rideMeta.destinationLng,
-            destAddress: rideMeta.destinationAddress,
-            distanceKm: rideMeta.distanceKm ?? 0,
-            durationSeconds: rideMeta.durationSeconds ?? 0,
-            suggestedFareNgn: rideMeta.suggestedFareNgn,
-            minOfferNgn: 0,
-            ratePerKmNgn: 0,
-            route: null,
+            pickupLat: rideMeta.pickupLat, pickupLng: rideMeta.pickupLng, pickupAddress: rideMeta.pickupAddress,
+            destLat: rideMeta.destinationLat, destLng: rideMeta.destinationLng, destAddress: rideMeta.destinationAddress,
+            distanceKm: rideMeta.distanceKm ?? 0, durationSeconds: rideMeta.durationSeconds ?? 0,
+            suggestedFareNgn: rideMeta.suggestedFareNgn, minOfferNgn: 0, ratePerKmNgn: 0, route: null,
           });
 
           const label = isPickup ? 'pickup' : 'destination';
