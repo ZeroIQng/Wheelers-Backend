@@ -365,6 +365,17 @@ function isEditDestinationCommand(message: string): boolean {
     || /^edit\s*(destination|to)$/i.test(m);
 }
 
+/** Extract inline address from edit command, e.g. "edit pickup golden gate bridge" → "golden gate bridge" */
+function extractEditAddress(message: string): string | null {
+  const m = message.trim();
+  // Strip the command keywords, whatever remains is the address
+  const stripped = m.replace(/\b(edit|change|update|modify)\b/i, '')
+    .replace(/\b(pickup|pick\s*up|pick\s*-\s*up|origin|start|from|destination|dest|drop\s*off|dropoff|drop\s*-\s*off|where|to)\b/i, '')
+    .replace(/\b(to|the)\b/gi, '')
+    .trim();
+  return stripped.length >= 3 ? stripped : null;
+}
+
 /* ─── Main POST webhook handler ─── */
 
 export async function handleMetaWhatsappWebhookRoute(
@@ -426,6 +437,55 @@ export async function handleMetaWhatsappWebhookRoute(
     // ══════════════════════════════════════════════════════════════════════
 
     if (activeRideId && !isLocation) {
+      // ── Edit pickup / destination during active ride ──
+      if (isEditPickupCommand(incomingMessage) || isEditDestinationCommand(incomingMessage)) {
+        const isPickup = isEditPickupCommand(incomingMessage);
+        const rideMeta = await getRideMeta(deps.redisClient, activeRideId);
+
+        if (rideMeta && rideMeta.pickupLat && rideMeta.pickupLng && rideMeta.destinationLat && rideMeta.destinationLng) {
+          // Cancel the current ride (releases wallet hold)
+          const cancelEvent = RideCancelledEvent.parse({
+            eventType: 'RIDE_CANCELLED',
+            rideId: activeRideId,
+            riderId: user.id,
+            reason: 'rider_editing_route',
+            timestamp: new Date().toISOString(),
+          });
+          await deps.publisher.publishRideEvent(cancelEvent);
+          await clearActiveRide(deps.redisClient, user.id);
+          await cleanupRideKeys(deps.redisClient, activeRideId);
+          await clearPendingAccept(deps.redisClient, user.id);
+
+          // Store current route as pending so editing handlers can replan
+          await storePendingRoute(deps.redisClient, user.id, {
+            pickupLat: rideMeta.pickupLat,
+            pickupLng: rideMeta.pickupLng,
+            pickupAddress: rideMeta.pickupAddress,
+            destLat: rideMeta.destinationLat,
+            destLng: rideMeta.destinationLng,
+            destAddress: rideMeta.destinationAddress,
+            distanceKm: rideMeta.distanceKm ?? 0,
+            durationSeconds: rideMeta.durationSeconds ?? 0,
+            suggestedFareNgn: rideMeta.suggestedFareNgn,
+            minOfferNgn: 0,
+            ratePerKmNgn: 0,
+            route: null,
+          });
+
+          const label = isPickup ? 'pickup' : 'destination';
+          const current = isPickup ? rideMeta.pickupAddress : rideMeta.destinationAddress;
+          await setBookingStage(deps.redisClient, user.id, isPickup ? 'editing_pickup' : 'editing_destination');
+
+          const reply = `Current ${label}: *${current}*\n\nSend a new ${label} location pin 📍 or type the address.`;
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
+          return;
+        }
+      }
+
       // ── Cancel command ──
       if (isCancelCommand(incomingMessage)) {
         const cancelEvent = RideCancelledEvent.parse({
@@ -687,7 +747,7 @@ export async function handleMetaWhatsappWebhookRoute(
       }
 
       // ── Active ride but unrecognized command — remind them ──
-      const reply = 'You have an active ride. Reply:\n• *accept 1* — to accept a driver\n• A *price* (e.g. "2000") — to counter-offer\n• *more* — to see drivers\n• *cancel* — to cancel';
+      const reply = 'You have an active ride. Reply:\n• *accept 1* — to accept a driver\n• A *price* (e.g. "2000") — to counter-offer\n• *more* — to see drivers\n• *edit from* / *edit to* — to change pickup or destination\n• *cancel* — to cancel';
       await appendWhatsappConversation(deps.redisClient, phone, [
         { role: 'user', content: incomingMessage },
         { role: 'assistant', content: reply },
@@ -1013,20 +1073,80 @@ export async function handleMetaWhatsappWebhookRoute(
       const pendingRoute = await getPendingRoute(deps.redisClient, user.id);
       if (pendingRoute) {
         // ── Direct edit commands: "edit pickup" / "edit destination" ──
-        if (isEditPickupCommand(incomingMessage)) {
-          await setBookingStage(deps.redisClient, user.id, 'editing_pickup');
-          const reply = `Current pickup: *${pendingRoute.pickupAddress}*\n\nSend a new pickup location pin 📍 or type the address.`;
-          await appendWhatsappConversation(deps.redisClient, phone, [
-            { role: 'user', content: incomingMessage },
-            { role: 'assistant', content: reply },
-          ]);
-          await sendMetaReply(deps, phone, reply);
-          return;
-        }
+        if (isEditPickupCommand(incomingMessage) || isEditDestinationCommand(incomingMessage)) {
+          const isPickup = isEditPickupCommand(incomingMessage);
+          const inlineAddress = extractEditAddress(incomingMessage);
 
-        if (isEditDestinationCommand(incomingMessage)) {
-          await setBookingStage(deps.redisClient, user.id, 'editing_destination');
-          const reply = `Current destination: *${pendingRoute.destAddress}*\n\nSend a new destination location pin 📍 or type the address.`;
+          if (inlineAddress) {
+            // Address provided inline — geocode and replan immediately
+            const geo = await geocodeAddress(deps.googleMapsApiKey, inlineAddress);
+            if (!geo) {
+              const label = isPickup ? 'pickup' : 'destination';
+              const reply = `Could not find "${inlineAddress}" on the map.\n\nPlease try a more specific ${label} address or share a location pin 📍`;
+              await appendWhatsappConversation(deps.redisClient, phone, [
+                { role: 'user', content: incomingMessage },
+                { role: 'assistant', content: reply },
+              ]);
+              await sendMetaReply(deps, phone, reply);
+              return;
+            }
+
+            const pickup = isPickup
+              ? { lat: geo.lat, lng: geo.lng, address: geo.formattedAddress }
+              : { lat: pendingRoute.pickupLat, lng: pendingRoute.pickupLng, address: pendingRoute.pickupAddress };
+            const destination = !isPickup
+              ? { lat: geo.lat, lng: geo.lng, address: geo.formattedAddress }
+              : { lat: pendingRoute.destLat, lng: pendingRoute.destLng, address: pendingRoute.destAddress };
+
+            const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
+            const distanceKm = plannedRoute.distanceKm;
+            const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
+            const suggestedFare = plannedRoute.suggestedFareNgn;
+            const minFare = plannedRoute.minOfferNgn;
+
+            await storePendingRoute(deps.redisClient, user.id, {
+              pickupLat: pickup.lat,
+              pickupLng: pickup.lng,
+              pickupAddress: pickup.address,
+              destLat: destination.lat,
+              destLng: destination.lng,
+              destAddress: destination.address,
+              distanceKm,
+              durationSeconds: plannedRoute.durationSeconds,
+              suggestedFareNgn: suggestedFare,
+              minOfferNgn: minFare,
+              ratePerKmNgn: plannedRoute.ratePerKmNgn,
+              route: plannedRoute.geometry,
+            });
+
+            const editedLabel = isPickup ? 'Pickup updated!' : 'Destination updated!';
+            const reply = [
+              `✅ *${editedLabel}*`,
+              ``,
+              `Pickup: *${pickup.address}*`,
+              ``,
+              `Destination: *${destination.address}*`,
+              ``,
+              `${distanceKm.toFixed(1)} km · ~${durationMin} min`,
+              `Minimum fare: ₦${minFare.toLocaleString()}`,
+              `Suggested fare: ₦${suggestedFare.toLocaleString()}`,
+              ``,
+              `Send your offer (e.g. *${suggestedFare.toLocaleString()}* or *${Math.round(suggestedFare * 0.85).toLocaleString()}*)`,
+            ].join('\n');
+
+            await appendWhatsappConversation(deps.redisClient, phone, [
+              { role: 'user', content: incomingMessage },
+              { role: 'assistant', content: reply },
+            ]);
+            await sendMetaReply(deps, phone, reply);
+            return;
+          }
+
+          // No inline address — ask for it
+          const label = isPickup ? 'pickup' : 'destination';
+          const current = isPickup ? pendingRoute.pickupAddress : pendingRoute.destAddress;
+          await setBookingStage(deps.redisClient, user.id, isPickup ? 'editing_pickup' : 'editing_destination');
+          const reply = `Current ${label}: *${current}*\n\nSend a new ${label} location pin 📍 or type the address.`;
           await appendWhatsappConversation(deps.redisClient, phone, [
             { role: 'user', content: incomingMessage },
             { role: 'assistant', content: reply },
