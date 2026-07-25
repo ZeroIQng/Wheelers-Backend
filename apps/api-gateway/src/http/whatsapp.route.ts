@@ -1057,6 +1057,20 @@ export async function handleMetaWhatsappWebhookRoute(
       // ── Pay — rider pays to confirm the selected driver ──
       const pendingAccept = await getPendingAccept(deps.redisClient, user.id);
       if (pendingAccept && /^(yes|confirm|accept|go|proceed|pay)$/i.test(incomingMessage.trim())) {
+        // Verify ride still exists before taking payment
+        const rideMeta = await getRideMeta(deps.redisClient, pendingAccept.rideId);
+        if (!rideMeta) {
+          await clearPendingAccept(deps.redisClient, user.id);
+          await clearActiveRide(deps.redisClient, user.id);
+          const reply = 'This ride has expired. Please start a new booking.';
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
+          return;
+        }
+
         const agreedFare = pendingAccept.fareNgn;
 
         // Check wallet balance
@@ -2241,6 +2255,11 @@ export async function handleMetaWhatsappWebhookRoute(
         { role: 'assistant', content: reply },
       ]);
       await sendMetaReply(deps, phone, reply);
+      return;
+    }
+
+    // Ignore empty messages (stickers, images, etc.) — don't send to LLM
+    if (!incomingMessage.trim()) {
       return;
     }
 
