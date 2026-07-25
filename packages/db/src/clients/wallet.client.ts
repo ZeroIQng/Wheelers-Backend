@@ -24,7 +24,33 @@ interface RideHoldWithPayoutResult {
   riderTransaction: Awaited<ReturnType<typeof prisma.transaction.create>>;
   driverTransaction: Awaited<ReturnType<typeof prisma.transaction.create>>;
   holdAmountNgn: number;
+  platformFeeNgn: number;
   applied: boolean;
+}
+
+const PLATFORM_USER_ID = '00000000-0000-0000-0000-000000000001';
+
+async function ensurePlatformWallet(): Promise<string> {
+  const existing = await prisma.wallet.findUnique({ where: { userId: PLATFORM_USER_ID } });
+  if (existing) return existing.id;
+
+  // Create the platform user + wallet if they don't exist
+  await prisma.user.upsert({
+    where: { id: PLATFORM_USER_ID },
+    create: {
+      id: PLATFORM_USER_ID,
+      privyDid: 'platform:wheelers',
+      role: 'RIDER',
+      name: 'Wheelers Platform',
+    },
+    update: {},
+  });
+
+  const wallet = await prisma.wallet.create({
+    data: { userId: PLATFORM_USER_ID },
+  });
+
+  return wallet.id;
 }
 
 export const walletClient = {
@@ -262,6 +288,9 @@ export const walletClient = {
     const { rideId, fareNgn, driverUserId } = params;
 
     try {
+      // Ensure platform wallet exists before entering the transaction
+      await ensurePlatformWallet();
+
       return await prisma.$transaction(async (tx: TxClient) => {
         const hold = await tx.rideHold.findUnique({ where: { rideId } });
         if (!hold) return null;
@@ -278,11 +307,11 @@ export const walletClient = {
           },
         });
 
-        // 2. Calculate fees — rider's offer is inclusive of taxes
+        // 2. Calculate fees — rider's offer is inclusive of all fees
         const fees = calculateRideFees(fareNgn);
         const riderTotalNgn = fees.totalNgn; // same as fareNgn
-        const platformFeeNgn = fees.vatNgn + fees.stateLevyNgn;
-        const driverPayoutNgn = fareNgn - platformFeeNgn;
+        const platformFeeNgn = fees.platformTotalNgn;
+        const driverPayoutNgn = fees.driverPayoutNgn;
 
         // 3. Debit rider (their offer amount)
         if (Number(unlockedRiderWallet.balanceNgn) < riderTotalNgn) {
@@ -308,7 +337,7 @@ export const walletClient = {
           },
         });
 
-        // 4. Credit driver (fare minus taxes)
+        // 4. Credit driver (fare minus all deductions)
         const driverWallet = await tx.wallet.update({
           where: { userId: driverUserId },
           data: { balanceNgn: { increment: driverPayoutNgn } },
@@ -325,19 +354,36 @@ export const walletClient = {
           },
         });
 
-        // 5. Update driver earnings
+        // 5. Credit platform wallet with all fees
+        const platformWallet = await tx.wallet.update({
+          where: { userId: PLATFORM_USER_ID },
+          data: { balanceNgn: { increment: platformFeeNgn } },
+        });
+
+        await tx.transaction.create({
+          data: {
+            walletId: platformWallet.id,
+            type: 'PLATFORM_FEE',
+            direction: 'CREDIT',
+            amountNgn: platformFeeNgn,
+            balanceAfterNgn: platformWallet.balanceNgn,
+            referenceId: rideId,
+          },
+        });
+
+        // 6. Update driver earnings
         await tx.driver.update({
           where: { userId: driverUserId },
           data: { totalEarningsNgn: { increment: driverPayoutNgn } },
         });
 
-        // 6. Store platform fee on the ride record
+        // 7. Store platform fee on the ride record
         await tx.ride.update({
           where: { id: rideId },
           data: { platformFeeNgn: platformFeeNgn },
         });
 
-        // 5. Mark hold as charged
+        // 8. Mark hold as charged
         await tx.rideHold.update({
           where: { rideId },
           data: {
@@ -353,6 +399,7 @@ export const walletClient = {
           riderTransaction,
           driverTransaction,
           holdAmountNgn: Number(hold.amountNgn),
+          platformFeeNgn: Number(platformFeeNgn),
           applied: true as const,
         };
       });
@@ -367,12 +414,14 @@ export const walletClient = {
       const riderTxn = await findExistingTransaction(hold.walletId, 'RIDE_PAYMENT', 'DEBIT', rideId);
       const driverTxn = await findExistingTransaction(driverWallet.id, 'DRIVER_PAYOUT', 'CREDIT', rideId);
 
+      const fees = calculateRideFees(Number(hold.settledAmountNgn ?? hold.amountNgn));
       return {
         riderWallet,
         driverWallet,
         riderTransaction: riderTxn,
         driverTransaction: driverTxn,
         holdAmountNgn: Number(hold.amountNgn),
+        platformFeeNgn: fees.platformTotalNgn,
         applied: false,
       };
     }

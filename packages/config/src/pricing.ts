@@ -4,6 +4,7 @@ export const MIN_OFFER_DISCOUNT = 0.28;
 export const FARE_ROUNDING_INCREMENT = 100;
 export const VAT_RATE = 0.075; // 7.5% VAT
 export const LAGOS_STATE_FEE_NGN = 30; // ₦30 flat per ride
+export const SERVICE_FEE_NGN = 200; // ₦200 flat per ride — Wheelers platform fee
 
 export type SuggestedFare = {
   distanceKm: number;
@@ -61,20 +62,27 @@ export type RideFeeBreakdown = {
   fareNgn: number;
   vatNgn: number;
   stateLevyNgn: number;
+  serviceFeeNgn: number;
+  platformTotalNgn: number;
+  driverPayoutNgn: number;
   totalNgn: number;
 };
 
 /**
- * Rider's offer is inclusive of all taxes.
+ * Rider's offer is inclusive of all taxes and fees.
  * fareNgn = what the rider offered / agreed to pay (total).
- * VAT and state levy are deducted from this amount.
- * Driver receives fareNgn minus taxes.
+ * VAT, state levy, and service fee are deducted from this amount.
+ * Driver receives fareNgn minus all deductions.
+ * Platform receives VAT + state levy + service fee.
  */
 export function calculateRideFees(fareNgn: number): RideFeeBreakdown {
   const stateLevyNgn = LAGOS_STATE_FEE_NGN;
   const vatNgn = round2(fareNgn * VAT_RATE);
+  const serviceFeeNgn = SERVICE_FEE_NGN;
+  const platformTotalNgn = round2(vatNgn + stateLevyNgn + serviceFeeNgn);
+  const driverPayoutNgn = round2(fareNgn - platformTotalNgn);
   const totalNgn = fareNgn;
-  return { fareNgn, vatNgn, stateLevyNgn, totalNgn };
+  return { fareNgn, vatNgn, stateLevyNgn, serviceFeeNgn, platformTotalNgn, driverPayoutNgn, totalNgn };
 }
 
 function round2(value: number): number {

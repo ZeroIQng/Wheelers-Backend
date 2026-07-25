@@ -300,7 +300,6 @@ async function handleRideEvent(
 
     // Notify driver via WebSocket (app) — include fee breakdown
     const matchFees = calculateRideFees(event.agreedFareNgn);
-    const driverEarningsNgn = event.agreedFareNgn - matchFees.vatNgn - matchFees.stateLevyNgn;
 
     // Look up rider phone so driver can call them
     let riderPhone: string | undefined;
@@ -321,7 +320,8 @@ async function handleRideEvent(
       agreedFareNgn: event.agreedFareNgn,
       vatNgn: matchFees.vatNgn,
       stateLevyNgn: matchFees.stateLevyNgn,
-      driverEarningsNgn,
+      serviceFeeNgn: matchFees.serviceFeeNgn,
+      driverEarningsNgn: matchFees.driverPayoutNgn,
       lockedFareNgn: event.lockedFareNgn,
       paymentMethod: event.paymentMethod,
       riderPaid: true,
@@ -417,8 +417,9 @@ async function handleRideEvent(
       fareNgn: event.fareNgn,
       vatNgn: completionFees.vatNgn,
       stateLevyNgn: completionFees.stateLevyNgn,
+      serviceFeeNgn: completionFees.serviceFeeNgn,
       totalChargedNgn: completionFees.totalNgn,
-      driverEarningsNgn: event.fareNgn - completionFees.vatNgn - completionFees.stateLevyNgn,
+      driverEarningsNgn: completionFees.driverPayoutNgn,
       distanceKm: event.distanceKm,
       durationSeconds: event.durationSeconds,
       completedAt: event.completedAt,

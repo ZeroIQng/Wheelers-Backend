@@ -649,6 +649,7 @@ enum TransactionType {
   RIDE_PAYMENT
   PENALTY
   WITHDRAWAL
+  PLATFORM_FEE
 }
 
 enum WalletReservationKind {

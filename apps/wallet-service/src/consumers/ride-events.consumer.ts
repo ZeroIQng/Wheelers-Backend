@@ -121,11 +121,11 @@ export function createRideEventsConsumer(params: {
             referenceId: event.rideId,
           }, { key: event.rideId });
 
-          // Publish driver credit event (fare only — no tax/levy)
+          // Publish driver credit event (fare minus all deductions)
           await walletEventsProducer.publishCredited({
             walletId: result.driverWallet.id,
             userId: result.driverWallet.userId,
-            amountNgn: event.fareNgn,
+            amountNgn: completionFees.driverPayoutNgn,
             newBalanceNgn: Number(result.driverWallet.balanceNgn),
             creditType: 'driver_payout',
             referenceId: event.rideId,

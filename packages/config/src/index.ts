@@ -28,6 +28,7 @@ export {
   FARE_ROUNDING_INCREMENT,
   VAT_RATE,
   LAGOS_STATE_FEE_NGN,
+  SERVICE_FEE_NGN,
   calculateSuggestedFare,
   validateRiderOffer,
   calculateRideFees,
