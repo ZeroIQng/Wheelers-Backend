@@ -216,6 +216,11 @@ export class RedisClient {
     await this.send('SET', key, value);
   }
 
+  async setIfNotExists(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    const result = await this.send('SET', key, value, 'EX', String(ttlSeconds), 'NX');
+    return result === 'OK';
+  }
+
   async get(key: string): Promise<string | null> {
     const result = await this.send('GET', key);
     return typeof result === 'string' ? result : null;

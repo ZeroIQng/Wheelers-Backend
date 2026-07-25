@@ -311,7 +311,7 @@ export async function clearPendingLocation(
 
 // ── Rider booking stage (tracks where the rider is in the booking flow) ───
 
-export type BookingStage = 'awaiting_pickup' | 'awaiting_destination' | 'awaiting_price' | 'awaiting_payment' | 'searching' | 'bidding' | 'editing_pickup' | 'editing_destination';
+export type BookingStage = 'awaiting_pickup' | 'awaiting_destination' | 'awaiting_price' | 'awaiting_payment' | 'awaiting_cancel_reason' | 'awaiting_withdrawal_amount' | 'awaiting_withdrawal_bank' | 'awaiting_withdrawal_account' | 'awaiting_withdrawal_confirmation' | 'searching' | 'bidding' | 'editing_pickup' | 'editing_destination';
 
 function bookingStageKey(userId: string): string {
   return `whatsapp:user:${userId}:booking_stage`;
@@ -338,6 +338,50 @@ export async function clearBookingStage(
   userId: string,
 ): Promise<void> {
   await redis.del(bookingStageKey(userId));
+}
+
+// ── Pending WhatsApp wallet withdrawal ────────────────────────────────────
+
+export interface PendingWhatsappWithdrawal {
+  amountNgn: number;
+  bankUuid?: string;
+  bankName?: string;
+  accountNumber?: string;
+  accountName?: string;
+}
+
+const PENDING_WITHDRAWAL_TTL = 600; // 10 minutes
+
+function pendingWithdrawalKey(userId: string): string {
+  return `whatsapp:user:${userId}:pending_withdrawal`;
+}
+
+export async function storePendingWhatsappWithdrawal(
+  redis: RedisClient,
+  userId: string,
+  data: PendingWhatsappWithdrawal,
+): Promise<void> {
+  await redis.set(pendingWithdrawalKey(userId), JSON.stringify(data), PENDING_WITHDRAWAL_TTL);
+}
+
+export async function getPendingWhatsappWithdrawal(
+  redis: RedisClient,
+  userId: string,
+): Promise<PendingWhatsappWithdrawal | null> {
+  const raw = await redis.get(pendingWithdrawalKey(userId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as PendingWhatsappWithdrawal;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearPendingWhatsappWithdrawal(
+  redis: RedisClient,
+  userId: string,
+): Promise<void> {
+  await redis.del(pendingWithdrawalKey(userId));
 }
 
 // ── Pending route (stored after destination pin, awaiting rider's price) ──

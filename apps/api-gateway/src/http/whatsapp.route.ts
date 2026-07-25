@@ -1,9 +1,19 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import type { IncomingMessage, ServerResponse } from 'http';
-import { driverClient, walletClient, virtualAccountClient } from '@wheleers/db';
+import {
+  driverClient,
+  walletClient,
+  virtualAccountClient,
+  withdrawalClient,
+} from '@wheleers/db';
 import { GoogleMapsRoutePlanner, calculateRideFees } from '@wheleers/config';
-import { RideRequestedEvent, RideCancelledEvent, RideOfferAcceptedEvent } from '@wheleers/kafka-schemas';
-import type { PouchLiquifiaClient } from '@wheleers/pouch-client';
+import {
+  RideRequestedEvent,
+  RideCancelledEvent,
+  RideOfferAcceptedEvent,
+} from '@wheleers/kafka-schemas';
+import type { PayoutCreatedEvent } from '@wheleers/kafka-schemas';
+import type { PouchBankAccount, PouchLiquifiaClient } from '@wheleers/pouch-client';
 import type { GatewayPublisher } from '../websocket/publisher';
 import { onboardWhatsappUser } from '../onboarding/user-onboarding';
 import {
@@ -39,6 +49,9 @@ import {
   storePendingAccept,
   getPendingAccept,
   clearPendingAccept,
+  storePendingWhatsappWithdrawal,
+  getPendingWhatsappWithdrawal,
+  clearPendingWhatsappWithdrawal,
 } from '../whatsapp-flows/bid-state';
 import type { WhatsappBid } from '../whatsapp-flows/bid-state';
 import {
@@ -376,6 +389,193 @@ function extractEditAddress(message: string): string | null {
   return stripped.length >= 3 ? stripped : null;
 }
 
+const CANCELLATION_REASON_PROMPT = [
+  'Why do you want to cancel your ride?',
+  '',
+  '1. Long waiting time',
+  '2. Wrong pickup or destination point',
+  '3. Want to change ride type',
+  '4. Accidental request',
+  '',
+  'Reply with *1–4* or type your reason.',
+].join('\n');
+
+const CANCELLATION_REASONS: Record<string, string> = {
+  '1': 'Long waiting time',
+  '2': 'Wrong pickup or destination point',
+  '3': 'Want to change ride type',
+  '4': 'Accidental request',
+};
+
+function parseCancellationReason(message: string): string | null {
+  const normalized = message.trim().replace(/\s+/g, ' ');
+  if (!normalized || isCancelCommand(normalized)) return null;
+
+  const option = CANCELLATION_REASONS[normalized];
+  if (option) return option;
+
+  // Do not treat an unsupported numeric option as a free-text reason.
+  if (/^\d+$/.test(normalized)) return null;
+
+  return normalized.slice(0, 240);
+}
+
+function isWithdrawalCommand(message: string): boolean {
+  return /^(withdraw|withdrawal|cash\s*out|cashout)$/i.test(message.trim());
+}
+
+function isWithdrawalStatusCommand(message: string): boolean {
+  return /^(withdrawal?\s+status|withdrawals)$/i.test(message.trim());
+}
+
+function isWithdrawalStage(stage: string | null): boolean {
+  return stage === 'awaiting_withdrawal_amount'
+    || stage === 'awaiting_withdrawal_bank'
+    || stage === 'awaiting_withdrawal_account'
+    || stage === 'awaiting_withdrawal_confirmation';
+}
+
+function parseWithdrawalAmount(message: string): number | null {
+  const normalized = message
+    .trim()
+    .replace(/^withdraw(?:al)?\s+/i, '')
+    .replace(/[₦,\s]/g, '');
+  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
+
+  const amount = Number(normalized);
+  return Number.isFinite(amount) && amount > 0
+    ? Math.round(amount * 100) / 100
+    : null;
+}
+
+function normalizeBankSearch(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+async function findWithdrawalBank(
+  pouch: PouchLiquifiaClient,
+  query: string,
+): Promise<{ bank: PouchBankAccount } | { matches: PouchBankAccount[] } | null> {
+  const banks = await pouch.listBanks('NG', 'NGN');
+  const normalizedQuery = normalizeBankSearch(query);
+  const compactQuery = normalizedQuery.replace(/\s+/g, '');
+
+  const exact = banks.filter((bank) => {
+    const name = normalizeBankSearch(bank.name);
+    const code = normalizeBankSearch(bank.code);
+    return name === normalizedQuery
+      || code === normalizedQuery
+      || name.replace(/\s+/g, '') === compactQuery;
+  });
+  if (exact.length === 1) return { bank: exact[0] };
+
+  const matches = banks.filter((bank) => {
+    const name = normalizeBankSearch(bank.name);
+    const code = normalizeBankSearch(bank.code);
+    return name.includes(normalizedQuery)
+      || code.includes(normalizedQuery)
+      || normalizedQuery.includes(name);
+  });
+
+  if (matches.length === 1) return { bank: matches[0] };
+  return matches.length > 0 ? { matches: matches.slice(0, 6) } : null;
+}
+
+async function sendWhatsappText(
+  deps: MetaWhatsappRouteDeps,
+  phone: string,
+  incomingMessage: string,
+  reply: string,
+): Promise<void> {
+  await appendWhatsappConversation(deps.redisClient, phone, [
+    { role: 'user', content: incomingMessage },
+    { role: 'assistant', content: reply },
+  ]);
+  await sendMetaReply(deps, phone, reply);
+}
+
+async function submitWhatsappWithdrawal(params: {
+  deps: MetaWhatsappRouteDeps;
+  userId: string;
+  amountNgn: number;
+  bankUuid: string;
+  accountNumber: string;
+  accountName: string;
+}): Promise<{ id: string; status: string }> {
+  const { deps, userId, amountNgn, bankUuid, accountNumber, accountName } = params;
+  const lockKey = `whatsapp:user:${userId}:withdrawal_submit_lock`;
+  const lockToken = randomUUID();
+  const acquired = await deps.redisClient.setIfNotExists(lockKey, lockToken, 120);
+  if (!acquired) {
+    throw new Error('A withdrawal is already being processed. Please wait a moment.');
+  }
+
+  let reservedRequestId: string | undefined;
+  try {
+    const wallet = await walletClient.findByUserId(userId);
+    if (!wallet) throw new Error('No wallet found. Fund your account first.');
+
+    const virtualAccount = await virtualAccountClient.findByUserId(userId);
+    if (!virtualAccount) {
+      throw new Error('No deposit account found. Please complete wallet setup first.');
+    }
+
+    const reserveResult = await withdrawalClient.reserve({
+      userId,
+      walletId: wallet.id,
+      amountNgn,
+      bankAccountNumber: accountNumber,
+      bankAccountName: accountName,
+      bankNetworkId: bankUuid,
+    });
+    reservedRequestId = reserveResult.request.id;
+
+    const payout = await deps.pouchLiquifiaClient.createPayout({
+      virtualAccountId: virtualAccount.pouchVirtualAccountId,
+      reference: reserveResult.request.id,
+      amount: amountNgn,
+      destinationAccount: accountNumber,
+      destinationBankUuid: bankUuid,
+      idempotencyKey: reserveResult.request.id,
+    });
+
+    await withdrawalClient.attachPayout({
+      withdrawalRequestId: reserveResult.request.id,
+      pouchPayoutId: payout.id,
+      providerReference: payout.reference,
+    });
+
+    const payoutCreatedEvent: PayoutCreatedEvent = {
+      eventType: 'PAYOUT_CREATED',
+      userId,
+      pouchPayoutId: payout.id,
+      withdrawalId: reserveResult.request.id,
+      amountNgn,
+      bankAccountNumber: accountNumber,
+      bankAccountName: accountName,
+      bankNetworkId: bankUuid,
+      timestamp: new Date().toISOString(),
+    };
+    await deps.publisher.publishPaymentEvent(payoutCreatedEvent);
+
+    return {
+      id: reserveResult.request.id,
+      status: 'PAYOUT_CREATED',
+    };
+  } catch (error) {
+    if (reservedRequestId) {
+      await withdrawalClient.releaseFailedRequest({
+        withdrawalRequestId: reservedRequestId,
+        failureReason: error instanceof Error ? error.message : 'Withdrawal creation failed.',
+        status: 'FAILED',
+      }).catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    await deps.redisClient.del(lockKey).catch(() => {});
+  }
+}
+
 /* ─── Main POST webhook handler ─── */
 
 export async function handleMetaWhatsappWebhookRoute(
@@ -431,6 +631,259 @@ export async function handleMetaWhatsappWebhookRoute(
 
     const activeRideId = await getActiveRide(deps.redisClient, user.id);
     const bookingStage = await getBookingStage(deps.redisClient, user.id);
+
+    // ── Cancellation reason — collect this before clearing the booking ──
+    if (bookingStage === 'awaiting_cancel_reason') {
+      const reason = parseCancellationReason(incomingMessage);
+
+      if (!reason) {
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage || '[Shared location pin]' },
+          { role: 'assistant', content: CANCELLATION_REASON_PROMPT },
+        ]);
+        await sendMetaReply(deps, phone, CANCELLATION_REASON_PROMPT);
+        return;
+      }
+
+      if (activeRideId) {
+        const cancelEvent = RideCancelledEvent.parse({
+          eventType: 'RIDE_CANCELLED',
+          rideId: activeRideId,
+          riderId: user.id,
+          reason,
+          timestamp: new Date().toISOString(),
+        });
+        await deps.publisher.publishRideEvent(cancelEvent);
+        await clearActiveRide(deps.redisClient, user.id);
+        await cleanupRideKeys(deps.redisClient, activeRideId);
+        await clearPendingAccept(deps.redisClient, user.id);
+      }
+
+      await clearBookingStage(deps.redisClient, user.id);
+      await clearPendingRoute(deps.redisClient, user.id);
+      await clearPendingLocation(deps.redisClient, user.id);
+
+      const reply = [
+        activeRideId ? 'Ride cancelled.' : 'Booking cancelled.',
+        `Reason: ${reason}`,
+        '',
+        'Any fare held for this ride will be returned to your wallet.',
+      ].join('\n');
+      await appendWhatsappConversation(deps.redisClient, phone, [
+        { role: 'user', content: incomingMessage },
+        { role: 'assistant', content: reply },
+      ]);
+      await sendMetaReply(deps, phone, reply);
+      return;
+    }
+
+    // ── Wallet withdrawal flow ────────────────────────────────────────────
+    if (isWithdrawalCommand(incomingMessage) && !isLocation) {
+      await clearPendingWhatsappWithdrawal(deps.redisClient, user.id);
+      await setBookingStage(deps.redisClient, user.id, 'awaiting_withdrawal_amount');
+
+      const wallet = await walletClient.findByUserId(user.id).catch(() => null);
+      const balance = wallet ? Number(wallet.balanceNgn) : 0;
+      if (!wallet || !Number.isFinite(balance) || balance <= 0) {
+        const va = await virtualAccountClient.findByUserId(user.id).catch(() => null);
+        const reply = [
+          'Your wallet has no available balance to withdraw.',
+          '',
+          va
+            ? `Deposit funds first to *${va.bankName}* account *${va.accountNumber}*.`
+            : 'Deposit funds first, then try *withdraw* again.',
+        ].join('\n');
+        await clearBookingStage(deps.redisClient, user.id);
+        await sendWhatsappText(deps, phone, incomingMessage, reply);
+        return;
+      }
+
+      const reply = `Your available wallet balance is ₦${balance.toLocaleString()}\n\nHow much do you want to withdraw?\nSend an amount, e.g. *5000*.`;
+      await sendWhatsappText(deps, phone, incomingMessage, reply);
+      return;
+    }
+
+    if (isWithdrawalStatusCommand(incomingMessage) && !isLocation) {
+      const latest = (await withdrawalClient.listByUser(user.id, 1).catch(() => []))[0];
+      if (!latest) {
+        await sendWhatsappText(deps, phone, incomingMessage, 'You have no withdrawal requests yet. Reply *withdraw* to start one.');
+        return;
+      }
+
+      const accountLast4 = latest.bankAccountNumber.slice(-4);
+      const failure = latest.failureReason ? `\nReason: ${latest.failureReason}` : '';
+      const reply = [
+        `Withdrawal: ₦${Number(latest.requestedAmountNgn).toLocaleString()}`,
+        `Status: *${latest.status}*`,
+        `Bank account: ••••${accountLast4}`,
+        `Requested: ${latest.createdAt.toLocaleString()}`,
+        failure,
+      ].filter(Boolean).join('\n');
+      await sendWhatsappText(deps, phone, incomingMessage, `${reply}\n\nReply *withdraw status* to check again.`);
+      return;
+    }
+
+    if (isWithdrawalStage(bookingStage)) {
+      const pending = await getPendingWhatsappWithdrawal(deps.redisClient, user.id);
+
+      if (isCancelCommand(incomingMessage)) {
+        await clearPendingWhatsappWithdrawal(deps.redisClient, user.id);
+        await clearBookingStage(deps.redisClient, user.id);
+        await sendWhatsappText(deps, phone, incomingMessage, 'Withdrawal cancelled. Your wallet balance was not changed.');
+        return;
+      }
+
+      if (!pending) {
+        await clearBookingStage(deps.redisClient, user.id);
+        await sendWhatsappText(deps, phone, incomingMessage, 'This withdrawal session expired. Reply *withdraw* to start again.');
+        return;
+      }
+
+      if (bookingStage === 'awaiting_withdrawal_amount') {
+        const amountNgn = parseWithdrawalAmount(incomingMessage);
+        if (amountNgn === null) {
+          await sendWhatsappText(deps, phone, incomingMessage, 'Please send a valid withdrawal amount, e.g. *5000*.');
+          return;
+        }
+
+        const wallet = await walletClient.findByUserId(user.id).catch(() => null);
+        const balance = wallet ? Number(wallet.balanceNgn) : 0;
+        if (!wallet || !Number.isFinite(balance) || balance < amountNgn) {
+          await sendWhatsappText(
+            deps,
+            phone,
+            incomingMessage,
+            `You can withdraw up to ₦${Math.max(0, balance).toLocaleString()}. Please send a lower amount.`,
+          );
+          return;
+        }
+
+        await storePendingWhatsappWithdrawal(deps.redisClient, user.id, { amountNgn });
+        await setBookingStage(deps.redisClient, user.id, 'awaiting_withdrawal_bank');
+        await sendWhatsappText(deps, phone, incomingMessage, 'Which bank should receive the money?\n\nType the bank name, e.g. *GTBank*, *Opay*, or *UBA*.');
+        return;
+      }
+
+      if (bookingStage === 'awaiting_withdrawal_bank') {
+        const bankQuery = incomingMessage.trim();
+        if (!bankQuery) {
+          await sendWhatsappText(deps, phone, incomingMessage, 'Please type the name of the bank that should receive the money.');
+          return;
+        }
+
+        try {
+          const result = await findWithdrawalBank(deps.pouchLiquifiaClient, bankQuery);
+          if (!result) {
+            await sendWhatsappText(deps, phone, incomingMessage, 'I could not find that bank. Please type the bank name again.');
+            return;
+          }
+
+          if ('matches' in result) {
+            const choices = result.matches.map((bank, index) => `${index + 1}. ${bank.name}`).join('\n');
+            await sendWhatsappText(deps, phone, incomingMessage, `I found more than one bank:\n${choices}\n\nPlease type the exact bank name.`);
+            return;
+          }
+
+          await storePendingWhatsappWithdrawal(deps.redisClient, user.id, {
+            ...pending,
+            bankUuid: result.bank.uuid,
+            bankName: result.bank.name,
+          });
+          await setBookingStage(deps.redisClient, user.id, 'awaiting_withdrawal_account');
+          await sendWhatsappText(deps, phone, incomingMessage, `Bank selected: *${result.bank.name}*\n\nSend the 10-digit account number.`);
+        } catch {
+          await sendWhatsappText(deps, phone, incomingMessage, 'I could not load the bank list right now. Please try again in a moment.');
+        }
+        return;
+      }
+
+      if (bookingStage === 'awaiting_withdrawal_account') {
+        const accountNumber = incomingMessage.replace(/\D/g, '');
+        if (!/^\d{10}$/.test(accountNumber) || !pending.bankUuid) {
+          await sendWhatsappText(deps, phone, incomingMessage, 'Please send a valid 10-digit bank account number.');
+          return;
+        }
+
+        try {
+          const verified = await deps.pouchLiquifiaClient.validateBankAccount({
+            accountNumber,
+            bankUuid: pending.bankUuid,
+          });
+          const verifiedAccountNumber = verified.account_number || accountNumber;
+          const accountName = verified.account_name?.trim();
+          if (!accountName) {
+            await sendWhatsappText(deps, phone, incomingMessage, 'I could not verify that account. Check the number and try again.');
+            return;
+          }
+
+          const bankName = verified.bank_name || pending.bankName || 'Selected bank';
+          await storePendingWhatsappWithdrawal(deps.redisClient, user.id, {
+            ...pending,
+            bankName,
+            accountNumber: verifiedAccountNumber,
+            accountName,
+          });
+          await setBookingStage(deps.redisClient, user.id, 'awaiting_withdrawal_confirmation');
+
+          const reply = [
+            'Please confirm this withdrawal:',
+            '',
+            `Amount: *₦${pending.amountNgn.toLocaleString()}*`,
+            `Bank: *${bankName}*`,
+            `Account: *${verifiedAccountNumber}*`,
+            `Name: *${accountName}*`,
+            '',
+            'Reply *yes* to submit or *cancel* to stop.',
+          ].join('\n');
+          await sendWhatsappText(deps, phone, incomingMessage, reply);
+        } catch {
+          await sendWhatsappText(deps, phone, incomingMessage, 'I could not verify that account. Check the bank and account number, then try again.');
+        }
+        return;
+      }
+
+      if (bookingStage === 'awaiting_withdrawal_confirmation') {
+        if (!/^(yes|confirm|proceed|submit)$/i.test(incomingMessage.trim())) {
+          await sendWhatsappText(deps, phone, incomingMessage, 'Reply *yes* to submit the withdrawal or *cancel* to stop.');
+          return;
+        }
+
+        if (!pending.bankUuid || !pending.accountNumber || !pending.accountName) {
+          await clearPendingWhatsappWithdrawal(deps.redisClient, user.id);
+          await clearBookingStage(deps.redisClient, user.id);
+          await sendWhatsappText(deps, phone, incomingMessage, 'This withdrawal session is incomplete. Reply *withdraw* to start again.');
+          return;
+        }
+
+        try {
+          const submitted = await submitWhatsappWithdrawal({
+            deps,
+            userId: user.id,
+            amountNgn: pending.amountNgn,
+            bankUuid: pending.bankUuid,
+            accountNumber: pending.accountNumber,
+            accountName: pending.accountName,
+          });
+          await clearPendingWhatsappWithdrawal(deps.redisClient, user.id);
+          await clearBookingStage(deps.redisClient, user.id);
+
+          const reply = [
+            '✅ Withdrawal submitted successfully.',
+            '',
+            `Amount: *₦${pending.amountNgn.toLocaleString()}*`,
+            `Account: *${pending.accountNumber}*`,
+            `Status: *${submitted.status}*`,
+            '',
+            'Your funds are being sent to your bank account. Reply *withdraw status* to check progress.',
+          ].join('\n');
+          await sendWhatsappText(deps, phone, incomingMessage, reply);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Could not submit withdrawal.';
+          await sendWhatsappText(deps, phone, incomingMessage, `Withdrawal failed: ${message}\n\nYour wallet balance was not permanently deducted. You can try again with *withdraw*.`);
+        }
+        return;
+      }
+    }
 
     // ══════════════════════════════════════════════════════════════════════
     // 1. ACTIVE RIDE — handle accept/counter/more/cancel commands
@@ -542,20 +995,8 @@ export async function handleMetaWhatsappWebhookRoute(
 
       // ── Cancel command ──
       if (isCancelCommand(incomingMessage)) {
-        const cancelEvent = RideCancelledEvent.parse({
-          eventType: 'RIDE_CANCELLED',
-          rideId: activeRideId,
-          riderId: user.id,
-          reason: 'rider_cancelled',
-          timestamp: new Date().toISOString(),
-        });
-        await deps.publisher.publishRideEvent(cancelEvent);
-        await clearActiveRide(deps.redisClient, user.id);
-        await cleanupRideKeys(deps.redisClient, activeRideId);
-        await clearBookingStage(deps.redisClient, user.id);
-        await clearPendingAccept(deps.redisClient, user.id);
-
-        const reply = 'Ride cancelled. Share your location anytime to book a new ride! 📍';
+        await setBookingStage(deps.redisClient, user.id, 'awaiting_cancel_reason');
+        const reply = CANCELLATION_REASON_PROMPT;
         await appendWhatsappConversation(deps.redisClient, phone, [
           { role: 'user', content: incomingMessage },
           { role: 'assistant', content: reply },
@@ -1023,10 +1464,8 @@ export async function handleMetaWhatsappWebhookRoute(
 
     if (bookingStage === 'awaiting_destination' && !isLocation) {
       if (isCancelCommand(incomingMessage)) {
-        await clearPendingLocation(deps.redisClient, user.id);
-        await clearBookingStage(deps.redisClient, user.id);
-
-        const reply = 'Booking cancelled. Share your location anytime to book a new ride! 📍';
+        await setBookingStage(deps.redisClient, user.id, 'awaiting_cancel_reason');
+        const reply = CANCELLATION_REASON_PROMPT;
         await appendWhatsappConversation(deps.redisClient, phone, [
           { role: 'user', content: incomingMessage },
           { role: 'assistant', content: reply },
@@ -1116,11 +1555,8 @@ export async function handleMetaWhatsappWebhookRoute(
     if ((bookingStage === 'editing_pickup' || bookingStage === 'editing_destination') && !isLocation) {
       // Cancel during editing — clear everything
       if (isCancelCommand(incomingMessage)) {
-        await clearPendingRoute(deps.redisClient, user.id);
-        await clearBookingStage(deps.redisClient, user.id);
-        await clearPendingLocation(deps.redisClient, user.id);
-
-        const reply = 'Booking cancelled. Share your location anytime to book a new ride! 📍';
+        await setBookingStage(deps.redisClient, user.id, 'awaiting_cancel_reason');
+        const reply = CANCELLATION_REASON_PROMPT;
         await appendWhatsappConversation(deps.redisClient, phone, [
           { role: 'user', content: incomingMessage },
           { role: 'assistant', content: reply },
@@ -1435,11 +1871,8 @@ export async function handleMetaWhatsappWebhookRoute(
 
         // ── Cancel during awaiting_price ──
         if (isCancelCommand(incomingMessage)) {
-          await clearPendingRoute(deps.redisClient, user.id);
-          await clearBookingStage(deps.redisClient, user.id);
-          await clearPendingLocation(deps.redisClient, user.id);
-
-          const reply = 'Booking cancelled. Share your location anytime to book a new ride! 📍';
+          await setBookingStage(deps.redisClient, user.id, 'awaiting_cancel_reason');
+          const reply = CANCELLATION_REASON_PROMPT;
           await appendWhatsappConversation(deps.redisClient, phone, [
             { role: 'user', content: incomingMessage },
             { role: 'assistant', content: reply },
