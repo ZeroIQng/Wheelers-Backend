@@ -48,8 +48,10 @@ export const walletClient = {
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   create: (userId: string) =>
-    prisma.wallet.create({
-      data: { userId },
+    prisma.wallet.upsert({
+      where: { userId },
+      update: {},
+      create: { userId },
     }),
 
   // ── Atomic balance operations ──────────────────────────────────────────────
