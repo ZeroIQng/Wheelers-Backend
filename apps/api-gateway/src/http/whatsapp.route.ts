@@ -421,7 +421,10 @@ function parseCancellationReason(message: string): string | null {
 }
 
 function isWithdrawalCommand(message: string): boolean {
-  return /^(withdraw|withdrawal|cash\s*out|cashout)$/i.test(message.trim());
+  const m = message.trim().toLowerCase();
+  return /^(withdraw|withdrawal|cash\s*out|cashout)$/i.test(m)
+    || /\b(withdraw|withdrawal|cash\s*out|cashout)\b/i.test(m)
+    || /\b(send|move|transfer)\b.*\b(to\s+)?(my\s+)?(bank|account)\b/i.test(m);
 }
 
 function isWithdrawalStatusCommand(message: string): boolean {
