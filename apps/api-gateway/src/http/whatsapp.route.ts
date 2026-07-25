@@ -533,7 +533,7 @@ async function submitWhatsappWithdrawal(params: {
     const payout = await deps.pouchLiquifiaClient.createPayout({
       virtualAccountId: virtualAccount.pouchVirtualAccountId,
       reference: reserveResult.request.id,
-      amount: amountNgn,
+      amount: Math.round(amountNgn * 100), // Pouch expects kobo
       destinationAccount: accountNumber,
       destinationBankUuid: bankUuid,
       idempotencyKey: reserveResult.request.id,

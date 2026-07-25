@@ -143,7 +143,9 @@ async function handleVirtualAccountCredited(
     'creditedAccountNumber',
     'credited_account_number',
   ]);
-  const amount = pickNumber(data, ['amount', 'amountNgn', 'data.amount']);
+  const rawAmount = pickNumber(data, ['amount', 'amountNgn', 'data.amount']);
+  // Pouch/Liquifia sends amounts in kobo (minor units) — convert to NGN
+  const amount = rawAmount != null ? rawAmount / 100 : undefined;
   const providerReference = pickString(data, [
     'reference',
     'providerReference',
