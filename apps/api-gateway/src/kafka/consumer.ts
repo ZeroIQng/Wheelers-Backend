@@ -620,6 +620,7 @@ async function handleGpsProcessedEvent(
     return;
   }
 
+  // Send to rider — full location data
   await registry.sendToUser(participants.riderId, 'ride:driver_location', {
     rideId: event.rideId,
     lat: event.lat,
@@ -637,6 +638,15 @@ async function handleGpsProcessedEvent(
     nextStopOrder: event.nextStopOrder,
     remainingStopCount: event.remainingStopCount,
   });
+
+  // Send to driver — live distance for trip screen
+  if (participants.driverUserId) {
+    await registry.sendToUser(participants.driverUserId, 'ride:gps_update', {
+      rideId: event.rideId,
+      totalDistanceKm: event.totalDistanceKm,
+      distanceToNextStopKm: event.distanceToNextStopKm,
+    });
+  }
 }
 
 async function handleComplianceEvent(event: ComplianceEvent, registry: SocketRegistry): Promise<void> {
