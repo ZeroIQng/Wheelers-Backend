@@ -736,11 +736,15 @@ export async function handleMetaWhatsappWebhookRoute(
         return;
       }
 
-      if (!pending) {
+      if (!pending && bookingStage !== 'awaiting_withdrawal_amount') {
         await clearBookingStage(deps.redisClient, user.id);
         await sendWhatsappText(deps, phone, incomingMessage, 'This withdrawal session expired. Reply *withdraw* to start again.');
         return;
       }
+
+      // After the guard above, pending is guaranteed non-null for all stages
+      // except awaiting_withdrawal_amount (which doesn't use it).
+      const withdrawal = pending!;
 
       if (bookingStage === 'awaiting_withdrawal_amount') {
         const amountNgn = parseWithdrawalAmount(incomingMessage);
@@ -788,7 +792,7 @@ export async function handleMetaWhatsappWebhookRoute(
           }
 
           await storePendingWhatsappWithdrawal(deps.redisClient, user.id, {
-            ...pending,
+            ...withdrawal,
             bankUuid: result.bank.uuid,
             bankName: result.bank.name,
           });
@@ -802,7 +806,7 @@ export async function handleMetaWhatsappWebhookRoute(
 
       if (bookingStage === 'awaiting_withdrawal_account') {
         const accountNumber = incomingMessage.replace(/\D/g, '');
-        if (!/^\d{10}$/.test(accountNumber) || !pending.bankUuid) {
+        if (!/^\d{10}$/.test(accountNumber) || !withdrawal.bankUuid) {
           await sendWhatsappText(deps, phone, incomingMessage, 'Please send a valid 10-digit bank account number.');
           return;
         }
@@ -810,7 +814,7 @@ export async function handleMetaWhatsappWebhookRoute(
         try {
           const verified = await deps.pouchLiquifiaClient.validateBankAccount({
             accountNumber,
-            bankUuid: pending.bankUuid,
+            bankUuid: withdrawal.bankUuid,
           });
           const verifiedAccountNumber = verified.account_number || accountNumber;
           const accountName = verified.account_name?.trim();
@@ -819,9 +823,9 @@ export async function handleMetaWhatsappWebhookRoute(
             return;
           }
 
-          const bankName = verified.bank_name || pending.bankName || 'Selected bank';
+          const bankName = verified.bank_name || withdrawal.bankName || 'Selected bank';
           await storePendingWhatsappWithdrawal(deps.redisClient, user.id, {
-            ...pending,
+            ...withdrawal,
             bankName,
             accountNumber: verifiedAccountNumber,
             accountName,
@@ -831,7 +835,7 @@ export async function handleMetaWhatsappWebhookRoute(
           const reply = [
             'Please confirm this withdrawal:',
             '',
-            `Amount: *₦${pending.amountNgn.toLocaleString()}*`,
+            `Amount: *₦${withdrawal.amountNgn.toLocaleString()}*`,
             `Bank: *${bankName}*`,
             `Account: *${verifiedAccountNumber}*`,
             `Name: *${accountName}*`,
@@ -851,7 +855,7 @@ export async function handleMetaWhatsappWebhookRoute(
           return;
         }
 
-        if (!pending.bankUuid || !pending.accountNumber || !pending.accountName) {
+        if (!withdrawal.bankUuid || !withdrawal.accountNumber || !withdrawal.accountName) {
           await clearPendingWhatsappWithdrawal(deps.redisClient, user.id);
           await clearBookingStage(deps.redisClient, user.id);
           await sendWhatsappText(deps, phone, incomingMessage, 'This withdrawal session is incomplete. Reply *withdraw* to start again.');
@@ -862,10 +866,10 @@ export async function handleMetaWhatsappWebhookRoute(
           const submitted = await submitWhatsappWithdrawal({
             deps,
             userId: user.id,
-            amountNgn: pending.amountNgn,
-            bankUuid: pending.bankUuid,
-            accountNumber: pending.accountNumber,
-            accountName: pending.accountName,
+            amountNgn: withdrawal.amountNgn,
+            bankUuid: withdrawal.bankUuid,
+            accountNumber: withdrawal.accountNumber,
+            accountName: withdrawal.accountName,
           });
           await clearPendingWhatsappWithdrawal(deps.redisClient, user.id);
           await clearBookingStage(deps.redisClient, user.id);
@@ -873,8 +877,8 @@ export async function handleMetaWhatsappWebhookRoute(
           const reply = [
             '✅ Withdrawal submitted successfully.',
             '',
-            `Amount: *₦${pending.amountNgn.toLocaleString()}*`,
-            `Account: *${pending.accountNumber}*`,
+            `Amount: *₦${withdrawal.amountNgn.toLocaleString()}*`,
+            `Account: *${withdrawal.accountNumber}*`,
             `Status: *${submitted.status}*`,
             '',
             'Your funds are being sent to your bank account. Reply *withdraw status* to check progress.',
