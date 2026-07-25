@@ -1,5 +1,5 @@
 import type { WheelersConsumer } from '@wheleers/kafka-client';
-import { referralClient, walletClient, virtualAccountClient, driverClient } from '@wheleers/db';
+import { referralClient, walletClient, virtualAccountClient, driverClient, userClient } from '@wheleers/db';
 import {
   ComplianceEvent,
   GroupRideEvent,
@@ -275,6 +275,14 @@ async function handleRideEvent(
       }
     } else {
       const riderMatchFees = calculateRideFees(event.agreedFareNgn);
+
+      // Look up driver phone so rider can call them
+      let driverPhone: string | undefined;
+      try {
+        const driver = await driverClient.findById(event.driverId);
+        driverPhone = driver.user.phone ?? undefined;
+      } catch { /* non-critical */ }
+
       await registry.sendToUser(event.riderId, 'ride:matched', {
         rideId: event.rideId,
         driverId: event.driverId,
@@ -286,12 +294,21 @@ async function handleRideEvent(
         agreedFareNgn: riderMatchFees.totalNgn,
         lockedFareNgn: event.lockedFareNgn,
         paymentMethod: event.paymentMethod,
+        driverPhone,
       });
     }
 
     // Notify driver via WebSocket (app) — include fee breakdown
     const matchFees = calculateRideFees(event.agreedFareNgn);
     const driverEarningsNgn = event.agreedFareNgn - matchFees.vatNgn - matchFees.stateLevyNgn;
+
+    // Look up rider phone so driver can call them
+    let riderPhone: string | undefined;
+    try {
+      const riderUser = await userClient.findById(event.riderId);
+      riderPhone = riderUser?.phone ?? undefined;
+    } catch { /* non-critical */ }
+
     await registry.sendToUser(event.driverUserId, 'ride:matched', {
       rideId: event.rideId,
       riderId: event.riderId,
@@ -308,6 +325,7 @@ async function handleRideEvent(
       lockedFareNgn: event.lockedFareNgn,
       paymentMethod: event.paymentMethod,
       riderPaid: true,
+      riderPhone,
     });
 
     return;

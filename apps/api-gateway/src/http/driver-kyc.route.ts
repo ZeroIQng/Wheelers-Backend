@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { driverClient } from '@wheleers/db';
+import { driverClient, userClient } from '@wheleers/db';
 import { verifyLocalAccessToken } from '../auth/local';
 import { isRecord, getString } from '../utils/object';
 import { readJsonBody, sendJson } from './utils';
@@ -60,6 +60,7 @@ export async function handleDriverKycSubmitRoute(
     const vehiclePlate = getString(rawBody, 'vehiclePlate');
     const vehicleYearRaw = rawBody.vehicleYear;
     const vehicleYear = typeof vehicleYearRaw === 'number' ? vehicleYearRaw : undefined;
+    const phone = getString(rawBody, 'phone');
 
     if (!ninImage || !licenceImage || !selfieImage) {
       sendJson(res, 400, { error: 'ninImage, licenceImage, and selfieImage are required (base64)' });
@@ -135,6 +136,11 @@ export async function handleDriverKycSubmitRoute(
       vehiclePlate,
       vehicleYear,
     });
+
+    // Save phone number on user record if provided
+    if (phone) {
+      await userClient.updateProfile(userId, { phone });
+    }
 
     sendJson(res, 200, { status: 'SUBMITTED' });
   } catch (error) {

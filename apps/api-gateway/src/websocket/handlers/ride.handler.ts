@@ -381,11 +381,14 @@ export async function handleRideMessage(
   }
 
   if (type === 'ride:start') {
+    const driverId = getString(payload, 'driverId') ?? auth.driverId;
+    if (!driverId) throw new Error('Missing required field: driverId');
+
     const event = RideStartedEvent.parse({
       eventType: 'RIDE_STARTED',
       rideId: requireString(payload, 'rideId'),
       riderId: requireString(payload, 'riderId'),
-      driverId: requireString(payload, 'driverId'),
+      driverId,
       lockedFareNgn: requireNumber(payload, 'lockedFareNgn'),
       paymentMethod: parsePaymentMethod(payload['paymentMethod']),
       startedAt: getString(payload, 'startedAt') ?? timestamp,
@@ -401,11 +404,14 @@ export async function handleRideMessage(
   }
 
   if (type === 'ride:end') {
+    const endDriverId = getString(payload, 'driverId') ?? auth.driverId;
+    if (!endDriverId) throw new Error('Missing required field: driverId');
+
     const event = RideCompletionRequestedEvent.parse({
       eventType: 'RIDE_COMPLETION_REQUESTED',
       rideId: requireString(payload, 'rideId'),
       riderId: requireString(payload, 'riderId'),
-      driverId: requireString(payload, 'driverId'),
+      driverId: endDriverId,
       fareNgn: getNumber(payload, 'fareNgn'),
       endedBy: normalizeEndedBy(payload['endedBy']),
       completedAt: getString(payload, 'completedAt'),
