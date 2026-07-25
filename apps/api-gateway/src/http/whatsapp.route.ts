@@ -360,8 +360,8 @@ function isMoreCommand(message: string): boolean {
 function isCancelCommand(message: string): boolean {
   const m = message.trim().toLowerCase();
   if (/^cancel$/i.test(m)) return true;
-  return /\b(cancel|stop|end)\b.*\b(ride|trip|booking)\b/i.test(m)
-    || /\b(ride|trip|booking)\b.*\b(cancel|stop|end)\b/i.test(m);
+  return /\b(cancel|stop|end|abort|nevermind|never\s*mind)\b.*\b(ride|trip|booking|withdrawal|withdraw)\b/i.test(m)
+    || /\b(ride|trip|booking|withdrawal|withdraw)\b.*\b(cancel|stop|end|abort)\b/i.test(m);
 }
 
 function isEditPickupCommand(message: string): boolean {
@@ -421,9 +421,12 @@ function parseCancellationReason(message: string): string | null {
 }
 
 function isWithdrawalCommand(message: string): boolean {
-  const m = message.trim().toLowerCase();
+  const m = message.trim();
+  if (isCancelCommand(m)) return false;
+  if (isWithdrawalStatusCommand(m)) return false;
   return /^(withdraw|withdrawal|cash\s*out|cashout)$/i.test(m)
-    || /\b(withdraw|withdrawal|cash\s*out|cashout)\b/i.test(m)
+    || /\b(i\s+)?(want|wanna|need|like)\s+(to\s+)?(withdraw|cash\s*out)\b/i.test(m)
+    || /^(withdraw|withdrawal|cash\s*out|cashout)\b/i.test(m)
     || /\b(send|move|transfer)\b.*\b(to\s+)?(my\s+)?(bank|account)\b/i.test(m);
 }
 
@@ -772,6 +775,25 @@ export async function handleMetaWhatsappWebhookRoute(
       }
 
       if (bookingStage === 'awaiting_withdrawal_bank') {
+        // If the user sends a number (possibly prefixed with filler words), they're correcting the amount
+        const correctedAmount = parseWithdrawalAmount(
+          incomingMessage.trim().replace(/^(no|nah|wait|actually|i\s+meant?|not|sorry|change\s+to)\s+/i, ''),
+        );
+        if (correctedAmount !== null) {
+          const wallet = await walletClient.findByUserId(user.id).catch(() => null);
+          const balance = wallet ? Number(wallet.balanceNgn) : 0;
+          if (!wallet || !Number.isFinite(balance) || balance < correctedAmount) {
+            await sendWhatsappText(
+              deps, phone, incomingMessage,
+              `You can withdraw up to ₦${Math.max(0, balance).toLocaleString()}. Please send a lower amount.`,
+            );
+            return;
+          }
+          await storePendingWhatsappWithdrawal(deps.redisClient, user.id, { amountNgn: correctedAmount });
+          await sendWhatsappText(deps, phone, incomingMessage, `Amount updated to *₦${correctedAmount.toLocaleString()}*.\n\nWhich bank should receive the money?\nType the bank name, e.g. *GTBank*, *Opay*, or *UBA*.`);
+          return;
+        }
+
         const bankQuery = incomingMessage.trim();
         if (!bankQuery) {
           await sendWhatsappText(deps, phone, incomingMessage, 'Please type the name of the bank that should receive the money.');
