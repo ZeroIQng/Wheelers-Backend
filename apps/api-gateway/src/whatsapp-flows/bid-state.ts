@@ -206,6 +206,8 @@ export async function cleanupRideKeys(
     redis.del(rideBidsKey(rideId)),
     redis.del(rideStateKey(rideId)),
     redis.del(debounceKey(rideId)),
+    redis.del(lastBatchKey(rideId)),
+    redis.del(acceptedBidKey(rideId)),
   ]).catch(() => {});
 }
 

@@ -224,11 +224,13 @@ async function handleRideEvent(
         await sendBidTimeoutNotification(deps.whatsappNotifier, phone).catch(() => {});
       }
       await clearActiveRide(deps.redisClient, event.riderId);
+      await cleanupRideKeys(deps.redisClient, event.rideId);
     } else {
       await registry.sendToUser(event.riderId, 'ride:bid_timeout', {
         rideId: event.rideId,
       });
     }
+    rideParticipants.delete(event.rideId);
     return;
   }
 
