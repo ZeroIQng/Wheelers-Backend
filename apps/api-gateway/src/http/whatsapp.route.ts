@@ -326,7 +326,7 @@ function extractMetaMessage(body: unknown): MetaMessageInfo | null {
 /* ─── Parse bid commands from user text ─── */
 
 function parseAcceptCommand(message: string): number | null {
-  const match = message.match(/^accept\s+(\d+)$/i);
+  const match = message.match(/(?:^|\bi\s+)accept\s+(\d+)$/i);
   if (match) return parseInt(match[1], 10);
   return null;
 }
