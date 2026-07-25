@@ -553,9 +553,10 @@ export async function handleCreateWalletWithdrawalRoute(
         const payout = await deps.pouchLiquifiaClient.createPayout({
           virtualAccountId: virtualAccount.pouchVirtualAccountId,
           reference: reserveResult.request.id,
-          amount: Math.round(requestedAmountNgn * 100), // Pouch expects kobo
+          amount: requestedAmountNgn,
           destinationAccount: accountNumber,
           destinationBankUuid: bankUuid,
+          idempotencyKey: reserveResult.request.id,
         });
 
         // Attach the payout to the withdrawal request
@@ -613,7 +614,12 @@ export async function handleCreateWalletWithdrawalRoute(
               : "Withdrawal creation failed.",
           status: "FAILED",
         })
-        .catch(() => undefined);
+        .catch((releaseErr) => {
+          console.error('[api-gateway][wallet-withdrawal] failed to release reservation', {
+            withdrawalRequestId: reservedRequestId,
+            error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr),
+          });
+        });
     }
 
     sendJson(res, 400, {

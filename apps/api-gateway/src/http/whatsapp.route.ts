@@ -545,7 +545,7 @@ async function submitWhatsappWithdrawal(params: {
     const payout = await deps.pouchLiquifiaClient.createPayout({
       virtualAccountId: virtualAccount.pouchVirtualAccountId,
       reference: reserveResult.request.id,
-      amount: Math.round(amountNgn * 100), // Pouch expects kobo
+      amount: amountNgn,
       destinationAccount: accountNumber,
       destinationBankUuid: bankUuid,
       idempotencyKey: reserveResult.request.id,
@@ -690,27 +690,33 @@ export async function handleMetaWhatsappWebhookRoute(
     }
 
     // ── Wallet withdrawal flow ────────────────────────────────────────────
-    if (isWithdrawalCommand(incomingMessage) && !isLocation) {
+    if (isWithdrawalCommand(incomingMessage) && !isLocation && !activeRideId) {
       await clearPendingWhatsappWithdrawal(deps.redisClient, user.id);
       await setBookingStage(deps.redisClient, user.id, 'awaiting_withdrawal_amount');
 
       const wallet = await walletClient.findByUserId(user.id).catch(() => null);
       const balance = wallet ? Number(wallet.balanceNgn) : 0;
-      if (!wallet || !Number.isFinite(balance) || balance <= 0) {
+      const MIN_WITHDRAWAL_NGN = 5000;
+
+      if (!wallet || !Number.isFinite(balance) || balance < MIN_WITHDRAWAL_NGN) {
         const va = await virtualAccountClient.findByUserId(user.id).catch(() => null);
-        const reply = [
-          'Your wallet has no available balance to withdraw.',
+        const shortage = MIN_WITHDRAWAL_NGN - Math.max(0, balance);
+        const lines = [
+          balance > 0
+            ? `Your wallet balance is ₦${balance.toLocaleString()}, but the minimum withdrawal is ₦${MIN_WITHDRAWAL_NGN.toLocaleString()}.`
+            : 'Your wallet has no available balance to withdraw.',
           '',
-          va
-            ? `Deposit funds first to *${va.bankName}* account *${va.accountNumber}*.`
-            : 'Deposit funds first, then try *withdraw* again.',
-        ].join('\n');
+          `Top up at least ₦${shortage.toLocaleString()} to withdraw.`,
+        ];
+        if (va) {
+          lines.push('', `Deposit to *${va.bankName}*`, `\`\`\`${va.accountNumber}\`\`\``);
+        }
         await clearBookingStage(deps.redisClient, user.id);
-        await sendWhatsappText(deps, phone, incomingMessage, reply);
+        await sendWhatsappText(deps, phone, incomingMessage, lines.join('\n'));
         return;
       }
 
-      const reply = `Your available wallet balance is ₦${balance.toLocaleString()}\n\nHow much do you want to withdraw?\nSend an amount, e.g. *5000*.`;
+      const reply = `Your available wallet balance is ₦${balance.toLocaleString()}\n\nHow much do you want to withdraw? (Minimum ₦${MIN_WITHDRAWAL_NGN.toLocaleString()})\nSend an amount, e.g. *5000*.`;
       await sendWhatsappText(deps, phone, incomingMessage, reply);
       return;
     }
@@ -735,7 +741,7 @@ export async function handleMetaWhatsappWebhookRoute(
       return;
     }
 
-    if (isWithdrawalStage(bookingStage)) {
+    if (isWithdrawalStage(bookingStage) && !activeRideId) {
       const pending = await getPendingWhatsappWithdrawal(deps.redisClient, user.id);
 
       if (isCancelCommand(incomingMessage)) {
@@ -1205,11 +1211,9 @@ export async function handleMetaWhatsappWebhookRoute(
       const acceptNum = parseAcceptCommand(incomingMessage);
       if (acceptNum !== null) {
         const lastBatch = await getLastBatch(deps.redisClient, activeRideId);
-        const bidIndex = acceptNum - 1; // 1-indexed to 0-indexed
-        const selectedBid = lastBatch[bidIndex];
 
         if (lastBatch.length === 0) {
-          const reply = 'No drivers have bid yet. Hold tight — we\'ll notify you when drivers respond! 🔍';
+          const reply = 'No drivers have bid yet. Hold tight — we\'ll notify you when drivers respond!';
           await appendWhatsappConversation(deps.redisClient, phone, [
             { role: 'user', content: incomingMessage },
             { role: 'assistant', content: reply },
@@ -1217,6 +1221,9 @@ export async function handleMetaWhatsappWebhookRoute(
           await sendMetaReply(deps, phone, reply);
           return;
         }
+
+        const bidIndex = acceptNum - 1;
+        const selectedBid = lastBatch[bidIndex];
 
         if (!selectedBid) {
           const reply = `Invalid driver number. Reply with a number from 1 to ${lastBatch.length}.`;

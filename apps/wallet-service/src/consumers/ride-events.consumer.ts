@@ -55,7 +55,7 @@ export function createRideEventsConsumer(params: {
             reason: 'ride_fare_hold',
           }, { key: event.rideId });
         } catch (error) {
-          console.warn(`[${serviceId}] lock failed:`, getErrorMessage(error));
+          console.error(`[${serviceId}] CRITICAL: ride hold creation failed for ride ${event.rideId}:`, getErrorMessage(error));
         }
 
         return;
@@ -131,7 +131,7 @@ export function createRideEventsConsumer(params: {
             referenceId: event.rideId,
           }, { key: event.rideId });
         } catch (error) {
-          console.warn(`[${serviceId}] ride settlement failed:`, getErrorMessage(error));
+          console.error(`[${serviceId}] CRITICAL: ride settlement failed for ride ${event.rideId}:`, getErrorMessage(error));
         }
 
         return;

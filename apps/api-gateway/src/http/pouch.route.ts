@@ -7,6 +7,7 @@ import type {
   PayoutFailedEvent,
 } from '@wheleers/kafka-schemas';
 import type { GatewayPublisher } from '../websocket/publisher';
+import type { RedisClient } from '../redis/client';
 import { isRecord, pickNumber, pickString } from '../utils/object';
 import { parseJsonBuffer, readRawBody, sendJson } from './utils';
 
@@ -17,6 +18,7 @@ import { parseJsonBuffer, readRawBody, sendJson } from './utils';
 export interface PouchWebhookRouteDeps {
   publisher: GatewayPublisher;
   webhookSecret?: string;
+  redisClient?: RedisClient;
 }
 
 /* ------------------------------------------------------------------ */
@@ -80,9 +82,25 @@ export async function handlePouchWebhookRoute(
       return;
     }
 
-    /* ---------- dispatch by event type ---------- */
+    /* ---------- deduplicate webhook events ---------- */
 
     const data = unwrapData(parsedBody);
+    const dedupRef = pickString(data, [
+      'reference', 'providerReference', 'transactionReference',
+      'transaction_reference', 'id', 'eventId', 'event_id',
+    ]);
+
+    if (dedupRef && deps.redisClient) {
+      const dedupKey = `pouch:webhook:${eventName}:${dedupRef}`;
+      const isNew = await deps.redisClient.setIfNotExists(dedupKey, '1', 86400);
+      if (!isNew) {
+        console.log('[api-gateway][pouch-webhook] duplicate event skipped', { eventName, dedupRef });
+        sendJson(res, 200, { received: true, processed: false, reason: 'Duplicate event' });
+        return;
+      }
+    }
+
+    /* ---------- dispatch by event type ---------- */
 
     switch (eventName) {
       case 'inbound_transfer.received':

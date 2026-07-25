@@ -1160,6 +1160,7 @@ async function bootstrap(): Promise<void> {
       await handlePouchWebhookRoute(req, res, {
         publisher,
         webhookSecret: gatewayEnv.POUCH_WEBHOOK_SECRET,
+        redisClient: redisCommandClient,
       });
 
       return;
