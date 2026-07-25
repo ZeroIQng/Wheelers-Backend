@@ -8,6 +8,9 @@ export const virtualAccountClient = {
   findByPouchVirtualAccountId: (pouchVirtualAccountId: string) =>
     prisma.virtualAccount.findUnique({ where: { pouchVirtualAccountId } }),
 
+  findByAccountNumber: (accountNumber: string) =>
+    prisma.virtualAccount.findFirst({ where: { accountNumber } }),
+
   create: (data: {
     userId: string;
     pouchCustomerId: string;

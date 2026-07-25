@@ -85,10 +85,12 @@ export async function handlePouchWebhookRoute(
     const data = unwrapData(parsedBody);
 
     switch (eventName) {
+      case 'inbound_transfer.received':
       case 'virtual_account.credited':
         await handleVirtualAccountCredited(data, deps.publisher);
         break;
 
+      case 'payout.completed':
       case 'payout.success':
         await handlePayoutSuccess(data, deps.publisher);
         break;
@@ -123,34 +125,67 @@ async function handleVirtualAccountCredited(
   const pouchVaId = pickString(data, [
     'virtualAccountId',
     'virtual_account_id',
+    'virtualAccount.id',
+    'virtual_account.id',
+    'destinationVirtualAccountId',
+    'destination_virtual_account_id',
+    'account.id',
+    'account.uuid',
+    'walletId',
+    'wallet_id',
     'data.virtualAccountId',
+  ]);
+  const accountNumber = pickString(data, [
+    'accountNumber',
+    'account_number',
+    'virtualAccount.accountNumber',
+    'virtual_account.account_number',
+    'creditedAccountNumber',
+    'credited_account_number',
   ]);
   const amount = pickNumber(data, ['amount', 'amountNgn', 'data.amount']);
   const providerReference = pickString(data, [
     'reference',
     'providerReference',
+    'transactionReference',
+    'transaction_reference',
+    'transferId',
+    'transfer_id',
+    'transactionId',
+    'transaction_id',
+    'paymentReference',
+    'payment_reference',
+    'eventId',
+    'event_id',
+    'id',
     'data.reference',
   ]);
 
-  if (!pouchVaId || !amount || !providerReference) {
+  if ((!pouchVaId && !accountNumber) || !amount || !providerReference) {
     console.warn('[api-gateway][pouch-webhook] virtual_account.credited missing fields', {
       pouchVaId: pouchVaId ?? null,
+      accountNumber: accountNumber ?? null,
       amount: amount ?? null,
       providerReference: providerReference ?? null,
     });
     return;
   }
 
-  const virtualAccount = await virtualAccountClient.findByPouchVirtualAccountId(pouchVaId);
+  const virtualAccount = pouchVaId
+    ? await virtualAccountClient.findByPouchVirtualAccountId(pouchVaId)
+    : await virtualAccountClient.findByAccountNumber(accountNumber!);
   if (!virtualAccount) {
-    console.warn('[api-gateway][pouch-webhook] virtual account not found', { pouchVaId });
+    console.warn('[api-gateway][pouch-webhook] virtual account not found', {
+      pouchVaId: pouchVaId ?? null,
+      accountNumber: accountNumber ?? null,
+    });
     return;
   }
 
   const event: VirtualAccountCreditedEvent = {
     eventType: 'VIRTUAL_ACCOUNT_CREDITED',
     userId: virtualAccount.userId,
-    pouchVirtualAccountId: pouchVaId,
+    pouchVirtualAccountId: virtualAccount.pouchVirtualAccountId,
     amountNgn: amount,
     bankName: pickString(data, ['bankName', 'bank_name', 'senderBankName']) ?? undefined,
     senderAccountNumber: pickString(data, ['senderAccountNumber', 'sender_account_number']) ?? undefined,
@@ -175,11 +210,17 @@ async function handlePayoutSuccess(
   const providerReference = pickString(data, [
     'reference',
     'providerReference',
+    'transactionReference',
+    'transaction_reference',
+    'payoutReference',
+    'payout_reference',
     'data.reference',
   ]);
   const pouchPayoutId = pickString(data, [
     'payoutId',
     'pouchPayoutId',
+    'payout_id',
+    'id',
     'data.payoutId',
   ]);
 
@@ -279,15 +320,28 @@ async function handlePayoutFailed(
 /*  Webhook helpers                                                   */
 /* ------------------------------------------------------------------ */
 
-function getWebhookSignature(req: IncomingMessage): string | null {
+function getWebhookSignature(
+  req: IncomingMessage,
+): { value: string; algorithm: 'sha512' | 'sha256' } | null {
+  const liquifiaHeader = req.headers['x-liquifia-signature'];
+  if (typeof liquifiaHeader === 'string' && liquifiaHeader.trim().length > 0) {
+    return { value: liquifiaHeader.trim(), algorithm: 'sha512' };
+  }
+
+  if (Array.isArray(liquifiaHeader)) {
+    const first = liquifiaHeader.find((value) => typeof value === 'string' && value.trim().length > 0);
+    if (first) return { value: first.trim(), algorithm: 'sha512' };
+  }
+
+  // Backward compatibility with the previous internal webhook contract.
   const header = req.headers['x-webhook-signature'];
   if (typeof header === 'string' && header.trim().length > 0) {
-    return header.trim();
+    return { value: header.trim(), algorithm: 'sha256' };
   }
 
   if (Array.isArray(header)) {
     const first = header.find((value) => typeof value === 'string' && value.trim().length > 0);
-    return first?.trim() ?? null;
+    return first ? { value: first.trim(), algorithm: 'sha256' } : null;
   }
 
   return null;
@@ -295,17 +349,21 @@ function getWebhookSignature(req: IncomingMessage): string | null {
 
 function isValidWebhookSignature(
   rawBody: Buffer,
-  signatureHeader: string,
+  signature: { value: string; algorithm: 'sha512' | 'sha256' } | null,
   secret: string,
 ): boolean {
-  const expectedHex = createHmac('sha256', secret).update(rawBody).digest('hex');
-  const normalizedSignature = signatureHeader.startsWith('sha256=')
-    ? signatureHeader.slice('sha256='.length)
-    : signatureHeader;
+  if (!signature) return false;
+
+  const prefix = `${signature.algorithm}=`;
+  const normalizedSignature = signature.value.startsWith(prefix)
+    ? signature.value.slice(prefix.length)
+    : signature.value;
+  const expected = createHmac(signature.algorithm, secret).update(rawBody).digest();
 
   try {
-    const provided = Buffer.from(normalizedSignature, 'hex');
-    const expected = Buffer.from(expectedHex, 'hex');
+    const provided = /^[0-9a-f]+$/i.test(normalizedSignature)
+      ? Buffer.from(normalizedSignature, 'hex')
+      : Buffer.from(normalizedSignature, 'base64');
 
     if (provided.length !== expected.length) {
       return false;
@@ -320,7 +378,8 @@ function isValidWebhookSignature(
 function extractEventName(payload: Record<string, unknown>): string | null {
   return (
     pickString(payload, ['event', 'eventType', 'type']) ??
-    pickString(payload, ['data.event', 'data.eventType']) ??
+    pickString(payload, ['event_name']) ??
+    pickString(payload, ['data.event', 'data.eventType', 'data.event_name']) ??
     null
   );
 }
