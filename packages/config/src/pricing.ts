@@ -69,10 +69,10 @@ export type RideFeeBreakdown = {
 };
 
 /**
- * Rider's offer is inclusive of all taxes and fees.
- * fareNgn = what the rider offered / agreed to pay (total).
- * VAT, state levy, and service fee are deducted from this amount.
- * Driver receives fareNgn minus all deductions.
+ * fareNgn = the agreed fare (rider's offer / negotiated price).
+ * Service fee (₦200) is added ON TOP — rider pays fareNgn + serviceFeeNgn.
+ * VAT and state levy are deducted from the fare (driver side).
+ * Driver receives fareNgn minus VAT and state levy.
  * Platform receives VAT + state levy + service fee.
  */
 export function calculateRideFees(fareNgn: number): RideFeeBreakdown {
@@ -80,8 +80,8 @@ export function calculateRideFees(fareNgn: number): RideFeeBreakdown {
   const vatNgn = round2(fareNgn * VAT_RATE);
   const serviceFeeNgn = SERVICE_FEE_NGN;
   const platformTotalNgn = round2(vatNgn + stateLevyNgn + serviceFeeNgn);
-  const driverPayoutNgn = round2(fareNgn - platformTotalNgn);
-  const totalNgn = fareNgn;
+  const driverPayoutNgn = round2(fareNgn - vatNgn - stateLevyNgn);
+  const totalNgn = round2(fareNgn + serviceFeeNgn);
   return { fareNgn, vatNgn, stateLevyNgn, serviceFeeNgn, platformTotalNgn, driverPayoutNgn, totalNgn };
 }
 
