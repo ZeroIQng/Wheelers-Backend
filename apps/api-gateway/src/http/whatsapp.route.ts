@@ -309,7 +309,13 @@ function extractMetaMessage(body: unknown): MetaMessageInfo | null {
         }
       }
 
-      // Default: treat as empty
+      // Ignore reactions, read receipts, and other non-content message types
+      const msgType = msg.type as string | undefined;
+      if (msgType === 'reaction' || msgType === 'system' || msgType === 'unsupported' || msgType === 'order' || msgType === 'ephemeral') {
+        return null;
+      }
+
+      // Default: treat as empty (stickers, images, audio, video, etc.)
       return { messageId: wamid, phone, profileName, messageBody: '', isLocation: false };
     }
   }
@@ -756,6 +762,12 @@ export async function handleMetaWhatsappWebhookRoute(
           return;
         }
 
+        const MIN_WITHDRAWAL_NGN = 5000;
+        if (amountNgn < MIN_WITHDRAWAL_NGN) {
+          await sendWhatsappText(deps, phone, incomingMessage, `The minimum withdrawal amount is ₦${MIN_WITHDRAWAL_NGN.toLocaleString()}. Please send a higher amount.`);
+          return;
+        }
+
         const wallet = await walletClient.findByUserId(user.id).catch(() => null);
         const balance = wallet ? Number(wallet.balanceNgn) : 0;
         if (!wallet || !Number.isFinite(balance) || balance < amountNgn) {
@@ -763,7 +775,7 @@ export async function handleMetaWhatsappWebhookRoute(
             deps,
             phone,
             incomingMessage,
-            `You can withdraw up to ₦${Math.max(0, balance).toLocaleString()}. Please send a lower amount.`,
+            `You can withdraw up to ₦${Math.max(0, balance).toLocaleString()}. Please send a higher balance or top up first.`,
           );
           return;
         }
@@ -780,12 +792,17 @@ export async function handleMetaWhatsappWebhookRoute(
           incomingMessage.trim().replace(/^(no|nah|wait|actually|i\s+meant?|not|sorry|change\s+to)\s+/i, ''),
         );
         if (correctedAmount !== null) {
+          const MIN_WITHDRAWAL_NGN = 5000;
+          if (correctedAmount < MIN_WITHDRAWAL_NGN) {
+            await sendWhatsappText(deps, phone, incomingMessage, `The minimum withdrawal amount is ₦${MIN_WITHDRAWAL_NGN.toLocaleString()}. Please send a higher amount.`);
+            return;
+          }
           const wallet = await walletClient.findByUserId(user.id).catch(() => null);
           const balance = wallet ? Number(wallet.balanceNgn) : 0;
           if (!wallet || !Number.isFinite(balance) || balance < correctedAmount) {
             await sendWhatsappText(
               deps, phone, incomingMessage,
-              `You can withdraw up to ₦${Math.max(0, balance).toLocaleString()}. Please send a lower amount.`,
+              `You can withdraw up to ₦${Math.max(0, balance).toLocaleString()}. Please send a higher balance or top up first.`,
             );
             return;
           }
@@ -907,8 +924,11 @@ export async function handleMetaWhatsappWebhookRoute(
           ].join('\n');
           await sendWhatsappText(deps, phone, incomingMessage, reply);
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Could not submit withdrawal.';
-          await sendWhatsappText(deps, phone, incomingMessage, `Withdrawal failed: ${message}\n\nYour wallet balance was not permanently deducted. You can try again with *withdraw*.`);
+          console.error('[whatsapp] withdrawal submit error', {
+            userId: user.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          await sendWhatsappText(deps, phone, incomingMessage, 'Withdrawal failed. Please try again later.\n\nYour wallet balance was not deducted. Reply *withdraw* to retry.');
         }
         return;
       }
