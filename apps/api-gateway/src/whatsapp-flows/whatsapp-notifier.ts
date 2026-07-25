@@ -145,7 +145,7 @@ export async function sendBidTimeoutNotification(
   await sendMetaWhatsappMessage(
     deps,
     phone,
-    'No drivers accepted your ride request. Try again — share your location to book a new ride!',
+    'No driver accepted this ride request. Please try booking another ride.',
   );
 }
 
