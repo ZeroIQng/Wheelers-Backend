@@ -240,14 +240,19 @@ export function createRideRequestedConsumer(params: {
 
       console.log(`[ride-service] rider counter-offer on ride ${event.rideId} to driver ${event.driverId}: ₦${event.counterOfferNgn}`);
     } else {
-      // Broadcast to ALL candidate drivers (WhatsApp flow — no specific driver targeted)
+      // Send updated offer to ALL candidate drivers (WhatsApp flow — no specific driver targeted)
       if (pending.candidates.length > 0) {
-        await rideEventsProducer.broadcastRideOffer({
-          drivers: pending.candidates,
-          rideRequested: pending.rideRequested,
-          expiresAt,
-        });
-        console.log(`[ride-service] rider counter-offer on ride ${event.rideId} broadcast to ${pending.candidates.length} drivers: ₦${event.counterOfferNgn}`);
+        await Promise.all(
+          pending.candidates.map((driver) =>
+            rideEventsProducer.sendUpdatedOfferToDriver({
+              driver,
+              rideRequested: pending.rideRequested,
+              updatedOfferNgn: event.counterOfferNgn,
+              expiresAt,
+            }),
+          ),
+        );
+        console.log(`[ride-service] rider counter-offer on ride ${event.rideId} sent to ${pending.candidates.length} drivers: ₦${event.counterOfferNgn}`);
       }
     }
   }
