@@ -41,6 +41,7 @@ import {
   getLastBatch,
   storeLastBatch,
   setRideState,
+  getRideState,
   getRideMeta,
   storeAcceptedBid,
   storePendingRoute,
@@ -945,6 +946,27 @@ export async function handleMetaWhatsappWebhookRoute(
     // ══════════════════════════════════════════════════════════════════════
 
     if (activeRideId && !isLocation) {
+      // ── Ride already confirmed/in progress — only allow cancel ──
+      const rideState = await getRideState(deps.redisClient, activeRideId).catch(() => null);
+      const confirmedStates = ['confirmed', 'in_progress', 'driver_assigned'];
+      if (rideState && confirmedStates.includes(rideState)) {
+        if (isCancelCommand(incomingMessage)) {
+          await setBookingStage(deps.redisClient, user.id, 'awaiting_cancel_reason');
+          await sendMetaReply(deps, phone, CANCELLATION_REASON_PROMPT);
+          return;
+        }
+        const acceptedBid = await deps.redisClient.get(`whatsapp:ride:${activeRideId}:accepted`).catch(() => null);
+        const accepted = acceptedBid ? JSON.parse(acceptedBid) : null;
+        const driverName = accepted?.driverName ?? 'your driver';
+        const reply = `Your ride with *${driverName}* is in progress. Sit tight! 🚗\n\nReply *cancel* if you need to cancel.`;
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage },
+          { role: 'assistant', content: reply },
+        ]);
+        await sendMetaReply(deps, phone, reply);
+        return;
+      }
+
       // ── Edit pickup / destination during active ride ──
       if (isEditPickupCommand(incomingMessage) || isEditDestinationCommand(incomingMessage)) {
         const isPickup = isEditPickupCommand(incomingMessage);
@@ -1198,6 +1220,9 @@ export async function handleMetaWhatsappWebhookRoute(
           ``,
           `Your driver is on the way! 🚗`,
         ].join('\n');
+
+        // Clear pending accept so rider can't accidentally pay twice
+        await clearPendingAccept(deps.redisClient, user.id);
 
         await appendWhatsappConversation(deps.redisClient, phone, [
           { role: 'user', content: incomingMessage },
