@@ -526,10 +526,9 @@ async function handleWalletEvent(
 
     // Check if this rider has an active ride — notify driver that rider funded wallet
     const waRider = await isWhatsappRider(deps.redisClient, event.userId);
-    if (waRider && deps.whatsappNotifier) {
-      const phone = await lookupPhoneByUserId(deps.redisClient, event.userId);
-      let handledByRide = false;
+    let handledByRide = false;
 
+    if (waRider && deps.whatsappNotifier) {
       // Find the active ride and its driver
       for (const [rideId, participants] of rideParticipants) {
         if (participants.riderId === event.userId && participants.driverUserId) {
@@ -542,6 +541,7 @@ async function handleWalletEvent(
               message: 'Rider has funded their wallet. You can start heading to pickup!',
             });
             // Also send WhatsApp confirmation to rider
+            const phone = await lookupPhoneByUserId(deps.redisClient, event.userId);
             if (phone) {
               await sendRiderPaidNotification(deps.whatsappNotifier, phone, event.newBalanceNgn)
                 .catch(() => {});
@@ -551,9 +551,12 @@ async function handleWalletEvent(
           break;
         }
       }
+    }
 
-      // No active ride — send generic deposit confirmation
-      if (!handledByRide && phone && event.creditType === 'deposit') {
+    // No active ride — send generic deposit confirmation to WhatsApp users
+    if (!handledByRide && deps.whatsappNotifier && event.creditType === 'deposit') {
+      const phone = await lookupPhoneByUserId(deps.redisClient, event.userId);
+      if (phone) {
         await sendDepositConfirmation(deps.whatsappNotifier, phone, event.amountNgn, event.newBalanceNgn)
           .catch(() => {});
       }
