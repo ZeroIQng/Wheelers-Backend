@@ -124,9 +124,35 @@ async function bootstrap(): Promise<void> {
 
   const driverEventsConsumer = createDriverEventsConsumer({
     state,
-    onDriverOnline: async ({ driverId }) => {
-      // no-op hook for now (room for redis pool etc.)
-      void driverId;
+    onDriverOnline: async (event) => {
+      // Check pending ride searches and send offers to this newly-online driver
+      const radiusKm = Number(rideEnv.MATCH_RADIUS_KM);
+      const driver = state.onlineDrivers.get(event.driverId);
+      if (!driver) return;
+
+      for (const [, pending] of state.pendingMatchesByRideId) {
+        // Skip if this driver already has been offered or rejected this ride
+        if (pending.attemptedDriverIds.has(event.driverId)) continue;
+        if (pending.candidates.some((c) => c.driverId === event.driverId)) continue;
+
+        const dist = haversineKm(
+          pending.rideRequested.pickup.lat,
+          pending.rideRequested.pickup.lng,
+          driver.lat,
+          driver.lng,
+        );
+        if (dist <= radiusKm) {
+          // Add to candidates and send offer
+          pending.candidates.push(driver);
+          const expiresAt = new Date(Date.now() + 3 * 60 * 1000);
+          await rideEventsProducer.broadcastRideOffer({
+            drivers: [driver],
+            rideRequested: pending.rideRequested,
+            expiresAt,
+          });
+          console.log(`[ride-service] sent pending ride ${pending.rideRequested.rideId} to newly online driver ${event.driverId} (${dist.toFixed(1)}km away)`);
+        }
+      }
     },
     onDriverOffline: async ({ driverId }) => {
       void driverId;
@@ -196,4 +222,16 @@ async function bootstrap(): Promise<void> {
   });
 
   console.log(`[${SERVICE_ID}] consuming (matchRadiusKm=${rideEnv.MATCH_RADIUS_KM})`);
+}
+
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = (n: number) => (n * Math.PI) / 180;
+  const r = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return r * c;
 }

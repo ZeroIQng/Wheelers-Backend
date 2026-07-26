@@ -210,12 +210,13 @@ export const RideDriverRejectedEvent = BaseRideEvent.extend({
   reason:     z.enum(['timeout', 'manual_reject']),
 });
 
-// Fired by api-gateway when rider sends a counter-offer to a specific driver.
-// Consumed by: ride-service (update pending match, re-broadcast to targeted driver).
+// Fired by api-gateway when rider sends a counter-offer.
+// driverId is optional — if omitted, ride-service broadcasts to ALL candidate drivers.
+// Consumed by: ride-service (update pending match, re-broadcast to driver(s)).
 export const RideRiderCounterOfferEvent = BaseRideEvent.extend({
   eventType:        z.literal('RIDE_RIDER_COUNTER_OFFER'),
   riderId:          z.string().uuid(),
-  driverId:         z.string().uuid(),
+  driverId:         z.string().uuid().optional(),
   counterOfferNgn:  z.number(),
 });
 

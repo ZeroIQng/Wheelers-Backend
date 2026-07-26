@@ -219,24 +219,37 @@ export function createRideRequestedConsumer(params: {
     }
     startBidTimeout(pending.rideRequested);
 
-    // Find the targeted driver to re-send the updated offer
-    const driver = pending.candidates.find((d) => d.driverId === event.driverId)
-      ?? state.onlineDrivers.get(event.driverId);
-
-    if (!driver) {
-      console.warn(`[ride-service] rider counter-offer: driver ${event.driverId} not found for ride ${event.rideId}`);
-      return;
-    }
-
     const expiresAt = new Date(Date.now() + BID_TIMEOUT_MS);
-    await rideEventsProducer.sendUpdatedOfferToDriver({
-      driver,
-      rideRequested: pending.rideRequested,
-      updatedOfferNgn: event.counterOfferNgn,
-      expiresAt,
-    });
 
-    console.log(`[ride-service] rider counter-offer on ride ${event.rideId} to driver ${event.driverId}: ₦${event.counterOfferNgn}`);
+    if (event.driverId) {
+      // Targeted counter-offer to a specific driver
+      const driver = pending.candidates.find((d) => d.driverId === event.driverId)
+        ?? state.onlineDrivers.get(event.driverId);
+
+      if (!driver) {
+        console.warn(`[ride-service] rider counter-offer: driver ${event.driverId} not found for ride ${event.rideId}`);
+        return;
+      }
+
+      await rideEventsProducer.sendUpdatedOfferToDriver({
+        driver,
+        rideRequested: pending.rideRequested,
+        updatedOfferNgn: event.counterOfferNgn,
+        expiresAt,
+      });
+
+      console.log(`[ride-service] rider counter-offer on ride ${event.rideId} to driver ${event.driverId}: ₦${event.counterOfferNgn}`);
+    } else {
+      // Broadcast to ALL candidate drivers (WhatsApp flow — no specific driver targeted)
+      if (pending.candidates.length > 0) {
+        await rideEventsProducer.broadcastRideOffer({
+          drivers: pending.candidates,
+          rideRequested: pending.rideRequested,
+          expiresAt,
+        });
+        console.log(`[ride-service] rider counter-offer on ride ${event.rideId} broadcast to ${pending.candidates.length} drivers: ₦${event.counterOfferNgn}`);
+      }
+    }
   }
 
   async function handleOfferAccepted(event: RideOfferAcceptedEvent): Promise<void> {

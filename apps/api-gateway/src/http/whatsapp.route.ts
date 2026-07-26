@@ -1335,24 +1335,21 @@ export async function handleMetaWhatsappWebhookRoute(
             900,
           );
 
-          // Show current bids with updated price context
-          const allBids = await getBids(deps.redisClient, activeRideId);
-          if (allBids.length > 0) {
-            await storeLastBatch(deps.redisClient, activeRideId, allBids);
-            const reply = `Your offer updated to ₦${counterOffer.toLocaleString()}!\n\n${formatBidList(allBids, counterOffer)}`;
-            await appendWhatsappConversation(deps.redisClient, phone, [
-              { role: 'user', content: incomingMessage },
-              { role: 'assistant', content: reply },
-            ]);
-            await sendMetaReply(deps, phone, reply);
-          } else {
-            const reply = `Your offer updated to ₦${counterOffer.toLocaleString()}. Still searching for drivers... 🔍`;
-            await appendWhatsappConversation(deps.redisClient, phone, [
-              { role: 'user', content: incomingMessage },
-              { role: 'assistant', content: reply },
-            ]);
-            await sendMetaReply(deps, phone, reply);
-          }
+          // Publish counter-offer to ride-service so all drivers see the updated price
+          await deps.publisher.publishRideEvent({
+            eventType: 'RIDE_RIDER_COUNTER_OFFER',
+            rideId: activeRideId,
+            riderId: meta.riderId,
+            counterOfferNgn: counterOffer,
+            timestamp: new Date().toISOString(),
+          });
+
+          const reply = `Bid updated to ₦${counterOffer.toLocaleString()}. Drivers will see your new offer.`;
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
           return;
         }
       }
