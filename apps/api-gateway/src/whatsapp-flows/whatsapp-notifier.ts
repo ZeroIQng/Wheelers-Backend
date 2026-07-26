@@ -161,6 +161,24 @@ export async function sendRiderPaidNotification(
   );
 }
 
+export async function sendDepositConfirmation(
+  deps: WhatsappNotifierDeps,
+  phone: string,
+  amountNgn: number,
+  newBalanceNgn: number,
+): Promise<void> {
+  const msg = [
+    `Deposit received!`,
+    ``,
+    `Amount: NGN ${amountNgn.toLocaleString()}`,
+    `Wallet balance: NGN ${newBalanceNgn.toLocaleString()}`,
+    ``,
+    `Your wallet is ready. Book a ride anytime!`,
+  ].join('\n');
+
+  await sendMetaWhatsappMessage(deps, phone, msg);
+}
+
 export async function sendSearchingNotification(
   deps: WhatsappNotifierDeps,
   phone: string,
