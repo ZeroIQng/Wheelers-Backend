@@ -23,6 +23,12 @@ export const userClient = {
       include: { wallet: true },
     }),
 
+  findByEmail: (email: string) =>
+    prisma.user.findFirst({
+      where: { email: email.toLowerCase() },
+      include: { wallet: true },
+    }),
+
   // ── Writes ─────────────────────────────────────────────────────────────────
 
   create: (data: {

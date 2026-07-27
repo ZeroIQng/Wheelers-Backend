@@ -33,6 +33,11 @@ import {
   handleDeleteAccountRoute,
 } from "./http/account.route";
 import {
+  handleForgotPasswordRoute,
+  handleVerifyResetCodeRoute,
+  handleResetPasswordRoute,
+} from "./http/password-reset.route";
+import {
   handleGetCurrentProfileRoute,
   handleUpdateCurrentProfileRoute,
 } from "./http/profile.route";
@@ -443,6 +448,7 @@ async function bootstrap(): Promise<void> {
         jwtSecret: gatewayEnv.JWT_SECRET,
         publisher,
         pouchLiquifiaClient,
+        resendApiKey: gatewayEnv.RESEND_API_KEY,
       });
 
       return;
@@ -461,6 +467,46 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
+    if (url.pathname === "/auth/forgot-password") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleForgotPasswordRoute(req, res, {
+        redisClient: redisCommandClient,
+        resendApiKey: gatewayEnv.RESEND_API_KEY,
+      });
+
+      return;
+    }
+
+    if (url.pathname === "/auth/verify-reset-code") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleVerifyResetCodeRoute(req, res, {
+        redisClient: redisCommandClient,
+      });
+
+      return;
+    }
+
+    if (url.pathname === "/auth/reset-password") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleResetPasswordRoute(req, res, {
+        redisClient: redisCommandClient,
+      });
+
+      return;
+    }
+
     if (url.pathname === "/auth/apple") {
       if (req.method !== "POST") {
         sendMethodNotAllowed(res);
@@ -472,6 +518,7 @@ async function bootstrap(): Promise<void> {
         appleBundleId: gatewayEnv.APPLE_BUNDLE_ID,
         googleClientId: gatewayEnv.GOOGLE_CLIENT_ID,
         pouchLiquifiaClient,
+        resendApiKey: gatewayEnv.RESEND_API_KEY,
       });
 
       return;
@@ -488,6 +535,7 @@ async function bootstrap(): Promise<void> {
         appleBundleId: gatewayEnv.APPLE_BUNDLE_ID,
         googleClientId: gatewayEnv.GOOGLE_CLIENT_ID,
         pouchLiquifiaClient,
+        resendApiKey: gatewayEnv.RESEND_API_KEY,
       });
 
       return;

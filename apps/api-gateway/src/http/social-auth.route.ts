@@ -6,12 +6,15 @@ import { createLocalAccessToken } from '../auth/local';
 import { provisionPouchAccount } from '../onboarding/user-onboarding';
 import { isRecord, getString } from '../utils/object';
 import { readJsonBody, sendJson } from './utils';
+import { sendEmail } from '../email/resend';
+import { buildWelcomeDriverEmail } from '../email/templates';
 
 interface SocialAuthDeps {
   jwtSecret: string;
   appleBundleId?: string;
   googleClientId?: string;
   pouchLiquifiaClient?: PouchLiquifiaClient;
+  resendApiKey?: string;
 }
 
 // ------------------------------------------------------------------
@@ -209,6 +212,7 @@ async function findOrCreateDriverUser(
   name?: string,
   jwtSecret?: string,
   pouchLiquifiaClient?: PouchLiquifiaClient,
+  resendApiKey?: string,
 ): Promise<{ accessToken: string; user: Record<string, unknown>; isNewUser: boolean }> {
   const privyDid = `${provider}:${sub}`;
 
@@ -242,6 +246,17 @@ async function findOrCreateDriverUser(
         error: error instanceof Error ? error.message : String(error),
       });
     });
+
+    // Send welcome email to new drivers
+    if (email && resendApiKey) {
+      const welcome = buildWelcomeDriverEmail(name);
+      void sendEmail({ to: email, ...welcome }, resendApiKey).catch((err) => {
+        console.warn('[social-auth] welcome email failed (non-blocking)', {
+          userId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
   }
 
   // Provision virtual account in background (for both new and existing users)
@@ -315,6 +330,7 @@ export async function handleAppleAuthRoute(
       clientName ?? verified.name,
       deps.jwtSecret,
       deps.pouchLiquifiaClient,
+      deps.resendApiKey,
     );
 
     sendJson(res, 200, {
@@ -364,6 +380,7 @@ export async function handleGoogleAuthRoute(
       verified.name,
       deps.jwtSecret,
       deps.pouchLiquifiaClient,
+      deps.resendApiKey,
     );
 
     sendJson(res, 200, {

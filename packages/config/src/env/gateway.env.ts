@@ -44,6 +44,8 @@ const GatewayEnvSchema = z.object({
   // Social Auth
   APPLE_BUNDLE_ID:    z.string().optional().transform(v => v?.trim() || undefined),
   GOOGLE_CLIENT_ID:   z.string().optional().transform(v => v?.trim() || undefined),
+  // Resend Email
+  RESEND_API_KEY:     z.string().optional().transform(v => v?.trim() || undefined),
   // Cloudflare R2 Storage
   R2_ACCOUNT_ID:      z.string().optional().transform(v => v?.trim() || undefined),
   R2_ACCESS_KEY_ID:   z.string().optional().transform(v => v?.trim() || undefined),

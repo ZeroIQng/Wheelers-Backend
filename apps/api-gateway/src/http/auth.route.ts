@@ -12,11 +12,14 @@ import type { GatewayPublisher } from '../websocket/publisher';
 import type { PouchLiquifiaClient } from '@wheleers/pouch-client';
 import { readJsonBody, sendJson } from './utils';
 import { provisionPouchAccount } from '../onboarding/user-onboarding';
+import { sendEmail } from '../email/resend';
+import { buildWelcomeDriverEmail } from '../email/templates';
 
 interface AuthRouteDeps {
   jwtSecret: string;
   publisher: GatewayPublisher;
   pouchLiquifiaClient: PouchLiquifiaClient;
+  resendApiKey?: string;
 }
 
 const ROLE_MAP: Record<GatewayRole, UserRole> = {
@@ -118,7 +121,7 @@ export async function handleUsernamePasswordSignupRoute(
       return;
     }
 
-    const username = normalizeUsername(getString(rawBody, 'username'));
+    const rawUsername = getString(rawBody, 'username');
     const password = normalizePassword(getString(rawBody, 'password'));
     const email = normalizeEmail(getString(rawBody, 'email'));
     const name = normalizeName(getString(rawBody, 'fullName') ?? getString(rawBody, 'name'));
@@ -126,16 +129,35 @@ export async function handleUsernamePasswordSignupRoute(
     const requestedRole = parseRole(getString(rawBody, 'role'));
     const role = requestedRole ?? 'RIDER';
 
-    const existing = await userClient.findByUsername(username);
-    if (existing) {
-      sendJson(res, 409, { error: 'That username is already taken.' });
-      return;
+    // Username is optional when email is provided — email becomes the identifier
+    let username: string | undefined;
+    if (rawUsername && !rawUsername.includes('@')) {
+      username = normalizeUsername(rawUsername);
+    } else if (!rawUsername && !email) {
+      throw new Error('email or username is required');
+    }
+
+    // Check for duplicates
+    if (username) {
+      const existingByUsername = await userClient.findByUsername(username);
+      if (existingByUsername) {
+        sendJson(res, 409, { error: 'That username is already taken.' });
+        return;
+      }
+    }
+
+    if (email) {
+      const existingByEmail = await userClient.findByEmail(email);
+      if (existingByEmail && existingByEmail.passwordHash) {
+        sendJson(res, 409, { error: 'An account with that email already exists.' });
+        return;
+      }
     }
 
     const passwordHash = await hashPassword(password);
     const created = await userClient.create({
       privyDid: `local:${randomUUID()}`,
-      username,
+      username: username ?? undefined,
       passwordHash,
       email,
       role: ROLE_MAP[role],
@@ -177,6 +199,17 @@ export async function handleUsernamePasswordSignupRoute(
       },
     );
 
+    // Send welcome email for drivers
+    if (role === 'DRIVER' && email && deps.resendApiKey) {
+      const welcome = buildWelcomeDriverEmail(name);
+      void sendEmail({ to: email, ...welcome }, deps.resendApiKey).catch((err) => {
+        console.warn('[auth] welcome email failed (non-blocking)', {
+          userId: created.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
     sendJson(res, 201, {
       created: true,
       accessToken: createLocalAccessToken(created.id, deps.jwtSecret),
@@ -212,12 +245,25 @@ export async function handleUsernamePasswordSigninRoute(
       return;
     }
 
-    const username = normalizeUsername(getString(rawBody, 'username'));
+    // Accept 'identifier' (email or username) with fallback to 'username' for backward compat
+    const identifier = getString(rawBody, 'identifier') ?? getString(rawBody, 'username');
     const password = normalizePassword(getString(rawBody, 'password'));
-    const user = await userClient.findByUsername(username);
+
+    let user;
+    if (identifier?.includes('@')) {
+      const email = normalizeEmail(identifier);
+      if (!email) {
+        sendJson(res, 400, { error: 'Invalid email address.' });
+        return;
+      }
+      user = await userClient.findByEmail(email);
+    } else {
+      const username = normalizeUsername(identifier);
+      user = await userClient.findByUsername(username);
+    }
 
     if (!user || !(await verifyPassword(password, user.passwordHash))) {
-      sendJson(res, 401, { error: 'Invalid username or password.' });
+      sendJson(res, 401, { error: 'Invalid email or password.' });
       return;
     }
 
