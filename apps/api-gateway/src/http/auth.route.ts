@@ -4,7 +4,7 @@ import {
   UserCreatedEvent,
   UserRoleChangedEvent,
 } from '@wheleers/kafka-schemas';
-import { UserRole, userClient, walletClient } from '@wheleers/db';
+import { UserRole, driverClient, userClient, walletClient } from '@wheleers/db';
 import { createLocalAccessToken, hashPassword, verifyPassword } from '../auth/local';
 import type { GatewayRole } from '../types';
 import { getString, isRecord } from '../utils/object';
@@ -165,6 +165,13 @@ export async function handleUsernamePasswordSignupRoute(
       phone,
     });
 
+    // Drivers need a Driver record before any /drivers/* route will resolve.
+    // This must succeed — without it the account can never submit KYC, so it is
+    // awaited (and left uncaught) rather than fired off in the background.
+    if (role === 'DRIVER' || role === 'BOTH') {
+      await driverClient.ensure(created.id);
+    }
+
     const event = UserCreatedEvent.parse({
       eventType: 'USER_CREATED',
       userId: created.id,
@@ -270,10 +277,7 @@ export async function handleUsernamePasswordSigninRoute(
     sendJson(res, 200, {
       accessToken: createLocalAccessToken(user.id, deps.jwtSecret),
       tokenType: 'Bearer',
-      user: {
-        ...serializeUser(user),
-        phone: user.phone || user.email || user.privyDid,
-      },
+      user: serializeUser(user),
     });
   } catch (error) {
     sendJson(res, 400, {

@@ -6,7 +6,12 @@ import {
   virtualAccountClient,
   withdrawalClient,
 } from '@wheleers/db';
-import { GoogleMapsRoutePlanner, calculateRideFees } from '@wheleers/config';
+import {
+  GoogleMapsRoutePlanner,
+  calculateRideFees,
+  validateRiderOffer,
+  MIN_WITHDRAWAL_NGN,
+} from '@wheleers/config';
 import {
   RideRequestedEvent,
   RideCancelledEvent,
@@ -525,6 +530,18 @@ async function submitWhatsappWithdrawal(params: {
 
   let reservedRequestId: string | undefined;
   try {
+    // Defence in depth: the conversational stages check this too, but this is
+    // the only place that actually moves money, and it is a separate code path
+    // from the HTTP withdrawal route.
+    if (amountNgn < MIN_WITHDRAWAL_NGN) {
+      console.warn('[api-gateway][whatsapp-withdrawal] rejected: below minimum', {
+        userId,
+        amountNgn,
+        minimumNgn: MIN_WITHDRAWAL_NGN,
+      });
+      throw new Error(`Minimum withdrawal is ₦${MIN_WITHDRAWAL_NGN.toLocaleString()}.`);
+    }
+
     const wallet = await walletClient.findByUserId(userId);
     if (!wallet) throw new Error('No wallet found. Fund your account first.');
 
@@ -576,12 +593,29 @@ async function submitWhatsappWithdrawal(params: {
       status: 'PAYOUT_CREATED',
     };
   } catch (error) {
+    console.error('[api-gateway][whatsapp-withdrawal] withdrawal failed', {
+      userId,
+      amountNgn,
+      withdrawalRequestId: reservedRequestId ?? null,
+      fundsWereReserved: Boolean(reservedRequestId),
+      error: error instanceof Error ? error.message : String(error),
+      providerStatus: (error as { status?: number })?.status ?? null,
+      providerCode: (error as { code?: string })?.code ?? null,
+    });
+
     if (reservedRequestId) {
       await withdrawalClient.releaseFailedRequest({
         withdrawalRequestId: reservedRequestId,
         failureReason: error instanceof Error ? error.message : 'Withdrawal creation failed.',
         status: 'FAILED',
-      }).catch(() => undefined);
+      }).catch((releaseErr) => {
+        // This one matters: the reservation is still holding the rider's money.
+        console.error('[api-gateway][whatsapp-withdrawal] FAILED to release reservation — funds still locked', {
+          userId,
+          withdrawalRequestId: reservedRequestId,
+          error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr),
+        });
+      });
     }
     throw error;
   } finally {
@@ -697,7 +731,6 @@ export async function handleMetaWhatsappWebhookRoute(
 
       const wallet = await walletClient.findByUserId(user.id).catch(() => null);
       const balance = wallet ? Number(wallet.balanceNgn) : 0;
-      const MIN_WITHDRAWAL_NGN = 5000;
 
       if (!wallet || !Number.isFinite(balance) || balance < MIN_WITHDRAWAL_NGN) {
         const va = await virtualAccountClient.findByUserId(user.id).catch(() => null);
@@ -768,8 +801,6 @@ export async function handleMetaWhatsappWebhookRoute(
           await sendWhatsappText(deps, phone, incomingMessage, 'Please send a valid withdrawal amount, e.g. *5000*.');
           return;
         }
-
-        const MIN_WITHDRAWAL_NGN = 5000;
         if (amountNgn < MIN_WITHDRAWAL_NGN) {
           await sendWhatsappText(deps, phone, incomingMessage, `The minimum withdrawal amount is ₦${MIN_WITHDRAWAL_NGN.toLocaleString()}. Please send a higher amount.`);
           return;
@@ -799,7 +830,6 @@ export async function handleMetaWhatsappWebhookRoute(
           incomingMessage.trim().replace(/^(no|nah|wait|actually|i\s+meant?|not|sorry|change\s+to)\s+/i, ''),
         );
         if (correctedAmount !== null) {
-          const MIN_WITHDRAWAL_NGN = 5000;
           if (correctedAmount < MIN_WITHDRAWAL_NGN) {
             await sendWhatsappText(deps, phone, incomingMessage, `The minimum withdrawal amount is ₦${MIN_WITHDRAWAL_NGN.toLocaleString()}. Please send a higher amount.`);
             return;
@@ -1147,7 +1177,15 @@ export async function handleMetaWhatsappWebhookRoute(
             driverUserId: pendingAccept.driverUserId,
             amountNgn: agreedFare,
           });
-        } catch {
+        } catch (holdError) {
+          console.error('[api-gateway][whatsapp] ride hold FAILED — rider could not pay', {
+            rideId: pendingAccept.rideId,
+            riderId: user.id,
+            driverUserId: pendingAccept.driverUserId,
+            agreedFareNgn: agreedFare,
+            walletBalanceNgn: balance,
+            error: holdError instanceof Error ? holdError.message : String(holdError),
+          });
           const reply = 'Could not lock funds in your wallet. Please try again — reply *pay*.';
           await appendWhatsappConversation(deps.redisClient, phone, [
             { role: 'user', content: incomingMessage },
@@ -1327,6 +1365,27 @@ export async function handleMetaWhatsappWebhookRoute(
       if (counterOffer !== null) {
         const meta = await getRideMeta(deps.redisClient, activeRideId);
         if (meta) {
+          // The initial offer was validated against the minimum fare; a
+          // counter-offer has to clear the same bar or the floor is bypassed
+          // by simply typing a lower number once bidding has started.
+          const validation = validateRiderOffer(counterOffer, meta.suggestedFareNgn);
+          if (!validation.valid) {
+            console.warn('[api-gateway][whatsapp] counter-offer rejected below minimum', {
+              rideId: activeRideId,
+              riderId: user.id,
+              offerNgn: counterOffer,
+              minOfferNgn: validation.minOfferNgn,
+              suggestedFareNgn: meta.suggestedFareNgn,
+            });
+            const reply = `Your offer ₦${counterOffer.toLocaleString()} is below the minimum fare of ₦${validation.minOfferNgn.toLocaleString()}.\n\nPlease send a higher amount.`;
+            await appendWhatsappConversation(deps.redisClient, phone, [
+              { role: 'user', content: incomingMessage },
+              { role: 'assistant', content: reply },
+            ]);
+            await sendMetaReply(deps, phone, reply);
+            return;
+          }
+
           // Update the rider's offer in Redis
           meta.offerNgn = counterOffer;
           await deps.redisClient.set(

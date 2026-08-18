@@ -2,6 +2,7 @@ import { GPS } from '@wheleers/config';
 import { rideClient } from '@wheleers/db';
 
 import type { RideEnv } from '@wheleers/config';
+import { participantRiderIds } from '../index';
 import type { RideServiceState } from '../index';
 import type { RideEventsProducer } from '../producers/ride-events.producer';
 
@@ -41,15 +42,18 @@ async function runGpsMonitorTick(
     if (participants) {
       try {
         const warningAt = new Date(now);
-        await emitStaleWarning(rideEventsProducer, {
-          rideId: s.rideId,
-          driverId: participants.driverId,
-          riderId: participants.riderId,
-          lastMovementAt: s.lastMovementAt,
-          lastKnownLat: s.lastLat,
-          lastKnownLng: s.lastLng,
-          warningAt,
-        });
+        // Every rider on the ride, so group passengers are not left in the dark.
+        for (const riderId of participantRiderIds(participants)) {
+          await emitStaleWarning(rideEventsProducer, {
+            rideId: s.rideId,
+            driverId: participants.driverId,
+            riderId,
+            lastMovementAt: s.lastMovementAt,
+            lastKnownLat: s.lastLat,
+            lastKnownLng: s.lastLng,
+            warningAt,
+          });
+        }
         s.lastStaleWarningAt = warningAt;
       } catch (err) {
         console.warn(`[ride-service] gps stale warning skipped:`, (err as any)?.message ?? err);

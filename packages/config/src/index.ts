@@ -19,12 +19,14 @@ export type { WhatsappEnv }     from './env/whatsapp.env';
 
 // Constants
 export { FEES }                        from './constants/fees';
+export { MIN_WITHDRAWAL_NGN }          from './constants/withdrawal';
 export { GPS }                         from './constants/gps';
 export { RIDE }                        from './constants/ride';
 export {
   RATE_PER_KM_NGN,
   PLATFORM_FEE_NGN,
   MIN_OFFER_DISCOUNT,
+  MIN_FARE_NGN,
   FARE_ROUNDING_INCREMENT,
   VAT_RATE,
   LAGOS_STATE_FEE_NGN,

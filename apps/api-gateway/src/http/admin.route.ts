@@ -4,11 +4,14 @@ import { isRecord, getString } from '../utils/object';
 import { readJsonBody, sendJson } from './utils';
 import { verifyAdminAuth } from './admin-auth.route';
 import type { DriverKycStorage } from '../storage/driver-kyc-storage';
+import { sendEmail } from '../email/resend';
+import { buildDriverApprovedEmail } from '../email/templates';
 
 interface AdminRouteDeps {
   adminApiKey: string;
   jwtSecret: string;
   kycStorage: DriverKycStorage;
+  resendApiKey?: string;
 }
 
 /**
@@ -169,6 +172,39 @@ export async function handleAdminFieldReviewRoute(
   sendJson(res, 200, { field, status, fieldStatuses: updated });
 }
 
+async function notifyDriverApproved(
+  driverId: string,
+  resendApiKey: string | undefined,
+): Promise<void> {
+  if (!resendApiKey) {
+    console.warn('[admin] driver approved but RESEND_API_KEY is not set — no email sent', {
+      driverId,
+    });
+    return;
+  }
+
+  try {
+    const driver = await driverClient.findById(driverId);
+    const email = driver.user?.email;
+    if (!email) {
+      console.warn('[admin] driver approved but has no email on file — no email sent', {
+        driverId,
+        userId: driver.userId,
+      });
+      return;
+    }
+
+    const template = buildDriverApprovedEmail(driver.user?.name ?? undefined);
+    await sendEmail({ to: email, ...template }, resendApiKey);
+    console.info('[admin] driver approval email sent', { driverId, userId: driver.userId });
+  } catch (error) {
+    console.error('[admin] driver approval email failed', {
+      driverId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 /**
  * POST /admin/drivers/:driverId/approve
  * Approves the driver's KYC submission.
@@ -194,7 +230,9 @@ export async function handleAdminApproveDriverRoute(
   await driverClient.approveKycSubmission(driverId, auth.adminName);
   await driverClient.updateKycStatus(driverId, 'APPROVED');
 
-  // TODO: Send push notification to driver about approval
+  // Tell the driver they're cleared to drive. Non-blocking: a mail failure
+  // must never make the approval itself look like it failed.
+  void notifyDriverApproved(driverId, deps.resendApiKey);
 
   sendJson(res, 200, { status: 'APPROVED' });
 }

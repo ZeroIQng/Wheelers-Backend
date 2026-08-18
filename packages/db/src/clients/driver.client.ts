@@ -71,6 +71,15 @@ export const driverClient = {
       data: { userId },
     }),
 
+  // Idempotent variant of create — safe to call on signup retries or when a
+  // user's role is upgraded to DRIVER/BOTH more than once.
+  ensure: (userId: string) =>
+    prisma.driver.upsert({
+      where:  { userId },
+      create: { userId },
+      update: {},
+    }),
+
   updateStatus: (driverId: string, status: DriverStatus) =>
     prisma.driver.update({
       where: { id: driverId },

@@ -149,6 +149,9 @@ async function handleRideEvent(
       plannedDurationSeconds: event.plannedDurationSeconds,
       expiresAt: event.expiresAt,
       route: event.route,
+      isGroupRide: event.isGroupRide ?? false,
+      riderCount: event.riderCount ?? 1,
+      stopKinds: event.stopKinds ?? [],
     });
     return;
   }

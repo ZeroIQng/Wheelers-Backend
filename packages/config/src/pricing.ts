@@ -1,6 +1,13 @@
 export const RATE_PER_KM_NGN = 300;
 export const PLATFORM_FEE_NGN = 0;
 export const MIN_OFFER_DISCOUNT = 0.28;
+/**
+ * Hard floor on what any ride can cost, regardless of distance. Nothing —
+ * neither the suggested fare nor the lowest offer a rider may haggle down to —
+ * goes below this. Short trips would otherwise price under the flat fees
+ * (₦200 service + ₦30 levy), leaving the driver nothing for their time.
+ */
+export const MIN_FARE_NGN = 3000;
 export const FARE_ROUNDING_INCREMENT = 100;
 export const VAT_RATE = 0.075; // 7.5% VAT
 export const LAGOS_STATE_FEE_NGN = 30; // ₦30 flat per ride
@@ -26,8 +33,11 @@ export function calculateSuggestedFare(distanceKm: number): SuggestedFare {
   }
 
   const rawFare = RATE_PER_KM_NGN * distanceKm + PLATFORM_FEE_NGN;
-  const suggestedFareNgn = roundUpToIncrement(rawFare, FARE_ROUNDING_INCREMENT);
-  const minOfferNgn = round2(suggestedFareNgn * (1 - MIN_OFFER_DISCOUNT));
+  const suggestedFareNgn = Math.max(
+    MIN_FARE_NGN,
+    roundUpToIncrement(rawFare, FARE_ROUNDING_INCREMENT),
+  );
+  const minOfferNgn = resolveMinOfferNgn(suggestedFareNgn);
 
   return {
     distanceKm,
@@ -41,7 +51,7 @@ export function validateRiderOffer(
   offerNgn: number,
   suggestedFareNgn: number,
 ): { valid: boolean; minOfferNgn: number; reason?: string } {
-  const minOfferNgn = round2(suggestedFareNgn * (1 - MIN_OFFER_DISCOUNT));
+  const minOfferNgn = resolveMinOfferNgn(suggestedFareNgn);
 
   if (!Number.isFinite(offerNgn) || offerNgn <= 0) {
     return { valid: false, minOfferNgn, reason: 'Offer must be a positive number.' };
@@ -51,11 +61,21 @@ export function validateRiderOffer(
     return {
       valid: false,
       minOfferNgn,
-      reason: `Minimum offer is ${minOfferNgn} NGN (${Math.round((1 - MIN_OFFER_DISCOUNT) * 100)}% of suggested fare).`,
+      // On short trips the floor is what binds, not the discount — say so,
+      // otherwise "28% of suggested fare" reads as wrong to the rider.
+      reason:
+        minOfferNgn === MIN_FARE_NGN
+          ? `Minimum fare is ${MIN_FARE_NGN} NGN for any ride.`
+          : `Minimum offer is ${minOfferNgn} NGN (${Math.round((1 - MIN_OFFER_DISCOUNT) * 100)}% of suggested fare).`,
     };
   }
 
   return { valid: true, minOfferNgn };
+}
+
+/** Lowest offer we accept: the haggling discount, but never below the floor. */
+function resolveMinOfferNgn(suggestedFareNgn: number): number {
+  return Math.max(MIN_FARE_NGN, round2(suggestedFareNgn * (1 - MIN_OFFER_DISCOUNT)));
 }
 
 export type RideFeeBreakdown = {
@@ -80,8 +100,18 @@ export function calculateRideFees(fareNgn: number): RideFeeBreakdown {
   const stateLevyNgn = LAGOS_STATE_FEE_NGN;
   const vatNgn = round2(fareNgn * VAT_RATE);
   const serviceFeeNgn = SERVICE_FEE_NGN;
-  const platformTotalNgn = round2(vatNgn + stateLevyNgn + serviceFeeNgn);
-  const driverPayoutNgn = round2(fareNgn - platformTotalNgn);
+  const rawPlatformTotalNgn = round2(vatNgn + stateLevyNgn + serviceFeeNgn);
+  const rawDriverPayoutNgn = round2(fareNgn - rawPlatformTotalNgn);
+
+  // The flat fees (₦200 service + ₦30 levy) exceed the fare on very short
+  // rides, which used to produce a NEGATIVE driver payout — the driver's own
+  // balance was debited to cover the platform's cut. Clamp the payout at zero
+  // and cap the platform's take at the fare, so the rider's debit always
+  // equals driverPayout + platformTotal and nobody pays to work.
+  const driverPayoutNgn = Math.max(0, rawDriverPayoutNgn);
+  const platformTotalNgn =
+    rawDriverPayoutNgn < 0 ? round2(fareNgn) : rawPlatformTotalNgn;
+
   const totalNgn = fareNgn;
   return { fareNgn, vatNgn, stateLevyNgn, serviceFeeNgn, platformTotalNgn, driverPayoutNgn, totalNgn };
 }

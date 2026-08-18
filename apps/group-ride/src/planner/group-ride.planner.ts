@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { groupRideClient } from '@wheleers/db';
+import { calculateSuggestedFare } from '@wheleers/config';
 import type { GoogleMapsRoutePlanner, GroupRideEnv } from '@wheleers/config';
 import type {
   GroupRideCandidatesIdentifiedEvent,
@@ -93,7 +94,14 @@ export function createGroupRidePlanner(params: {
             rideIds: members.map((member) => member.rideId),
             status: 'GROUPED',
           })
-          .catch(() => null);
+          .catch((error) => {
+            console.error('[group-ride] failed to persist GROUPED status — DB and in-memory state now disagree', {
+              groupId: event.groupId,
+              rideIds: members.map((member) => member.rideId),
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return null;
+          });
 
         for (const member of members) {
           params.state.assignedRideIds.add(member.rideId);
@@ -129,7 +137,14 @@ export function createGroupRidePlanner(params: {
             rideIds: event.rideIds,
             status: 'BOOKED',
           })
-          .catch(() => null);
+          .catch((error) => {
+            console.error('[group-ride] failed to persist BOOKED status — group is dispatching but not recorded', {
+              groupId: event.groupId,
+              rideIds: event.rideIds,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return null;
+          });
         return;
       }
 
@@ -150,9 +165,13 @@ export function createGroupRidePlanner(params: {
             rideIds: event.rideIds,
             riderIds: event.riderIds,
             firstPickup: { lat: firstPickup.lat, lng: firstPickup.lng, address: firstPickup.address },
+            stops: event.stops,
             totalDistanceKm: event.totalDistanceKm,
             totalDurationSeconds: event.totalDurationSeconds,
-            fareEstimateNgn: event.totalDistanceKm * 100, // rough per-km estimate
+            // Was `totalDistanceKm * 100` — a third of the real ₦300/km rate,
+            // with no minimum fare. Group rides now price through the same
+            // function as every other ride, so the floor applies here too.
+            fareEstimateNgn: calculateSuggestedFare(event.totalDistanceKm).suggestedFareNgn,
             route: event.route,
             timestamp: new Date().toISOString(),
           });
@@ -163,6 +182,7 @@ export function createGroupRidePlanner(params: {
     releaseRide(rideId) {
       params.state.pendingRequestsByRideId.delete(rideId);
       params.state.assignedRideIds.delete(rideId);
+      forgetFingerprintsFor(params.state, rideId);
     },
   };
 
@@ -246,7 +266,27 @@ function pruneExpiredRequests(state: GroupRideState, env: GroupRideEnv): void {
     if (!Number.isFinite(requestedAt) || requestedAt < expiresBefore) {
       state.pendingRequestsByRideId.delete(rideId);
       state.assignedRideIds.delete(rideId);
-      void groupRideClient.updateMatchRequestStatus(rideId, 'EXPIRED').catch(() => null);
+      forgetFingerprintsFor(state, rideId);
+      void groupRideClient.updateMatchRequestStatus(rideId, 'EXPIRED').catch((error) => {
+        console.warn('[group-ride] could not mark match request EXPIRED', {
+          rideId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+  }
+}
+
+/**
+ * Fingerprints stop a group being re-proposed while it is live. Once a ride
+ * leaves the pool that record is dead weight: the Set only ever grew, so it
+ * leaked for the lifetime of the process, and a combination that broke up
+ * could never be proposed again.
+ */
+function forgetFingerprintsFor(state: GroupRideState, rideId: string): void {
+  for (const fingerprint of state.emittedCandidateFingerprints) {
+    if (fingerprint.split(':').includes(rideId)) {
+      state.emittedCandidateFingerprints.delete(fingerprint);
     }
   }
 }

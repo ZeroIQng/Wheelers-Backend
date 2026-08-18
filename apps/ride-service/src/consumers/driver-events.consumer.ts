@@ -29,7 +29,11 @@ export function createDriverEventsConsumer(params: {
         try {
           await driverClient.markOnline(event.driverId, event.lat, event.lng);
         } catch (err) {
-          console.warn(`[ride-service] driver online persistence skipped:`, (err as any)?.message ?? err);
+          console.error('[ride-service] driver online persistence FAILED — driver is live in memory only', {
+            driverId: event.driverId,
+            userId: event.userId,
+            error: (err as any)?.message ?? err,
+          });
         }
         if (onDriverOnline) await onDriverOnline(event);
       }
@@ -44,7 +48,10 @@ export function createDriverEventsConsumer(params: {
         try {
           await driverClient.markOffline(event.driverId);
         } catch (err) {
-          console.warn(`[ride-service] driver offline persistence skipped:`, (err as any)?.message ?? err);
+          console.error('[ride-service] driver offline persistence FAILED', {
+            driverId: event.driverId,
+            error: (err as any)?.message ?? err,
+          });
         }
         if (onDriverOffline) await onDriverOffline(event);
       }

@@ -1,4 +1,4 @@
-import { rideClient } from '@wheleers/db';
+import { driverClient, rideClient } from '@wheleers/db';
 import type { RideEnv } from '@wheleers/config';
 import type { MessageContext } from '@wheleers/kafka-client';
 import {
@@ -63,7 +63,12 @@ export function createRideRequestedConsumer(params: {
 
       if (event.eventType === 'RIDE_DRIVER_ASSIGNED') {
         clearPendingMatch(event.rideId);
+        // Keep the full rider list. A blind overwrite here dropped every
+        // non-anchor member of a group the instant a driver accepted, so from
+        // that point on only the anchor got GPS relay and stale-movement
+        // warnings — the other riders' apps went silent for the whole trip.
         state.rideParticipantsByRideId.set(event.rideId, {
+          ...state.rideParticipantsByRideId.get(event.rideId),
           riderId: event.riderId,
           driverId: event.driverId,
         });
@@ -86,6 +91,14 @@ export function createRideRequestedConsumer(params: {
       if (event.eventType === 'RIDE_COMPLETED') {
         state.routeByRideId.delete(event.rideId);
         returnAssignedDriverToPool(event.rideId);
+        return;
+      }
+
+      if (event.eventType === 'RIDE_BID_TIMEOUT') {
+        // The pending entry used to survive the timeout forever — one leaked
+        // Map entry per abandoned ride, for the life of the process. Dropping
+        // it is safe now: a late accept rebuilds what it needs from the DB.
+        clearPendingMatch(event.rideId);
         return;
       }
     },
@@ -236,6 +249,7 @@ export function createRideRequestedConsumer(params: {
         rideRequested: pending.rideRequested,
         updatedOfferNgn: event.counterOfferNgn,
         expiresAt,
+        group: pending.group,
       });
 
       console.log(`[ride-service] rider counter-offer on ride ${event.rideId} to driver ${event.driverId}: ₦${event.counterOfferNgn}`);
@@ -249,6 +263,7 @@ export function createRideRequestedConsumer(params: {
               rideRequested: pending.rideRequested,
               updatedOfferNgn: event.counterOfferNgn,
               expiresAt,
+              group: pending.group,
             }),
           ),
         );
@@ -259,15 +274,41 @@ export function createRideRequestedConsumer(params: {
 
   async function handleOfferAccepted(event: RideOfferAcceptedEvent): Promise<void> {
     const pending = state.pendingMatchesByRideId.get(event.rideId);
-    if (!pending) return;
+
+    // Pending match state is in-memory only, so a restart or a consumer-group
+    // rebalance between RIDE_REQUESTED and the rider accepting wipes it. This
+    // used to `return` silently — and on the WhatsApp path the rider's fare is
+    // already held by then, so the money sat locked with no driver assigned and
+    // nothing logged. Rebuild what we can from the database and go on: the
+    // accept has to survive, everything below it is presentation detail.
+    if (!pending) {
+      console.warn('[ride-service] offer accepted with no pending match — rebuilding from DB', {
+        rideId: event.rideId,
+        riderId: event.riderId,
+        driverId: event.driverId,
+      });
+    }
 
     // Clear timeout
-    if (pending.timeout) clearTimeout(pending.timeout);
+    if (pending?.timeout) clearTimeout(pending.timeout);
 
     // Look up stored counter-offer driver info, fallback to in-memory pool for vehicle details
-    const counterOfferInfo = pending.counterOfferDrivers.get(event.driverId);
-    const poolDriver = pending.candidates.find((d) => d.driverId === event.driverId)
+    const counterOfferInfo = pending?.counterOfferDrivers.get(event.driverId);
+    const poolDriver = pending?.candidates.find((d) => d.driverId === event.driverId)
       ?? state.onlineDrivers.get(event.driverId);
+
+    // Only hit the DB when memory could not supply the driver's details.
+    const dbDriver =
+      counterOfferInfo || poolDriver
+        ? null
+        : await driverClient.findById(event.driverId).catch((err) => {
+            console.warn('[ride-service] driver lookup failed while rebuilding assignment', {
+              rideId: event.rideId,
+              driverId: event.driverId,
+              error: (err as any)?.message ?? err,
+            });
+            return null;
+          });
 
     // Publish RIDE_DRIVER_ASSIGNED
     await rideEventsProducer.rideDriverAssigned({
@@ -276,10 +317,10 @@ export function createRideRequestedConsumer(params: {
       riderId: event.riderId,
       driverId: event.driverId,
       driverUserId: event.driverUserId,
-      driverName: counterOfferInfo?.driverName ?? 'Driver',
-      driverRating: counterOfferInfo?.driverRating ?? 5.0,
-      vehiclePlate: counterOfferInfo?.vehiclePlate ?? poolDriver?.vehiclePlate ?? '',
-      vehicleModel: counterOfferInfo?.vehicleModel ?? poolDriver?.vehicleModel ?? '',
+      driverName: counterOfferInfo?.driverName ?? dbDriver?.user?.name ?? 'Driver',
+      driverRating: counterOfferInfo?.driverRating ?? Number(dbDriver?.rating ?? 5.0),
+      vehiclePlate: counterOfferInfo?.vehiclePlate ?? poolDriver?.vehiclePlate ?? dbDriver?.vehiclePlate ?? '',
+      vehicleModel: counterOfferInfo?.vehicleModel ?? poolDriver?.vehicleModel ?? dbDriver?.vehicleModel ?? '',
       etaSeconds: counterOfferInfo?.etaSeconds ?? 0,
       agreedFareNgn: event.agreedFareNgn,
       lockedFareNgn: event.agreedFareNgn,

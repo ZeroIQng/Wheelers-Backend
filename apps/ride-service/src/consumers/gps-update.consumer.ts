@@ -3,6 +3,7 @@ import { rideClient } from '@wheleers/db';
 import type { MessageContext } from '@wheleers/kafka-client';
 import { safeParseKafkaEvent, TOPICS } from '@wheleers/kafka-schemas';
 
+import { participantRiderIds } from '../index';
 import type { RideGpsState, RideRouteStopState, RideServiceState } from '../index';
 import type { GpsProcessedProducer } from '../producers/gps-processed.producer';
 import type { RideEventsProducer } from '../producers/ride-events.producer';
@@ -107,17 +108,21 @@ export function createGpsUpdateConsumer(params: {
       if (shouldWarn) {
         const participants = state.rideParticipantsByRideId.get(event.rideId);
         if (participants) {
-          await rideEventsProducer.gpsStaleWarning({
-            eventType: 'GPS_STALE_WARNING',
-            rideId: event.rideId,
-            driverId: participants.driverId,
-            riderId: participants.riderId,
-            lastMovementAt: next.lastMovementAt.toISOString(),
-            staleMinutes: GPS.STALE_TIME_WINDOW_MINUTES,
-            lastKnownLat: next.lastLat,
-            lastKnownLng: next.lastLng,
-            timestamp: now.toISOString(),
-          });
+          // One warning per rider — on a group ride every passenger is sitting
+          // in the same stalled car and deserves to be told.
+          for (const riderId of participantRiderIds(participants)) {
+            await rideEventsProducer.gpsStaleWarning({
+              eventType: 'GPS_STALE_WARNING',
+              rideId: event.rideId,
+              driverId: participants.driverId,
+              riderId,
+              lastMovementAt: next.lastMovementAt.toISOString(),
+              staleMinutes: GPS.STALE_TIME_WINDOW_MINUTES,
+              lastKnownLat: next.lastLat,
+              lastKnownLng: next.lastLng,
+              timestamp: now.toISOString(),
+            });
+          }
           next.lastStaleWarningAt = now;
           return;
         }

@@ -55,6 +55,19 @@ export type CounterOfferDriverInfo = {
   etaSeconds: number;
 };
 
+/**
+ * Group badge + per-stop kinds for an offer. Held on the pending match because
+ * a group ride is offered more than once: to newly-online drivers, and again
+ * on every rider counter-offer. Rebuilding it from the event is impossible by
+ * then, so a re-send without it showed a shared multi-pickup trip as a plain
+ * solo ride.
+ */
+export type PendingRideGroupInfo = {
+  groupId: string;
+  riderCount: number;
+  stopKinds: Array<'pickup' | 'dropoff'>;
+};
+
 export type PendingRideMatch = {
   rideRequested: RideRequestedEvent;
   candidates: OnlineDriver[];
@@ -62,12 +75,26 @@ export type PendingRideMatch = {
   offeredDriverId: string | null;
   timeout: NodeJS.Timeout | null;
   counterOfferDrivers: Map<string, CounterOfferDriverInfo>;
+  /** Only set for group rides. */
+  group?: PendingRideGroupInfo;
 };
 
 export type RideParticipantState = {
+  /** Primary rider — the anchor rider on a group ride. */
   riderId: string;
   driverId: string;
+  /**
+   * Every rider on this ride, anchor included. Solo rides have exactly one.
+   * Group rides used to keep only the anchor, so the other members received no
+   * GPS relay and no stale-movement warnings.
+   */
+  riderIds?: string[];
 };
+
+/** All riders on a ride, tolerant of entries written before riderIds existed. */
+export function participantRiderIds(participants: RideParticipantState): string[] {
+  return participants.riderIds?.length ? participants.riderIds : [participants.riderId];
+}
 
 export type RideServiceState = {
   onlineDrivers: Map<string, OnlineDriver>;
@@ -130,7 +157,11 @@ async function bootstrap(): Promise<void> {
       const driver = state.onlineDrivers.get(event.driverId);
       if (!driver) return;
 
-      for (const [, pending] of state.pendingMatchesByRideId) {
+      for (const [rideId, pending] of state.pendingMatchesByRideId) {
+        // A group ride whose driver already accepted is not still "pending" —
+        // re-offering it to a late joiner would put two drivers on one trip.
+        if (state.assignedDriversByRideId.has(rideId)) continue;
+
         // Skip if this driver already has been offered or rejected this ride
         if (pending.attemptedDriverIds.has(event.driverId)) continue;
         if (pending.candidates.some((c) => c.driverId === event.driverId)) continue;
@@ -149,6 +180,9 @@ async function bootstrap(): Promise<void> {
             drivers: [driver],
             rideRequested: pending.rideRequested,
             expiresAt,
+            // Without this the late joiner is the only driver who cannot see
+            // that the job is a shared ride with someone else's stops on it.
+            group: pending.group,
           });
           console.log(`[ride-service] sent pending ride ${pending.rideRequested.rideId} to newly online driver ${event.driverId} (${dist.toFixed(1)}km away)`);
         }

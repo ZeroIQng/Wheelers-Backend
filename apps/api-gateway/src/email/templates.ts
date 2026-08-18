@@ -117,6 +117,71 @@ export function buildWelcomeDriverEmail(driverName?: string): { subject: string;
   };
 }
 
+// ── Driver KYC approved ─────────────────────────────────────────────
+
+export function buildDriverApprovedEmail(driverName?: string): { subject: string; html: string; from: string } {
+  const greeting = driverName ? `Hi ${driverName},` : 'Hi there,';
+
+  const html = emailShell(`
+  <h1 style="margin:0 0 16px;font-size:22px;font-weight:800;color:#0D0D0D;line-height:28px;letter-spacing:-0.3px;">
+    You're approved &mdash; welcome aboard!
+  </h1>
+  <p style="margin:0 0 16px;font-size:14px;color:#0D0D0D;line-height:22px;">
+    ${greeting}
+  </p>
+  <p style="margin:0 0 20px;font-size:14px;color:#0D0D0D;line-height:22px;">
+    Your documents have been reviewed and your driver account is now <strong>approved</strong>. You can go online and start accepting rides right away.
+  </p>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+    <tr><td align="center">
+      <div style="display:inline-block;background-color:#FFF0E8;border:2.5px solid #0D0D0D;border-radius:10px;padding:14px 32px;font-size:15px;font-weight:800;color:#FF5C00;letter-spacing:0.5px;">
+        ACCOUNT APPROVED
+      </div>
+    </td></tr>
+  </table>
+  <p style="margin:0 0 16px;font-size:14px;color:#0D0D0D;line-height:22px;">
+    To start earning:
+  </p>
+  <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 20px;">
+    <tr>
+      <td style="padding:0 12px 12px 0;vertical-align:top;">
+        <div style="width:28px;height:28px;border-radius:50%;background-color:#FFF0E8;border:2px solid #FF5C00;text-align:center;line-height:28px;font-size:12px;font-weight:700;color:#FF5C00;">1</div>
+      </td>
+      <td style="padding:0 0 12px;font-size:14px;color:#0D0D0D;line-height:20px;">
+        <strong>Open the Wheelers driver app</strong> &mdash; your account is ready to go.
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:0 12px 12px 0;vertical-align:top;">
+        <div style="width:28px;height:28px;border-radius:50%;background-color:#FFF0E8;border:2px solid #FF5C00;text-align:center;line-height:28px;font-size:12px;font-weight:700;color:#FF5C00;">2</div>
+      </td>
+      <td style="padding:0 0 12px;font-size:14px;color:#0D0D0D;line-height:20px;">
+        <strong>Go online</strong> &mdash; you'll start seeing ride requests from riders near you.
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:0 12px 0 0;vertical-align:top;">
+        <div style="width:28px;height:28px;border-radius:50%;background-color:#FFF0E8;border:2px solid #FF5C00;text-align:center;line-height:28px;font-size:12px;font-weight:700;color:#FF5C00;">3</div>
+      </td>
+      <td style="padding:0;font-size:14px;color:#0D0D0D;line-height:20px;">
+        <strong>Bid and earn</strong> &mdash; your earnings land in your Wheelers wallet after each ride.
+      </td>
+    </tr>
+  </table>
+  <p style="margin:0;font-size:14px;color:#0D0D0D;line-height:22px;">
+    Drive safe out there.
+  </p>
+  <p style="margin:16px 0 0;font-size:14px;color:#786F68;line-height:22px;">
+    &mdash; The Wheelers Team
+  </p>`);
+
+  return {
+    subject: 'You\'re approved — start driving with Wheelers',
+    html,
+    from: 'Wheelers <hello@wheelersng.com>',
+  };
+}
+
 // ── Password reset code email ───────────────────────────────────────
 
 export function buildPasswordResetEmail(code: string): { subject: string; html: string; from: string } {

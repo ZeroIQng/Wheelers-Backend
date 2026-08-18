@@ -63,6 +63,20 @@ export const walletClient = {
   findByUserIdOrThrow: (userId: string) =>
     prisma.wallet.findUniqueOrThrow({ where: { userId } }),
 
+  // Driver payouts within a period, queried by date rather than by slicing the
+  // N most recent transactions — a busy driver's payouts are interleaved with
+  // deposits and withdrawals, so a fixed window silently drops earnings.
+  findDriverPayoutsSince: (walletId: string, since: Date) =>
+    prisma.transaction.findMany({
+      where: {
+        walletId,
+        type:      'DRIVER_PAYOUT',
+        direction: 'CREDIT',
+        createdAt: { gte: since },
+      },
+      orderBy: { createdAt: 'desc' },
+    }),
+
   findTransactions: (walletId: string, limit = 30, cursor?: string) =>
     prisma.transaction.findMany({
       where:   { walletId },
@@ -337,10 +351,13 @@ export const walletClient = {
           },
         });
 
-        // 4. Credit driver (fare minus all deductions)
-        const driverWallet = await tx.wallet.update({
-          where: { userId: driverUserId },
-          data: { balanceNgn: { increment: driverPayoutNgn } },
+        // 4. Credit driver (fare minus all deductions).
+        // Upsert rather than update: a driver with no wallet row would otherwise
+        // abort the whole transaction, leaving the rider's funds locked forever.
+        const driverWallet = await tx.wallet.upsert({
+          where:  { userId: driverUserId },
+          create: { userId: driverUserId, balanceNgn: driverPayoutNgn },
+          update: { balanceNgn: { increment: driverPayoutNgn } },
         });
 
         const driverTransaction = await tx.transaction.create({
@@ -371,11 +388,20 @@ export const walletClient = {
           },
         });
 
-        // 6. Update driver earnings
-        await tx.driver.update({
+        // 6. Update driver earnings.
+        // updateMany, not update: a missing Driver row is a stats problem, and
+        // must not roll back a settlement that has already moved real money.
+        const earningsUpdate = await tx.driver.updateMany({
           where: { userId: driverUserId },
-          data: { totalEarningsNgn: { increment: driverPayoutNgn } },
+          data:  { totalEarningsNgn: { increment: driverPayoutNgn } },
         });
+
+        if (earningsUpdate.count === 0) {
+          console.warn(
+            '[wallet-client] settled a ride for a user with no Driver row — earnings stat not updated',
+            { rideId, driverUserId, driverPayoutNgn },
+          );
+        }
 
         // 7. Store platform fee on the ride record
         await tx.ride.update({

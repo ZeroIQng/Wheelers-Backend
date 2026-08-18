@@ -96,6 +96,15 @@ export const RideOfferSentEvent = BaseRideEvent.extend({
   plannedDurationSeconds: z.number().int().optional(),
   expiresAt:             z.string().datetime(),
   route:                 RouteGeometry.optional(),
+  // Group rides ride the same offer pipeline as solo ones. Without these the
+  // driver cannot tell a 17km solo trip from a 17km three-pickup shared trip —
+  // very different jobs at the same distance and fare.
+  isGroupRide:           z.boolean().optional(),
+  riderCount:            z.number().int().positive().optional(),
+  // Parallel to `stops` — tells the driver which waypoints are pickups and
+  // which are drop-offs, so a shared route reads as a plan rather than a
+  // list of anonymous coordinates.
+  stopKinds:             z.array(z.enum(['pickup', 'dropoff'])).max(5).optional(),
 });
 
 // Fired by api-gateway when driver sends a counter-offer via WebSocket.

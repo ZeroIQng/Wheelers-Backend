@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
-import { GoogleMapsRoutePlanner, validateRiderOffer } from '@wheleers/config';
-import { chatClient, driverClient, referralClient } from '@wheleers/db';
+import { GoogleMapsRoutePlanner, validateRiderOffer, calculateSuggestedFare } from '@wheleers/config';
+import { chatClient, driverClient, groupRideClient, referralClient, rideClient } from '@wheleers/db';
 import {
   ChatMessageSentEvent,
   DisputeOpenedEvent,
@@ -32,6 +32,69 @@ function requireString(payload: Record<string, unknown>, key: string): string {
   const value = getString(payload, key);
   if (!value) throw new Error(`Missing required field: ${key}`);
   return value;
+}
+
+/**
+ * Counter-offers re-open the price after the initial offer was validated, so
+ * they have to clear the same bar — otherwise either side can haggle a ride
+ * below the minimum fare and the floor only applies to the first offer.
+ */
+async function assertOfferMeetsMinimum(
+  rideId: string,
+  offerNgn: number,
+  who: 'rider' | 'driver',
+): Promise<void> {
+  const suggestedFareNgn = await resolveSuggestedFareNgn(rideId);
+
+  // Unknown ride: bidding must not be blocked by a lookup we could not resolve.
+  if (suggestedFareNgn === null) {
+    console.warn('[api-gateway][ride] could not resolve a fare to validate the counter-offer against', {
+      rideId,
+      who,
+      offerNgn,
+    });
+    return;
+  }
+
+  const validation = validateRiderOffer(offerNgn, suggestedFareNgn);
+  if (!validation.valid) {
+    console.warn('[api-gateway][ride] counter-offer rejected below minimum', {
+      rideId,
+      who,
+      offerNgn,
+      minOfferNgn: validation.minOfferNgn,
+      suggestedFareNgn,
+    });
+    throw new Error(validation.reason ?? `Offer must be at least ${validation.minOfferNgn} NGN.`);
+  }
+}
+
+/**
+ * A group ride's rideId is a GroupRideMatchRequest id, not a Ride id — no Ride
+ * row exists for it, so looking only in `Ride` throws and kills bidding on
+ * every group ride. Check both, and return null when neither knows the ride.
+ */
+async function resolveSuggestedFareNgn(rideId: string): Promise<number | null> {
+  const ride = await rideClient.findById(rideId).catch(() => null);
+  if (ride) {
+    return ride.fareEstimateNgn !== null && ride.fareEstimateNgn !== undefined
+      ? Number(ride.fareEstimateNgn)
+      : 0;
+  }
+
+  const groupRequest = await groupRideClient.findMatchRequestById(rideId).catch(() => null);
+  if (groupRequest) {
+    // Price the group leg off its planned distance where we have it, so the
+    // floor applies to group bids the same way it does to solo ones.
+    if (groupRequest.plannedDistanceKm) {
+      return calculateSuggestedFare(groupRequest.plannedDistanceKm).suggestedFareNgn;
+    }
+    return groupRequest.fareEstimateNgn !== null && groupRequest.fareEstimateNgn !== undefined
+      ? Number(groupRequest.fareEstimateNgn)
+      : 0;
+  }
+
+  return null;
 }
 
 function requireNumber(payload: Record<string, unknown>, key: string): number {
@@ -244,6 +307,8 @@ export async function handleRideMessage(
       timestamp,
     });
 
+    await assertOfferMeetsMinimum(event.rideId, event.counterOfferNgn, 'driver');
+
     await publisher.publishRideEvent(event);
 
     return {
@@ -288,6 +353,8 @@ export async function handleRideMessage(
       counterOfferNgn: requireNumber(payload, 'counterOfferNgn'),
       timestamp,
     });
+
+    await assertOfferMeetsMinimum(event.rideId, event.counterOfferNgn, 'rider');
 
     await publisher.publishRideEvent(event);
 

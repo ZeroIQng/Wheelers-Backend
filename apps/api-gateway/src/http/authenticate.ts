@@ -2,6 +2,19 @@ import type { IncomingMessage } from 'http';
 import { userClient } from '@wheleers/db';
 import { verifyLocalAccessToken } from '../auth/local';
 
+/**
+ * Thrown only when the caller is genuinely not authenticated. Routes use this
+ * to tell "your token is bad" (401 — the client should re-auth) apart from
+ * "the database blew up" (500), which used to be reported as 401 and would log
+ * a driver out mid-shift on any transient error.
+ */
+export class HttpAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HttpAuthError';
+  }
+}
+
 export function extractBearerToken(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -24,9 +37,17 @@ export async function authenticateHttpUser(
   const token = extractBearerToken(authorization);
 
   if (!token) {
-    throw new Error('Authorization bearer token is required');
+    throw new HttpAuthError('Authorization bearer token is required');
   }
 
-  const localToken = verifyLocalAccessToken(token, jwtSecret);
+  let localToken: ReturnType<typeof verifyLocalAccessToken>;
+  try {
+    localToken = verifyLocalAccessToken(token, jwtSecret);
+  } catch (error) {
+    throw new HttpAuthError(
+      error instanceof Error ? error.message : 'Invalid access token.',
+    );
+  }
+
   return await userClient.findById(localToken.sub);
 }

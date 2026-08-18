@@ -17,6 +17,7 @@ import {
 } from "@wheleers/pouch-client";
 import type { RedisClient } from "../redis/client";
 import type { PayoutCreatedEvent } from "@wheleers/kafka-schemas";
+import { MIN_WITHDRAWAL_NGN } from "@wheleers/config";
 
 // ─── Deps ──────────────────────────────────────────────────────────
 
@@ -484,15 +485,47 @@ export async function handleCreateWalletWithdrawalRoute(
     // Parse amount
     const amountNgn = pickNumber(rawBody, ["amountNgn", "amountLocal", "amount"]);
     if (!amountNgn || amountNgn <= 0) {
+      console.warn("[api-gateway][wallet-withdrawal] rejected: invalid amount", {
+        userId: user.id,
+        walletId: wallet.id,
+        rawAmount: rawBody["amountNgn"] ?? rawBody["amountLocal"] ?? rawBody["amount"] ?? null,
+      });
       sendJson(res, 400, { error: "amountNgn must be a positive number." });
       return;
     }
 
     const requestedAmountNgn = roundNgn(amountNgn);
 
+    // Below the provider's floor — reject before reserving funds, so we never
+    // lock the user's money for a payout the provider was always going to refuse.
+    if (requestedAmountNgn < MIN_WITHDRAWAL_NGN) {
+      console.warn("[api-gateway][wallet-withdrawal] rejected: below minimum", {
+        userId: user.id,
+        walletId: wallet.id,
+        requestedAmountNgn,
+        minimumNgn: MIN_WITHDRAWAL_NGN,
+        shortfallNgn: roundNgn(MIN_WITHDRAWAL_NGN - requestedAmountNgn),
+        availableBalanceNgn: roundNgn(decimalToNumber(wallet.balanceNgn) ?? 0),
+      });
+      sendJson(res, 400, {
+        error: `Minimum withdrawal is NGN ${MIN_WITHDRAWAL_NGN.toLocaleString("en-NG")}.`,
+        minimumNgn: MIN_WITHDRAWAL_NGN,
+        requestedAmountNgn,
+      });
+      return;
+    }
+
     // Check balance
     const balanceNgn = decimalToNumber(wallet.balanceNgn) ?? 0;
     if (balanceNgn < requestedAmountNgn) {
+      console.warn("[api-gateway][wallet-withdrawal] rejected: insufficient balance", {
+        userId: user.id,
+        walletId: wallet.id,
+        requestedAmountNgn,
+        availableBalanceNgn: roundNgn(balanceNgn),
+        lockedNgn: roundNgn(decimalToNumber(wallet.lockedNgn) ?? 0),
+        shortfallNgn: roundNgn(requestedAmountNgn - balanceNgn),
+      });
       sendJson(res, 400, {
         error: "Insufficient balance for this withdrawal.",
         availableBalanceNgn: roundNgn(balanceNgn),
@@ -604,6 +637,16 @@ export async function handleCreateWalletWithdrawalRoute(
 
     sendJson(res, result.statusCode, result.body);
   } catch (error) {
+    // Previously silent: a failed payout returned a 400 to the client and left
+    // no server-side trace at all, so provider rejections were invisible.
+    console.error("[api-gateway][wallet-withdrawal] withdrawal failed", {
+      withdrawalRequestId: reservedRequestId ?? null,
+      fundsWereReserved: Boolean(reservedRequestId),
+      error: error instanceof Error ? error.message : String(error),
+      providerStatus: (error as { status?: number })?.status ?? null,
+      providerCode: (error as { code?: string })?.code ?? null,
+    });
+
     if (reservedRequestId) {
       await withdrawalClient
         .releaseFailedRequest({
@@ -613,6 +656,11 @@ export async function handleCreateWalletWithdrawalRoute(
               ? error.message
               : "Withdrawal creation failed.",
           status: "FAILED",
+        })
+        .then(() => {
+          console.warn("[api-gateway][wallet-withdrawal] reservation released after failure", {
+            withdrawalRequestId: reservedRequestId,
+          });
         })
         .catch((releaseErr) => {
           console.error('[api-gateway][wallet-withdrawal] failed to release reservation', {

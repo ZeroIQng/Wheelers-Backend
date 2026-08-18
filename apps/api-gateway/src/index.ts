@@ -901,6 +901,7 @@ async function bootstrap(): Promise<void> {
           adminApiKey: process.env.ADMIN_API_KEY ?? '',
           jwtSecret: gatewayEnv.JWT_SECRET,
           kycStorage: driverKycStorage,
+          resendApiKey: gatewayEnv.RESEND_API_KEY,
         }, approveMatch[1]!);
         return;
       }

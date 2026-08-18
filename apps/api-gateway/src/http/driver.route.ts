@@ -1,10 +1,32 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { driverClient, rideClient, walletClient } from '@wheleers/db';
-import { authenticateHttpUser } from './authenticate';
+import { authenticateHttpUser, HttpAuthError } from './authenticate';
 import { sendJson } from './utils';
 
 interface DriverRouteDeps {
   jwtSecret: string;
+}
+
+/**
+ * 401 only for real auth failures. Anything else is our fault, not the
+ * client's — reporting it as 401 makes the app treat a server error as an
+ * expired session and sign the driver out.
+ */
+function sendDriverRouteError(
+  res: ServerResponse,
+  route: string,
+  error: unknown,
+  fallbackMessage: string,
+): void {
+  if (error instanceof HttpAuthError) {
+    sendJson(res, 401, { error: error.message });
+    return;
+  }
+
+  console.error(`[api-gateway][driver] ${route} failed`, {
+    error: error instanceof Error ? error.message : String(error),
+  });
+  sendJson(res, 500, { error: fallbackMessage });
 }
 
 function decimalToNumber(value: unknown): number {
@@ -70,9 +92,7 @@ export async function handleGetDriverStatsRoute(
       lockedNgn: wallet ? decimalToNumber(wallet.lockedNgn) : 0,
     });
   } catch (error) {
-    sendJson(res, 401, {
-      error: error instanceof Error ? error.message : 'Could not load driver stats.',
-    });
+    sendDriverRouteError(res, 'GET /drivers/me/stats', error, 'Could not load driver stats.');
   }
 }
 
@@ -108,16 +128,9 @@ export async function handleGetDriverEarningsRoute(
     }
 
     const wallet = await walletClient.findByUserId(user.id);
-    const transactions = wallet
-      ? await walletClient.findTransactions(wallet.id, 100)
+    const earningTransactions = wallet
+      ? await walletClient.findDriverPayoutsSince(wallet.id, since)
       : [];
-
-    const earningTransactions = transactions.filter(
-      (tx) =>
-        tx.type === 'DRIVER_PAYOUT' &&
-        tx.direction === 'CREDIT' &&
-        tx.createdAt >= since,
-    );
 
     const totalEarningsNgn = earningTransactions.reduce(
       (sum, tx) => sum + decimalToNumber(tx.amountNgn),
@@ -136,9 +149,7 @@ export async function handleGetDriverEarningsRoute(
       })),
     });
   } catch (error) {
-    sendJson(res, 401, {
-      error: error instanceof Error ? error.message : 'Could not load driver earnings.',
-    });
+    sendDriverRouteError(res, 'GET /drivers/me/earnings', error, 'Could not load driver earnings.');
   }
 }
 
@@ -183,8 +194,6 @@ export async function handleGetDriverRideHistoryRoute(
         rides.length === limit ? (rides[rides.length - 1]?.id ?? null) : null,
     });
   } catch (error) {
-    sendJson(res, 401, {
-      error: error instanceof Error ? error.message : 'Could not load driver ride history.',
-    });
+    sendDriverRouteError(res, 'GET /drivers/me/rides/history', error, 'Could not load driver ride history.');
   }
 }

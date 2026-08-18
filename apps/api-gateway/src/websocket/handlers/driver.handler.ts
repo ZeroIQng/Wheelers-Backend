@@ -26,8 +26,11 @@ function resolveDriverId(payload: Record<string, unknown>, auth: GatewayAuthCont
 
   if (auth.driverId) return auth.driverId;
 
+  // Never fall back to auth.userId here: Driver.id is its own uuid and never
+  // equals User.id, so doing so publishes an id that matches no Driver row and
+  // every downstream persist silently no-ops.
   if (auth.role === 'DRIVER' || auth.role === 'BOTH') {
-    return auth.userId;
+    throw new Error('No driver profile found for this account.');
   }
 
   throw new Error('driverId is required for driver events');

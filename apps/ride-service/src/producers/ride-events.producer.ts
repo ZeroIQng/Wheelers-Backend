@@ -29,12 +29,16 @@ export type RideEventsProducer = {
     drivers: OnlineDriver[];
     rideRequested: RideRequestedEvent;
     expiresAt: Date;
+    /** Set for group rides so the driver app can badge the offer. */
+    group?: { riderCount: number; stopKinds?: Array<'pickup' | 'dropoff'> };
   }): Promise<void>;
   sendUpdatedOfferToDriver(params: {
     driver: OnlineDriver;
     rideRequested: RideRequestedEvent;
     updatedOfferNgn: number;
     expiresAt: Date;
+    /** Same badge as the original offer — a re-price does not change the job. */
+    group?: { riderCount: number; stopKinds?: Array<'pickup' | 'dropoff'> };
   }): Promise<void>;
   gpsStaleWarning(event: GpsStaleWarningEvent): Promise<void>;
 };
@@ -69,9 +73,9 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
       await producer.send(TOPICS.RIDE_EVENTS, event as any, { key: event.rideId });
     },
 
-    async broadcastRideOffer({ drivers, rideRequested, expiresAt }) {
+    async broadcastRideOffer({ drivers, rideRequested, expiresAt, group }) {
       const timestamp = new Date().toISOString();
-      const title = 'New ride request';
+      const title = group ? `Group ride · ${group.riderCount} riders` : 'New ride request';
       const stopCount = rideRequested.stops.length;
       const body =
         stopCount > 0
@@ -104,6 +108,13 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
           expiresAt: expiresAt.toISOString(),
           route: rideRequested.route,
           timestamp,
+          ...(group
+            ? {
+                isGroupRide: true,
+                riderCount: group.riderCount,
+                ...(group.stopKinds ? { stopKinds: group.stopKinds } : {}),
+              }
+            : {}),
         };
 
         batch.push({
@@ -157,7 +168,7 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
       }
     },
 
-    async sendUpdatedOfferToDriver({ driver, rideRequested, updatedOfferNgn, expiresAt }) {
+    async sendUpdatedOfferToDriver({ driver, rideRequested, updatedOfferNgn, expiresAt, group }) {
       const timestamp = new Date().toISOString();
 
       const offerEvent: RideOfferSentEvent = {
@@ -179,13 +190,23 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
         expiresAt: expiresAt.toISOString(),
         route: rideRequested.route,
         timestamp,
+        // A re-price replaces the offer card in the driver app. Omitting these
+        // stripped the group badge and the pickup/dropoff labels off a shared
+        // ride the moment the rider changed their bid.
+        ...(group
+          ? {
+              isGroupRide: true,
+              riderCount: group.riderCount,
+              ...(group.stopKinds ? { stopKinds: group.stopKinds } : {}),
+            }
+          : {}),
       };
 
       const push: PushSendEvent = {
         eventType: 'PUSH_SEND',
         notificationId: randomUUID(),
         userId: driver.userId,
-        title: 'Updated rider offer',
+        title: group ? `Updated offer · group ride (${group.riderCount} riders)` : 'Updated rider offer',
         body: `Rider updated their offer to ₦${updatedOfferNgn} for ${rideRequested.pickup.address} → ${rideRequested.destination.address}`,
         data: {
           type: 'ride:offer_updated',

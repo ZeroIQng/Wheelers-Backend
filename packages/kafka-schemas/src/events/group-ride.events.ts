@@ -120,6 +120,10 @@ export const GroupRideDriverDispatchRequestedEvent = BaseGroupRideEvent.extend({
   rideIds: z.array(z.string().uuid()).min(2),
   riderIds: z.array(z.string().uuid()).min(2),
   firstPickup: LatLng,
+  // The full pickup/dropoff sequence the driver will actually drive. Without
+  // it the offer they receive shows the first pickup as both origin and
+  // destination and claims zero stops.
+  stops: z.array(GroupRideStop).min(4).optional(),
   totalDistanceKm: z.number().nonnegative(),
   totalDurationSeconds: z.number().int().nonnegative(),
   fareEstimateNgn: z.number().nonnegative(),

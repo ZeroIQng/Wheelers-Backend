@@ -26,7 +26,10 @@ export function createTripLifecycleHandler(params?: {
       if (!event) return;
 
       if (event.eventType === 'RIDE_DRIVER_ASSIGNED') {
+        // Merge, never replace — see the note in ride-requested.consumer.ts:
+        // replacing drops a group ride's non-anchor riders.
         state?.rideParticipantsByRideId.set(event.rideId, {
+          ...state.rideParticipantsByRideId.get(event.rideId),
           riderId: event.riderId,
           driverId: event.driverId,
         });
@@ -38,12 +41,21 @@ export function createTripLifecycleHandler(params?: {
           });
           await driverClient.updateStatus(event.driverId, DriverStatus.ON_RIDE);
         } catch (err) {
-          console.warn(`[ride-service] ride assignment persistence skipped:`, (err as any)?.message ?? err);
+          // agreedFareNgn is written here and read back at completion. If this
+          // fails the ride settles on fareEstimateNgn — the suggested fare, not
+          // the negotiated one — while escrow still holds the agreed amount.
+          console.error('[ride-service] CRITICAL: ride assignment persistence FAILED — settlement may use the wrong fare', {
+            rideId: event.rideId,
+            driverId: event.driverId,
+            agreedFareNgn: event.agreedFareNgn,
+            error: (err as any)?.message ?? err,
+          });
         }
       }
 
       if (event.eventType === 'RIDE_STARTED') {
         state?.rideParticipantsByRideId.set(event.rideId, {
+          ...state.rideParticipantsByRideId.get(event.rideId),
           riderId: event.riderId,
           driverId: event.driverId,
         });
@@ -160,7 +172,14 @@ export function createTripLifecycleHandler(params?: {
             timestamp: new Date().toISOString(),
           });
         } catch (err) {
-          console.warn(`[ride-service] ride completion request skipped:`, (err as any)?.message ?? err);
+          // Nothing downstream runs without RIDE_COMPLETED: the rider's fare
+          // stays locked in escrow and the driver is never credited.
+          console.error('[ride-service] CRITICAL: ride completion FAILED — no RIDE_COMPLETED published, fare still held', {
+            rideId: event.rideId,
+            riderId: event.riderId,
+            driverId: event.driverId,
+            error: (err as any)?.message ?? err,
+          });
         }
       }
 
@@ -378,9 +397,16 @@ async function resolveDriverUserId(driverId: string): Promise<string> {
   try {
     const driver = await driverClient.findById(driverId);
     return driver.userId;
-  } catch {
-    // Fallback: use driverId as userId if lookup fails
-    return driverId;
+  } catch (err) {
+    // Never fall back to driverId here. Driver.id is not User.id, so a made-up
+    // userId rides along on RIDE_COMPLETED into wallet settlement, where it
+    // matches no wallet — the rider's funds stay locked and the driver is not
+    // paid. Failing loudly leaves the event un-acked and retryable instead.
+    console.error('[ride-service] CRITICAL: cannot resolve driver userId — completion aborted', {
+      driverId,
+      error: (err as any)?.message ?? err,
+    });
+    throw new Error(`Cannot resolve userId for driver ${driverId}; refusing to complete ride.`);
   }
 }
 
