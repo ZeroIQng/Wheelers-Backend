@@ -2,6 +2,12 @@ node_modules/
 dist/
 build/
 .env
+# Every .env variant and backup — a plain `.env` rule does not cover
+# .env.local, .env.production, or a timestamped .env.bak.*, and `git add .`
+# will happily commit the secrets in them.
+.env.*
+!.env.example
+logs/
 .DS_Store
 .idea/
 .vscode/
