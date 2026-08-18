@@ -456,19 +456,42 @@ async function handleRideEvent(
       await registry.sendToUser(event.riderId, 'ride:cancelled', {
         rideId: event.rideId,
         reason: event.reason,
+        cancelledBy: event.cancelledBy ?? 'rider',
         referralCashbackReleasedNgn:
           releasedReferralCashback.releasedCashbackNgn,
       });
     }
 
-    // Notify driver via WebSocket (app)
+    // Notify driver via WebSocket (app).
+    // rideParticipants is in-memory and only filled by RIDE_REQUESTED /
+    // RIDE_DRIVER_ASSIGNED, so any gateway restart empties it and the driver
+    // silently got nothing. Fall back to the DB, which always knows.
     if (event.driverId) {
       const participants = rideParticipants.get(event.rideId);
-      const driverUserId = participants?.driverUserId;
+      let driverUserId = participants?.driverUserId ?? event.driverUserId;
+
+      if (!driverUserId) {
+        const driver = await driverClient.findById(event.driverId).catch((error) => {
+          console.warn('[gateway] could not resolve driver user for cancellation', {
+            rideId: event.rideId,
+            driverId: event.driverId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return null;
+        });
+        driverUserId = driver?.userId;
+      }
+
       if (driverUserId) {
         await registry.sendToUser(driverUserId, 'ride:cancelled', {
           rideId: event.rideId,
           reason: event.reason,
+          cancelledBy: event.cancelledBy ?? 'rider',
+        });
+      } else {
+        console.warn('[gateway] ride cancelled but the driver could not be notified', {
+          rideId: event.rideId,
+          driverId: event.driverId,
         });
       }
     }

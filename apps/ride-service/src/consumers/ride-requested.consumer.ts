@@ -1,9 +1,11 @@
 import { driverClient, rideClient } from '@wheleers/db';
+import { RIDE, calculateSuggestedFare } from '@wheleers/config';
 import type { RideEnv } from '@wheleers/config';
 import type { MessageContext } from '@wheleers/kafka-client';
 import {
   safeParseKafkaEvent,
   TOPICS,
+  type RideCancelledEvent,
   type RideCounterOfferEvent,
   type RideRiderCounterOfferEvent,
   type RideDriverRejectedEvent,
@@ -16,7 +18,7 @@ import type { PendingRideMatch, RideServiceState } from '../index';
 import type { RideEventsProducer } from '../producers/ride-events.producer';
 import { matchDriver } from '../handlers/match-driver.handler';
 
-const BID_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
+const BID_TIMEOUT_MS = RIDE.BID_TIMEOUT_SECONDS * 1000;
 
 export function createRideRequestedConsumer(params: {
   state: RideServiceState;
@@ -85,6 +87,14 @@ export function createRideRequestedConsumer(params: {
         clearPendingMatch(event.rideId);
         state.routeByRideId.delete(event.rideId);
         returnAssignedDriverToPool(event.rideId);
+
+        // A driver bailing after they accepted is not the end of the ride —
+        // the rider is still standing there waiting. Previously the ride just
+        // died here and the rider was left with nothing. Put it back into
+        // matching and offer it to every nearby driver except the one who left.
+        if (event.cancelledBy === 'driver') {
+          await redispatchAfterDriverCancel(event);
+        }
         return;
       }
 
@@ -385,6 +395,111 @@ export function createRideRequestedConsumer(params: {
         counterOfferDrivers: new Map(),
       });
     }
+  }
+
+  /**
+   * Rebuilds the ride request from the database and re-runs matching, skipping
+   * the driver who just cancelled so they cannot immediately be re-offered the
+   * same job they walked away from.
+   */
+  async function redispatchAfterDriverCancel(event: RideCancelledEvent): Promise<void> {
+    const ride = await rideClient.findById(event.rideId).catch((err) => {
+      console.error('[ride-service] cannot re-match after driver cancel — ride lookup failed', {
+        rideId: event.rideId,
+        error: (err as any)?.message ?? err,
+      });
+      return null;
+    });
+
+    if (!ride) return;
+    if (ride.status === 'COMPLETED' || ride.status === 'CANCELLED') {
+      return;
+    }
+
+    await rideClient.markMatching(event.rideId).catch((err) => {
+      console.warn('[ride-service] could not reset ride to MATCHING', {
+        rideId: event.rideId,
+        error: (err as any)?.message ?? err,
+      });
+    });
+
+    const routeStops = await rideClient.findRouteStops(event.rideId).catch(() => []);
+    const stops = routeStops
+      .filter((stop) => stop.type === 'INTERMEDIATE' && stop.status !== 'COMPLETED')
+      .map((stop) => ({ lat: stop.lat, lng: stop.lng, address: stop.address }));
+
+    const distanceKm = ride.distanceKm ?? 0;
+    const pricing = calculateSuggestedFare(distanceKm);
+    const riderOfferNgn =
+      ride.riderOfferNgn !== null && ride.riderOfferNgn !== undefined
+        ? Number(ride.riderOfferNgn)
+        : pricing.suggestedFareNgn;
+
+    const rideRequested: RideRequestedEvent = {
+      eventType: 'RIDE_REQUESTED',
+      rideId: ride.id,
+      riderId: ride.riderId,
+      pickup: { lat: ride.pickupLat, lng: ride.pickupLng, address: ride.pickupAddress },
+      destination: { lat: ride.destLat, lng: ride.destLng, address: ride.destAddress },
+      stops: stops.slice(0, 5),
+      fareEstimateNgn:
+        ride.fareEstimateNgn !== null && ride.fareEstimateNgn !== undefined
+          ? Number(ride.fareEstimateNgn)
+          : pricing.suggestedFareNgn,
+      paymentMethod: ride.paymentMethod === 'CASH' ? 'CASH' : 'WALLET',
+      riderOfferNgn,
+      suggestedFareNgn: pricing.suggestedFareNgn,
+      minOfferNgn: pricing.minOfferNgn,
+      ratePerKmNgn: pricing.ratePerKmNgn,
+      plannedDistanceKm: ride.distanceKm ?? undefined,
+      plannedDurationSeconds: ride.durationSeconds ?? undefined,
+      timestamp: new Date().toISOString(),
+    };
+
+    const result = await matchDriver({
+      rideEnv,
+      onlineDrivers: state.onlineDrivers,
+      rideRequested,
+    });
+
+    const drivers = result.ok
+      ? result.drivers.filter((driver) => driver.driverId !== event.driverId)
+      : [];
+
+    // Remember the departing driver so the retry loop never circles back to
+    // them, even if they are still the closest car on the map.
+    const attemptedDriverIds = new Set<string>();
+    if (event.driverId) attemptedDriverIds.add(event.driverId);
+
+    state.pendingMatchesByRideId.set(event.rideId, {
+      rideRequested,
+      candidates: drivers,
+      attemptedDriverIds,
+      offeredDriverId: null,
+      timeout: null,
+      counterOfferDrivers: new Map(),
+    });
+
+    // Arm the timeout first so the rider is told either way — a re-match with
+    // no drivers left must not strand them in a silent search.
+    startBidTimeout(rideRequested);
+
+    if (drivers.length === 0) {
+      console.log(
+        `[ride-service] driver ${event.driverId} cancelled ride ${event.rideId}; no other drivers available`,
+      );
+      return;
+    }
+
+    await rideEventsProducer.broadcastRideOffer({
+      drivers,
+      rideRequested,
+      expiresAt: new Date(Date.now() + BID_TIMEOUT_MS),
+    });
+
+    console.log(
+      `[ride-service] driver ${event.driverId} cancelled ride ${event.rideId} — re-broadcast to ${drivers.length} drivers`,
+    );
   }
 
   function clearPendingMatch(rideId: string): void {

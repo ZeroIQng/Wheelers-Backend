@@ -36,6 +36,7 @@
     "db:migrate:deploy": "node scripts/run-with-env.cjs npm -w @wheleers/db run db:migrate:deploy",
     "db:studio": "node scripts/run-with-env.cjs npm -w @wheleers/db run db:studio",
     "test:ride-service": "tsc -p test/tsconfig.json && node test/dist/ride-service.smoke.js",
+    "test:ride-cancel": "tsc -p test/tsconfig.json && node test/dist/ride-cancel.integration.js",
     "test:group-ride": "npm run build && node --test test/group-ride.test.js",
     "test:group-ride:live": "npm run build && node --test test/group-ride.live.test.js",
     "test:payment-service": "npm run build && node --test test/payment-service.test.js",

@@ -42,6 +42,8 @@ async function main(): Promise<void> {
   const riderId = randomUUID();
   const driverId = randomUUID();
   const secondDriverId = randomUUID();
+  const driverUserId = randomUUID();
+  const secondDriverUserId = randomUUID();
   const seen: Seen = {
     rideOffersByDriverId: new Map(),
     rideAssigned: null,
@@ -68,6 +70,8 @@ async function main(): Promise<void> {
     riderId,
     driverId,
     secondDriverId,
+    driverUserId,
+    secondDriverUserId,
   });
 
   await ensureTopics(admin);
@@ -184,13 +188,18 @@ async function main(): Promise<void> {
           destination: { lat: 6.535, lng: 3.4, address: 'Destination' },
           stops: [{ lat: 6.53, lng: 3.39, address: 'Coffee stop' }],
           fareEstimateNgn: 2500,
+          paymentMethod: 'WALLET',
+          riderOfferNgn: 2500,
+          suggestedFareNgn: 2500,
+          minOfferNgn: 2000,
+          ratePerKmNgn: 300,
           timestamp: nowIso(),
         }),
       },
     ],
   });
 
-  await waitFor(() => seen.rideOffersByDriverId.has(driverId), 15_000, 'first ride offer');
+  await waitFor(() => seen.rideOffersByDriverId.has(driverUserId), 15_000, 'first ride offer');
   console.log('[test] got first ride offer');
   await waitForDb(
     async () => {
@@ -220,7 +229,7 @@ async function main(): Promise<void> {
     ],
   });
 
-  await waitFor(() => seen.rideOffersByDriverId.has(secondDriverId), 15_000, 'second ride offer');
+  await waitFor(() => seen.rideOffersByDriverId.has(secondDriverUserId), 15_000, 'second ride offer');
   console.log('[test] got retry ride offer');
 
   // 4) Simulate the driver accept event emitted by api-gateway.
@@ -234,13 +243,15 @@ async function main(): Promise<void> {
           rideId,
           riderId,
           driverId: secondDriverId,
-          driverUserId: `user-${secondDriverId}`,
+          driverUserId: secondDriverUserId,
           driverName: 'Retry Driver',
           driverRating: 5,
           vehiclePlate: 'TEST-456',
           vehicleModel: 'Retry Model',
           etaSeconds: 120,
+          agreedFareNgn: 2500,
           lockedFareNgn: 2500,
+          paymentMethod: 'WALLET',
           timestamp: nowIso(),
         }),
       },
@@ -407,6 +418,8 @@ async function main(): Promise<void> {
     riderId,
     driverId,
     secondDriverId,
+    driverUserId,
+    secondDriverUserId,
   });
   await prisma.$disconnect();
   await producer.disconnect();
@@ -531,6 +544,8 @@ async function seedDbFixtures(
     riderId: string;
     driverId: string;
     secondDriverId: string;
+    driverUserId: string;
+    secondDriverUserId: string;
   },
 ): Promise<void> {
   await cleanupDbFixtures(prisma, {
@@ -538,6 +553,8 @@ async function seedDbFixtures(
     riderId: fixtures.riderId,
     driverId: fixtures.driverId,
     secondDriverId: fixtures.secondDriverId,
+    driverUserId: fixtures.driverUserId,
+    secondDriverUserId: fixtures.secondDriverUserId,
   });
 
   await prisma.user.create({
@@ -551,7 +568,7 @@ async function seedDbFixtures(
 
   await prisma.user.create({
     data: {
-      id: `user-${fixtures.driverId}`,
+      id: fixtures.driverUserId,
       privyDid: `test-driver-${fixtures.driverId}`,
       role: 'DRIVER',
       name: 'Smoke Driver',
@@ -571,7 +588,7 @@ async function seedDbFixtures(
 
   await prisma.user.create({
     data: {
-      id: `user-${fixtures.secondDriverId}`,
+      id: fixtures.secondDriverUserId,
       privyDid: `test-driver-${fixtures.secondDriverId}`,
       role: 'DRIVER',
       name: 'Retry Driver',
@@ -597,12 +614,24 @@ async function cleanupDbFixtures(
     riderId: string;
     driverId: string;
     secondDriverId: string;
+    driverUserId?: string;
+    secondDriverUserId?: string;
   },
 ): Promise<void> {
   if (fixtures.rideId) {
     await prisma.gpsLog.deleteMany({ where: { rideId: fixtures.rideId } });
     await prisma.ride.deleteMany({ where: { id: fixtures.rideId } });
   }
+
+  // Notifications hold an FK to User. Deleting users first fails, which left
+  // every fixture driver behind — and leftovers crowd out the current run's
+  // drivers, since matchDriver only takes the 5 nearest.
+  const fixtureUserIds = [
+    fixtures.riderId,
+    ...(fixtures.driverUserId ? [fixtures.driverUserId] : []),
+    ...(fixtures.secondDriverUserId ? [fixtures.secondDriverUserId] : []),
+  ];
+  await prisma.notification.deleteMany({ where: { userId: { in: fixtureUserIds } } });
 
   await prisma.driver.deleteMany({
     where: { id: { in: [fixtures.driverId, fixtures.secondDriverId] } },
@@ -612,8 +641,8 @@ async function cleanupDbFixtures(
       id: {
         in: [
           fixtures.riderId,
-          `user-${fixtures.driverId}`,
-          `user-${fixtures.secondDriverId}`,
+          ...(fixtures.driverUserId ? [fixtures.driverUserId] : []),
+          ...(fixtures.secondDriverUserId ? [fixtures.secondDriverUserId] : []),
         ],
       },
     },

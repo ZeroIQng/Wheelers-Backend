@@ -205,11 +205,26 @@ export function createTripLifecycleHandler(params?: {
       }
 
       if (event.eventType === 'RIDE_CANCELLED') {
-        state?.rideParticipantsByRideId.delete(event.rideId);
         state?.gpsByRideId.delete(event.rideId);
         state?.routeByRideId.delete(event.rideId);
 
+        // A driver walking away does NOT end the ride — ride-service puts it
+        // straight back into matching for another driver. Writing CANCELLED
+        // here would bury a ride that is actively being re-broadcast, and it
+        // would show up in history as cancelled while the rider is still
+        // waiting. Only a rider (or the system) cancelling truly ends it.
+        const ridePutBackIntoMatching = event.cancelledBy === 'driver';
+
         try {
+          if (ridePutBackIntoMatching) {
+            // Hand the driver back to the pool; the ride itself lives on.
+            if (event.driverId) {
+              await driverClient.updateStatus(event.driverId, DriverStatus.ONLINE);
+            }
+            return;
+          }
+
+          state?.rideParticipantsByRideId.delete(event.rideId);
           await rideClient.cancel(event.rideId, {
             cancelReason: event.reason,
           });

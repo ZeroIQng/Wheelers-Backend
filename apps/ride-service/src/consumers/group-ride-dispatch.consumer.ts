@@ -1,4 +1,4 @@
-import { calculateSuggestedFare } from '@wheleers/config';
+import { RIDE, calculateSuggestedFare } from '@wheleers/config';
 import type { RideEnv } from '@wheleers/config';
 import type { MessageContext } from '@wheleers/kafka-client';
 import {
@@ -13,7 +13,7 @@ import type { RideEventsProducer } from '../producers/ride-events.producer';
 import { matchDriver } from '../handlers/match-driver.handler';
 
 /** Same window solo rides use, so a group offer expires the same way. */
-const BID_TIMEOUT_MS = 3 * 60 * 1000;
+const BID_TIMEOUT_MS = RIDE.BID_TIMEOUT_SECONDS * 1000;
 
 export function createGroupRideDispatchConsumer(params: {
   state: RideServiceState;

@@ -255,13 +255,13 @@ test('planner prunes expired requests before matching', async () => {
   });
   state.pendingRequestsByRideId.set(expiredRequest.rideId, expiredRequest);
 
-  await planner.handleRideRequested(
-    makeRideRequestedEvent({
+  await planner.handleRideReadyForMatch(
+    makeReadyForMatchEvent({
       rideId: 'bcbcbcbc-bcbc-bcbc-bcbc-bcbcbcbcbcbc',
       riderId: '17171717-1717-1717-1717-171717171717',
       pickup: point(37.7769, -122.4174, 'Fresh pickup'),
       destination: point(37.7869, -122.3374, 'Fresh destination'),
-      fareEstimateUsdt: 12,
+      fareEstimateNgn: 12,
     }),
   );
 
@@ -279,25 +279,25 @@ test('planner emits candidate, planned, and built route events for a compatible 
     state: createGroupRideState(),
   });
 
-  const rideA = makeRideRequestedEvent({
+  const rideA = makeReadyForMatchEvent({
     rideId: 'cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcdcd',
     riderId: '18181818-1818-1818-1818-181818181818',
     pickup: point(37.7749, -122.4194, 'Ride A pickup'),
     destination: point(37.7849, -122.3394, 'Ride A destination'),
-    fareEstimateUsdt: 10,
+    fareEstimateNgn: 10,
   });
-  const rideB = makeRideRequestedEvent({
+  const rideB = makeReadyForMatchEvent({
     rideId: 'dededede-dede-dede-dede-dededededede',
     riderId: '19191919-1919-1919-1919-191919191919',
     pickup: point(37.7769, -122.4174, 'Ride B pickup'),
     destination: point(37.7869, -122.3374, 'Ride B destination'),
-    fareEstimateUsdt: 11,
+    fareEstimateNgn: 11,
   });
 
-  await planner.handleRideRequested(rideA);
+  await planner.handleRideReadyForMatch(rideA);
   assert.equal(producer.candidates.length, 0);
 
-  await planner.handleRideRequested(rideB);
+  await planner.handleRideReadyForMatch(rideB);
   assert.equal(producer.candidates.length, 1);
 
   const candidateEvent = producer.candidates[0];
@@ -334,8 +334,8 @@ test('planner does not assign the same ride twice under heavy overlap', async ()
   });
 
   for (let index = 0; index < 8; index += 1) {
-    await planner.handleRideRequested(
-      makeRideRequestedEvent({
+    await planner.handleRideReadyForMatch(
+      makeReadyForMatchEvent({
         rideId: makeUuid(`61616161${index}`),
         riderId: makeUuid(`71717171${index}`),
         pickup: point(
@@ -348,7 +348,7 @@ test('planner does not assign the same ride twice under heavy overlap', async ()
           -122.3894 + index * 0.0012,
           `Stress destination ${index + 1}`,
         ),
-        fareEstimateUsdt: 10 + index,
+        fareEstimateNgn: 10 + index,
       }),
     );
   }
@@ -386,26 +386,26 @@ test('planner recovers after candidate emission failure and can emit on retry', 
     state: createGroupRideState(),
   });
 
-  const rideA = makeRideRequestedEvent({
+  const rideA = makeReadyForMatchEvent({
     rideId: 'a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1',
     riderId: 'b1b1b1b1-b1b1-b1b1-b1b1-b1b1b1b1b1b1',
     pickup: point(37.7749, -122.4194, 'Retry A pickup'),
     destination: point(37.7849, -122.3394, 'Retry A destination'),
-    fareEstimateUsdt: 10,
+    fareEstimateNgn: 10,
   });
-  const rideB = makeRideRequestedEvent({
+  const rideB = makeReadyForMatchEvent({
     rideId: 'c1c1c1c1-c1c1-c1c1-c1c1-c1c1c1c1c1c1',
     riderId: 'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1',
     pickup: point(37.7769, -122.4174, 'Retry B pickup'),
     destination: point(37.7869, -122.3374, 'Retry B destination'),
-    fareEstimateUsdt: 11,
+    fareEstimateNgn: 11,
   });
 
-  await planner.handleRideRequested(rideA);
-  await assert.rejects(() => planner.handleRideRequested(rideB), /candidate emit failed/);
+  await planner.handleRideReadyForMatch(rideA);
+  await assert.rejects(() => planner.handleRideReadyForMatch(rideB), /candidate emit failed/);
   assert.equal(producer.candidates.length, 0);
 
-  await planner.handleRideRequested(rideB);
+  await planner.handleRideReadyForMatch(rideB);
   assert.equal(producer.candidates.length, 1);
 });
 
@@ -420,23 +420,23 @@ test('planner retries group planning safely after group planned emission failure
     state: createGroupRideState(),
   });
 
-  const rideA = makeRideRequestedEvent({
+  const rideA = makeReadyForMatchEvent({
     rideId: 'e1e1e1e1-e1e1-e1e1-e1e1-e1e1e1e1e1e1',
     riderId: 'f1f1f1f1-f1f1-f1f1-f1f1-f1f1f1f1f1f1',
     pickup: point(37.7749, -122.4194, 'Plan retry A pickup'),
     destination: point(37.7849, -122.3394, 'Plan retry A destination'),
-    fareEstimateUsdt: 10,
+    fareEstimateNgn: 10,
   });
-  const rideB = makeRideRequestedEvent({
+  const rideB = makeReadyForMatchEvent({
     rideId: '11111111-2222-3333-4444-555555555555',
     riderId: '66666666-7777-8888-9999-aaaaaaaaaaaa',
     pickup: point(37.7769, -122.4174, 'Plan retry B pickup'),
     destination: point(37.7869, -122.3374, 'Plan retry B destination'),
-    fareEstimateUsdt: 11,
+    fareEstimateNgn: 11,
   });
 
-  await planner.handleRideRequested(rideA);
-  await planner.handleRideRequested(rideB);
+  await planner.handleRideReadyForMatch(rideA);
+  await planner.handleRideReadyForMatch(rideB);
 
   const candidateEvent = producer.candidates[0];
   await assert.rejects(
@@ -464,7 +464,7 @@ test('noisy corridor simulation sustains grouping while isolating far outliers',
 
   const requests = buildNoisyScenarioRequests();
   for (const request of requests) {
-    await planner.handleRideRequested(request);
+    await planner.handleRideReadyForMatch(request);
   }
 
   for (const candidateEvent of [...producer.candidates]) {
@@ -500,7 +500,7 @@ test('load simulation processes hundreds of requests within a practical bound', 
   const startedAt = process.hrtime.bigint();
 
   for (const request of requests) {
-    await planner.handleRideRequested(request);
+    await planner.handleRideReadyForMatch(request);
   }
 
   for (const candidateEvent of [...producer.candidates]) {
@@ -596,7 +596,7 @@ function makeRequest({
   pickup,
   destination,
   headingDeg,
-  fareEstimateUsdt = 10,
+  fareEstimateNgn = 10,
   requestedAt = new Date().toISOString(),
 }) {
   return {
@@ -605,36 +605,37 @@ function makeRequest({
     pickup,
     destination,
     headingDeg,
-    fareEstimateUsdt,
+    fareEstimateNgn,
     requestedAt,
-    sourceEvent: makeRideRequestedEvent({
+    sourceEvent: makeReadyForMatchEvent({
       rideId,
       riderId,
       pickup,
       destination,
-      fareEstimateUsdt,
+      fareEstimateNgn,
       timestamp: requestedAt,
     }),
   };
 }
 
-function makeRideRequestedEvent({
+function makeReadyForMatchEvent({
   rideId,
   riderId,
   pickup,
   destination,
-  fareEstimateUsdt,
+  fareEstimateNgn,
   timestamp = new Date().toISOString(),
 }) {
   return {
-    eventType: 'RIDE_REQUESTED',
+    eventType: 'GROUP_RIDE_READY_FOR_MATCH',
     rideId,
     riderId,
-    riderWallet: `wallet-${riderId.slice(0, 8)}`,
+    faceVerificationId: '00000000-0000-0000-0000-000000000000',
     pickup,
     destination,
     stops: [],
-    fareEstimateUsdt,
+    fareEstimateNgn,
+    genderPreference: 'any',
     paymentMethod: 'wallet_balance',
     timestamp,
   };
@@ -670,7 +671,7 @@ function buildNoisyScenarioRequests() {
       seed += 1;
 
       requests.push(
-        makeRideRequestedEvent({
+        makeReadyForMatchEvent({
           rideId: makeUuid(`noise-c${corridor}-r${index}`),
           riderId: makeUuid(`noise-rider-c${corridor}-r${index}`),
           pickup: point(pickupLat, pickupLng, `Corridor ${corridor} pickup ${index}`),
@@ -679,7 +680,7 @@ function buildNoisyScenarioRequests() {
             destinationLng,
             `Corridor ${corridor} destination ${index}`,
           ),
-          fareEstimateUsdt: 10 + corridor + index,
+          fareEstimateNgn: 10 + corridor + index,
         }),
       );
     }
@@ -687,12 +688,12 @@ function buildNoisyScenarioRequests() {
 
   for (let index = 0; index < 4; index += 1) {
     requests.push(
-      makeRideRequestedEvent({
+      makeReadyForMatchEvent({
         rideId: makeUuid(`outlier-r${index}`),
         riderId: makeUuid(`outlier-rider-${index}`),
         pickup: point(37.55 + index * 0.09, -122.8 + index * 0.04, `Outlier pickup ${index}`),
         destination: point(37.95 - index * 0.07, -121.9 + index * 0.05, `Outlier destination ${index}`),
-        fareEstimateUsdt: 18 + index,
+        fareEstimateNgn: 18 + index,
       }),
     );
   }
@@ -713,7 +714,7 @@ function buildLoadScenarioRequests(totalRequests) {
     for (let batch = 0; batch < 10 && globalIndex < totalRequests; batch += 1) {
       for (let seat = 0; seat < 3 && globalIndex < totalRequests; seat += 1) {
         requests.push(
-          makeRideRequestedEvent({
+          makeReadyForMatchEvent({
             rideId: makeUuid(`load-${corridor}-${batch}-${seat}`),
             riderId: makeUuid(`load-rider-${corridor}-${batch}-${seat}`),
             pickup: point(
@@ -726,7 +727,7 @@ function buildLoadScenarioRequests(totalRequests) {
               baseDestinationLng + seat * 0.0015 + batch * 0.00005,
               `Load destination ${corridor}-${batch}-${seat}`,
             ),
-            fareEstimateUsdt: 10 + corridor + seat,
+            fareEstimateNgn: 10 + corridor + seat,
           }),
         );
         globalIndex += 1;

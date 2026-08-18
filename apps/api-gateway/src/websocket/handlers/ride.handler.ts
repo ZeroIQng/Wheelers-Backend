@@ -430,12 +430,27 @@ export async function handleRideMessage(
   }
 
   if (type === 'ride:cancel') {
+    const rideId = requireString(payload, 'rideId');
+    const cancelledBy: 'rider' | 'driver' = auth.driverId ? 'driver' : 'rider';
+
+    // riderId must be the RIDER, not whoever sent the message. This was
+    // auth.userId, so a driver-initiated cancel published the driver's own id
+    // as riderId — the gateway then sent "ride cancelled" back to the driver
+    // and the rider, the one person who needed to know, was never told.
+    const ride = await rideClient.findById(rideId).catch(() => null);
+    const riderId = ride?.riderId ?? (cancelledBy === 'rider' ? auth.userId : undefined);
+    if (!riderId) {
+      throw new Error('Could not resolve the rider for this ride.');
+    }
+
     const event = RideCancelledEvent.parse({
       eventType: 'RIDE_CANCELLED',
-      rideId: requireString(payload, 'rideId'),
-      riderId: auth.userId,
-      driverId: getString(payload, 'driverId'),
+      rideId,
+      riderId,
+      driverId: getString(payload, 'driverId') ?? ride?.driverId ?? auth.driverId,
       reason: getString(payload, 'reason'),
+      cancelledBy,
+      driverUserId: cancelledBy === 'driver' ? auth.userId : undefined,
       timestamp,
     });
 

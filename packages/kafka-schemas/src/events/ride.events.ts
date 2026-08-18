@@ -208,6 +208,12 @@ export const RideCancelledEvent = BaseRideEvent.extend({
   riderId:      z.string().uuid(),
   driverId:     z.string().uuid().optional(),
   reason:       z.string().optional(),
+  // Who pressed cancel. riderId/driverId say who is ON the ride, never who
+  // ended it, so without this the gateway cannot tell which side still needs
+  // telling — and it used to notify whoever cancelled instead of the other party.
+  cancelledBy:  z.enum(['rider', 'driver', 'system']).optional(),
+  /** Set when a driver cancels after accepting, so the ride can be re-matched. */
+  driverUserId: z.string().uuid().optional(),
 });
 
 // Fired by ride-service when it offers a ride to a specific driver.

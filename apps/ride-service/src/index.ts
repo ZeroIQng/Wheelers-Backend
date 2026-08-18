@@ -1,4 +1,4 @@
-import { GoogleMapsRoutePlanner, loadWorkspaceEnv, validateRideEnv, validateSharedEnv } from '@wheleers/config';
+import { GoogleMapsRoutePlanner, RIDE, loadWorkspaceEnv, validateRideEnv, validateSharedEnv } from '@wheleers/config';
 import { createConsumer, createProducer, onShutdown } from '@wheleers/kafka-client';
 import { TOPICS } from '@wheleers/kafka-schemas';
 
@@ -175,7 +175,7 @@ async function bootstrap(): Promise<void> {
         if (dist <= radiusKm) {
           // Add to candidates and send offer
           pending.candidates.push(driver);
-          const expiresAt = new Date(Date.now() + 3 * 60 * 1000);
+          const expiresAt = new Date(Date.now() + RIDE.BID_TIMEOUT_SECONDS * 1000);
           await rideEventsProducer.broadcastRideOffer({
             drivers: [driver],
             rideRequested: pending.rideRequested,

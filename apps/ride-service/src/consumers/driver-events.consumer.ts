@@ -40,9 +40,33 @@ export function createDriverEventsConsumer(params: {
 
       if (event.eventType === 'DRIVER_OFFLINE') {
         state.onlineDrivers.delete(event.driverId);
+
+        // Drop them from every ride still taking bids. Leaving them in
+        // `candidates` meant an offline driver kept receiving rider
+        // counter-offers and updated fares, and could still be picked as the
+        // match for a ride they were no longer available for.
+        for (const [rideId, pending] of state.pendingMatchesByRideId) {
+          const before = pending.candidates.length;
+          pending.candidates = pending.candidates.filter(
+            (candidate) => candidate.driverId !== event.driverId,
+          );
+          if (pending.candidates.length !== before) {
+            pending.attemptedDriverIds.add(event.driverId);
+            console.log(
+              `[ride-service] driver ${event.driverId} went offline — removed from bidding on ride ${rideId}`,
+            );
+          }
+        }
+
+        // A driver mid-trip keeps their assignment. Clearing it here meant the
+        // trip lost its driver mapping, so completion could not return them to
+        // the pool and GPS state for the ride was orphaned.
         for (const [rideId, driver] of state.assignedDriversByRideId) {
           if (driver.driverId === event.driverId) {
-            state.assignedDriversByRideId.delete(rideId);
+            console.warn('[ride-service] driver went offline while assigned to a ride', {
+              rideId,
+              driverId: event.driverId,
+            });
           }
         }
         try {

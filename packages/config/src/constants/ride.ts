@@ -6,6 +6,12 @@ export const RIDE = {
   // tries the next nearest driver.
   DRIVER_ACCEPT_TIMEOUT_SECONDS: 15,
 
+  // How long a request keeps ringing on driver phones before it times out and
+  // the rider is told nobody took it. This is the single source of truth —
+  // it was hard-coded as three minutes in four separate places, which is far
+  // too long to leave a rider staring at a spinner.
+  BID_TIMEOUT_SECONDS: 30,
+
   // Maximum number of drivers to attempt before cancelling the ride
   // with a "no drivers available" reason.
   MAX_MATCH_ATTEMPTS: 5,
