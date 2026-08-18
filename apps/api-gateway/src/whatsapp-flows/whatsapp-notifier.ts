@@ -51,12 +51,14 @@ function formatBidList(bids: WhatsappBid[], riderOfferNgn: number): string {
     return `*${num}.* ${bid.driverName} — ₦${bid.counterOfferNgn.toLocaleString()}\n    ${bid.vehicleModel} · ${bid.driverRating.toFixed(1)}★ · ${etaMin} min away`;
   });
 
+  // Lead with the shortest thing that works. Riders reply to a numbered list
+  // with the number — telling them to type "accept 1" made the easy path look
+  // unavailable.
   const footer = [
     '',
     '━━━━━━━━━━━━━━━━━━━━━━',
     'Reply with:',
-    '• *accept 1* — to accept driver #1',
-    '• *accept 3* — to accept driver #3',
+    `• *1*${count > 1 ? ` – *${count}*` : ''} — the driver's number to book them`,
     '• A *price* (e.g. "1500") — to counter-offer and get new drivers',
     '• *more* — to see more drivers',
     '• *cancel* — to cancel the ride',

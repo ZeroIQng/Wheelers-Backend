@@ -331,9 +331,40 @@ function extractMetaMessage(body: unknown): MetaMessageInfo | null {
 
 /* ─── Parse bid commands from user text ─── */
 
-function parseAcceptCommand(message: string): number | null {
-  const match = message.match(/(?:^|\bi\s+)accept\s+(\d+)$/i);
-  if (match) return parseInt(match[1], 10);
+/**
+ * "accept 2" picks a specific driver; a bare "accept" means "take the bid" —
+ * which is what riders actually type when there is only one to take. Requiring
+ * a digit meant that message matched nothing and fell through to the
+ * unrecognised-command reply, so the rider was told to pay for a ride they had
+ * not managed to accept yet.
+ */
+type AcceptCommand =
+  | { kind: 'numbered'; driverNumber: number }
+  | { kind: 'unspecified' };
+
+function parseAcceptCommand(message: string): AcceptCommand | null {
+  const numbered = message.match(/(?:^|\bi\s+)accept\s+(?:driver\s+)?(\d+)\s*$/i);
+  if (numbered) {
+    return { kind: 'numbered', driverNumber: parseInt(numbered[1], 10) };
+  }
+
+  // Just the number — "1" — which is what people actually reply to a numbered
+  // list. Capped at two digits so it can never swallow a counter-offer amount:
+  // those are 3-6 digits (see parseCounterOffer), and no fare is under ₦100.
+  const bareNumber = message.trim().match(/^(\d{1,2})\s*[.!]?$/);
+  if (bareNumber) {
+    return { kind: 'numbered', driverNumber: parseInt(bareNumber[1], 10) };
+  }
+
+  // Bare accept, with or without a trailing object: "accept", "i accept",
+  // "accept it", "accept the offer".
+  const bare = message
+    .trim()
+    .match(/^(?:i\s+)?accept(?:\s+(?:it|this|that|the\s+(?:bid|offer|driver|price)))?\s*[.!]?$/i);
+  if (bare) {
+    return { kind: 'unspecified' };
+  }
+
   return null;
 }
 
@@ -1285,7 +1316,29 @@ export async function handleMetaWhatsappWebhookRoute(
           return;
         }
 
-        const bidIndex = acceptNum - 1;
+        // A bare "accept" with a single bid on the table is unambiguous — take
+        // it rather than making the rider retype it as "accept 1". With several
+        // bids there is a real choice to make, so ask instead of guessing;
+        // picking for them would commit their money to a fare they didn't choose.
+        if (acceptNum.kind === 'unspecified' && lastBatch.length > 1) {
+          const options = lastBatch
+            .map(
+              (bid, index) =>
+                `${index + 1}. ${bid.driverName} — ₦${bid.counterOfferNgn} (${Math.ceil(
+                  bid.etaSeconds / 60,
+                )} min away)`,
+            )
+            .join('\n');
+          const reply = `You have ${lastBatch.length} drivers to choose from:\n\n${options}\n\nJust reply with the number — 1 to ${lastBatch.length}.`;
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
+          return;
+        }
+
+        const bidIndex = acceptNum.kind === 'numbered' ? acceptNum.driverNumber - 1 : 0;
         const selectedBid = lastBatch[bidIndex];
 
         if (!selectedBid) {
@@ -1425,7 +1478,7 @@ export async function handleMetaWhatsappWebhookRoute(
       }
 
       // ── Active ride but unrecognized command — remind them ──
-      const reply = 'You have an active ride. Reply:\n• *accept 1* — to accept a driver\n• A *price* (e.g. "2000") — to counter-offer\n• *more* — to see drivers\n• *edit from* / *edit to* — to change pickup or destination\n• *cancel* — to cancel';
+      const reply = 'You have an active ride. Reply:\n• *1*, *2*, *3*… — the driver\'s number to book them\n• A *price* (e.g. "2000") — to counter-offer\n• *more* — to see drivers\n• *edit from* / *edit to* — to change pickup or destination\n• *cancel* — to cancel';
       await appendWhatsappConversation(deps.redisClient, phone, [
         { role: 'user', content: incomingMessage },
         { role: 'assistant', content: reply },
