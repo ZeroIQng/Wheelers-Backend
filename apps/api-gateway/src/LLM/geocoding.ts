@@ -14,8 +14,21 @@ interface GoogleGeocodingResponse {
       };
     };
     formatted_address?: string;
+    types?: string[];
   }>;
 }
+
+/**
+ * Result types too coarse to be a pickup or drop-off. Under a country
+ * restriction Google will happily answer unrecognised text with the country
+ * itself — "asdkjhasd nonsense" resolves to "Nigeria" — which would otherwise
+ * be accepted as a real address and send a driver to the country centroid.
+ */
+const TOO_COARSE_TYPES = new Set([
+  'country',
+  'administrative_area_level_1',
+  'administrative_area_level_2',
+]);
 
 export async function reverseGeocode(
   apiKey: string,
@@ -47,14 +60,68 @@ export async function reverseGeocode(
   }
 }
 
+/**
+ * Home region, as a Google `region` bias. Set GEOCODE_REGION='' to disable when
+ * testing abroad — the reason the bias was removed in the first place.
+ */
+const GEOCODE_REGION = (process.env['GEOCODE_REGION'] ?? 'ng').trim().toLowerCase();
+
+/**
+ * Hard country restriction, used ONLY as a second attempt.
+ */
+const GEOCODE_FALLBACK_COUNTRY = (process.env['GEOCODE_FALLBACK_COUNTRY'] ?? 'NG')
+  .trim()
+  .toUpperCase();
+
+/**
+ * Two attempts, because neither bias is right on its own. Measured against the
+ * live API:
+ *
+ *   query              no bias        components=country:NG     region=ng
+ *   "Allen"            ZERO_RESULTS   Allen area                ZERO_RESULTS
+ *   "Allen roundabout" Allen Rndbt    Allen area (worse)        Allen Rndbt
+ *   "Pier 39"          SF             — (NG only)               SF
+ *
+ * `region` biases ranking without excluding anything, so precise local
+ * landmarks and international addresses both survive. `components=country`
+ * filters, which rescues a bare neighbourhood name like "Allen" but flattens a
+ * precise match to the broad area and blocks anywhere outside the country.
+ * So: bias first, and only fall back to the restriction when that finds
+ * nothing at all.
+ */
 export async function geocodeAddress(
   apiKey: string,
   address: string,
 ): Promise<GeocodeResult | null> {
-  // TODO: restore country:NG bias once done testing outside Nigeria
+  const biased = await geocodeOnce(apiKey, address, {
+    ...(GEOCODE_REGION ? { region: GEOCODE_REGION } : {}),
+  });
+  if (biased) return biased;
+
+  if (!GEOCODE_FALLBACK_COUNTRY) return null;
+
+  const restricted = await geocodeOnce(apiKey, address, {
+    components: `country:${GEOCODE_FALLBACK_COUNTRY}`,
+  });
+  if (restricted) {
+    console.info('[geocoding] resolved only under country restriction', {
+      address,
+      country: GEOCODE_FALLBACK_COUNTRY,
+      resolvedTo: restricted.formattedAddress,
+    });
+  }
+  return restricted;
+}
+
+async function geocodeOnce(
+  apiKey: string,
+  address: string,
+  extra: Record<string, string>,
+): Promise<GeocodeResult | null> {
   const params = new URLSearchParams({
     address,
     key: apiKey,
+    ...extra,
   });
 
   const url = `https://maps.googleapis.com/maps/api/geocode/json?${params.toString()}`;
@@ -68,13 +135,21 @@ export async function geocodeAddress(
 
     const data = (await response.json()) as GoogleGeocodingResponse;
     if (data.status !== 'OK' || !data.results?.length) {
-      console.warn('[geocoding] No results for address', { address, status: data.status });
       return null;
     }
 
     const result = data.results[0];
     const location = result.geometry?.location;
     if (!location?.lat || !location?.lng) {
+      return null;
+    }
+
+    if (result.types?.some((type) => TOO_COARSE_TYPES.has(type))) {
+      console.warn('[geocoding] ignoring result — too coarse to route to', {
+        address,
+        resolvedTo: result.formatted_address,
+        types: result.types,
+      });
       return null;
     }
 

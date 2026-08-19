@@ -67,6 +67,10 @@ function pendingLocationKey(userId: string): string {
   return `whatsapp:user:${userId}:pending_location`;
 }
 
+function areaHintKey(userId: string): string {
+  return `whatsapp:user:${userId}:area_hint`;
+}
+
 function phoneLookupKey(userId: string): string {
   return `whatsapp:phone_by_user:${userId}`;
 }
@@ -311,7 +315,7 @@ export async function clearPendingLocation(
 
 // ── Rider booking stage (tracks where the rider is in the booking flow) ───
 
-export type BookingStage = 'awaiting_pickup' | 'awaiting_destination' | 'awaiting_price' | 'awaiting_payment' | 'awaiting_cancel_reason' | 'awaiting_withdrawal_amount' | 'awaiting_withdrawal_bank' | 'awaiting_withdrawal_account' | 'awaiting_withdrawal_confirmation' | 'searching' | 'bidding' | 'editing_pickup' | 'editing_destination';
+export type BookingStage = 'awaiting_pickup' | 'awaiting_destination' | 'awaiting_route_confirmation' | 'awaiting_price' | 'awaiting_payment' | 'awaiting_cancel_reason' | 'awaiting_withdrawal_amount' | 'awaiting_withdrawal_bank' | 'awaiting_withdrawal_account' | 'awaiting_withdrawal_confirmation' | 'searching' | 'bidding' | 'editing_pickup' | 'editing_destination';
 
 function bookingStageKey(userId: string): string {
   return `whatsapp:user:${userId}:booking_stage`;
@@ -399,6 +403,8 @@ export interface PendingRouteData {
   minOfferNgn: number;
   ratePerKmNgn: number;
   route: unknown;
+  /** Price the rider already named, held across the confirmation step. */
+  offerNgn?: number;
 }
 
 const PENDING_ROUTE_TTL = 600; // 10 minutes
@@ -510,4 +516,47 @@ export async function getLastBatch(
   } catch {
     return [];
   }
+}
+
+/**
+ * The broad area a rider named when they were not specific enough to geocode —
+ * "Allen", "Lekki", "Ikeja". Held so the follow-up answer can be resolved
+ * against it: someone who says "from Allen" and is asked "whereabouts in
+ * Allen?" replies "roundabout", which only means anything combined with the
+ * area they already gave. Without this the reply is geocoded on its own and
+ * lands nowhere, and the rider has to retype the whole thing.
+ */
+export type PendingAreaHint = {
+  kind: 'pickup' | 'destination';
+  area: string;
+  /** The other end of the trip, if they already gave it. */
+  counterpartAddress?: string;
+};
+
+export async function setPendingAreaHint(
+  redis: RedisClient,
+  userId: string,
+  hint: PendingAreaHint,
+): Promise<void> {
+  await redis.set(areaHintKey(userId), JSON.stringify(hint), PENDING_LOCATION_TTL);
+}
+
+export async function getPendingAreaHint(
+  redis: RedisClient,
+  userId: string,
+): Promise<PendingAreaHint | null> {
+  const raw = await redis.get(areaHintKey(userId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as PendingAreaHint;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearPendingAreaHint(
+  redis: RedisClient,
+  userId: string,
+): Promise<void> {
+  await redis.del(areaHintKey(userId));
 }
