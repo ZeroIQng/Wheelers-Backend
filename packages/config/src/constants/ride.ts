@@ -6,11 +6,17 @@ export const RIDE = {
   // tries the next nearest driver.
   DRIVER_ACCEPT_TIMEOUT_SECONDS: 15,
 
-  // How long a request keeps ringing on driver phones before it times out and
-  // the rider is told nobody took it. This is the single source of truth —
-  // it was hard-coded as three minutes in four separate places, which is far
-  // too long to leave a rider staring at a spinner.
-  BID_TIMEOUT_SECONDS: 30,
+  // How long one offer keeps ringing on a driver's phone — the countdown on
+  // the request card.
+  OFFER_TTL_SECONDS: 30,
+
+  // How long the whole search runs before the rider is told nobody took it.
+  // This MUST be much longer than OFFER_TTL_SECONDS. They were briefly the
+  // same 30s constant, which meant the entire search was abandoned after one
+  // offer window: the rider got "No driver accepted this ride request" while
+  // a driver was still reading the request, and any bid arriving after that
+  // had nothing left to attach to.
+  BID_TIMEOUT_SECONDS: 180,
 
   // Maximum number of drivers to attempt before cancelling the ride
   // with a "no drivers available" reason.

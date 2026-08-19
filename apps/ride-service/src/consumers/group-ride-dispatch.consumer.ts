@@ -12,7 +12,8 @@ import type { RideServiceState } from '../index';
 import type { RideEventsProducer } from '../producers/ride-events.producer';
 import { matchDriver } from '../handlers/match-driver.handler';
 
-/** Same window solo rides use, so a group offer expires the same way. */
+/** Same windows solo rides use, so a group offer behaves identically. */
+const OFFER_TTL_MS = RIDE.OFFER_TTL_SECONDS * 1000;
 const BID_TIMEOUT_MS = RIDE.BID_TIMEOUT_SECONDS * 1000;
 
 export function createGroupRideDispatchConsumer(params: {
@@ -197,7 +198,7 @@ export function createGroupRideDispatchConsumer(params: {
     }
 
     // Broadcast ride offer to ALL nearby drivers simultaneously
-    const expiresAt = new Date(Date.now() + BID_TIMEOUT_MS);
+    const expiresAt = new Date(Date.now() + OFFER_TTL_MS);
 
     await rideEventsProducer.broadcastRideOffer({
       drivers: result.drivers,

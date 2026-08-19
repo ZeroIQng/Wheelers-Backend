@@ -175,7 +175,7 @@ async function bootstrap(): Promise<void> {
         if (dist <= radiusKm) {
           // Add to candidates and send offer
           pending.candidates.push(driver);
-          const expiresAt = new Date(Date.now() + RIDE.BID_TIMEOUT_SECONDS * 1000);
+          const expiresAt = new Date(Date.now() + RIDE.OFFER_TTL_SECONDS * 1000);
           await rideEventsProducer.broadcastRideOffer({
             drivers: [driver],
             rideRequested: pending.rideRequested,

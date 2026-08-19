@@ -18,6 +18,9 @@ import type { PendingRideMatch, RideServiceState } from '../index';
 import type { RideEventsProducer } from '../producers/ride-events.producer';
 import { matchDriver } from '../handlers/match-driver.handler';
 
+/** How long one offer card rings on a driver's phone. */
+const OFFER_TTL_MS = RIDE.OFFER_TTL_SECONDS * 1000;
+/** How long the whole search runs before the rider is told nobody took it. */
 const BID_TIMEOUT_MS = RIDE.BID_TIMEOUT_SECONDS * 1000;
 
 export function createRideRequestedConsumer(params: {
@@ -188,7 +191,7 @@ export function createRideRequestedConsumer(params: {
     });
 
     // Broadcast to ALL nearby drivers simultaneously
-    const expiresAt = new Date(Date.now() + BID_TIMEOUT_MS);
+    const expiresAt = new Date(Date.now() + OFFER_TTL_MS);
 
     await rideEventsProducer.broadcastRideOffer({
       drivers: result.drivers,
@@ -242,7 +245,7 @@ export function createRideRequestedConsumer(params: {
     }
     startBidTimeout(pending.rideRequested);
 
-    const expiresAt = new Date(Date.now() + BID_TIMEOUT_MS);
+    const expiresAt = new Date(Date.now() + OFFER_TTL_MS);
 
     if (event.driverId) {
       // Targeted counter-offer to a specific driver
@@ -494,7 +497,7 @@ export function createRideRequestedConsumer(params: {
     await rideEventsProducer.broadcastRideOffer({
       drivers,
       rideRequested,
-      expiresAt: new Date(Date.now() + BID_TIMEOUT_MS),
+      expiresAt: new Date(Date.now() + OFFER_TTL_MS),
     });
 
     console.log(

@@ -21,6 +21,7 @@ import {
   clearActiveRide,
   cleanupRideKeys,
   setRideState,
+  getRideState,
   getRideMeta,
   getBids,
   storeAcceptedBid,
@@ -122,6 +123,55 @@ export async function startGatewayKafkaConsumer(deps: StartGatewayConsumerDeps):
   );
 }
 
+/**
+ * One pending flush per ride. In-memory is acceptable here: if the gateway
+ * restarts, the worst case is the swallowed bid stays hidden until the next
+ * bid arrives after the debounce — the pre-fix behaviour, not a new failure.
+ */
+const pendingBidFlushTimers = new Map<string, NodeJS.Timeout>();
+
+/** Just past the 30s notification debounce, so shouldNotify passes at fire time. */
+const BID_FLUSH_DELAY_MS = 31_000;
+
+function scheduleBidFlush(
+  deps: StartGatewayConsumerDeps,
+  rideId: string,
+  riderId: string,
+): void {
+  if (pendingBidFlushTimers.has(rideId)) return;
+
+  const timer = setTimeout(() => {
+    pendingBidFlushTimers.delete(rideId);
+    void (async () => {
+      // The ride may have resolved while we waited — meta is deleted by
+      // cleanupRideKeys on assign/cancel/timeout, and a rider who accepted
+      // meanwhile has left the bidding state. Stay silent in those cases.
+      const meta = await getRideMeta(deps.redisClient, rideId);
+      const state = await getRideState(deps.redisClient, rideId);
+      if (!meta || state !== 'bidding') return;
+
+      const phone = await lookupPhoneByUserId(deps.redisClient, riderId);
+      if (!phone || !deps.whatsappNotifier) return;
+
+      if (!(await shouldNotify(deps.redisClient, rideId))) {
+        // Another bid beat us to it inside a fresh window; it will flush.
+        scheduleBidFlush(deps, rideId, riderId);
+        return;
+      }
+
+      const allBids = await getBids(deps.redisClient, rideId);
+      if (allBids.length === 0) return;
+
+      await storeLastBatch(deps.redisClient, rideId, allBids);
+      await sendBidNotification(deps.whatsappNotifier, phone, allBids, meta.offerNgn)
+        .catch((err) => console.warn('[consumer] WhatsApp bid flush failed', err));
+    })();
+  }, BID_FLUSH_DELAY_MS);
+  timer.unref();
+
+  pendingBidFlushTimers.set(rideId, timer);
+}
+
 async function handleRideEvent(
   event: RideEvent,
   deps: StartGatewayConsumerDeps,
@@ -170,17 +220,27 @@ async function handleRideEvent(
         etaSeconds: event.etaSeconds,
         receivedAt: new Date().toISOString(),
       };
-      const bidCount = await addBid(deps.redisClient, event.rideId, bid);
+      await addBid(deps.redisClient, event.rideId, bid);
       await setRideState(deps.redisClient, event.rideId, 'bidding');
 
       const phone = await lookupPhoneByUserId(deps.redisClient, event.riderId);
       const meta = await getRideMeta(deps.redisClient, event.rideId);
-      if (phone && meta && await shouldNotify(deps.redisClient, event.rideId)) {
-        // Fetch ALL bids and send as one batched message
-        const allBids = await getBids(deps.redisClient, event.rideId);
-        await storeLastBatch(deps.redisClient, event.rideId, allBids);
-        await sendBidNotification(deps.whatsappNotifier, phone, allBids, meta.offerNgn)
-          .catch((err) => console.warn('[consumer] WhatsApp bid notification failed', err));
+      if (phone && meta) {
+        if (await shouldNotify(deps.redisClient, event.rideId)) {
+          // Fetch ALL bids and send as one batched message
+          const allBids = await getBids(deps.redisClient, event.rideId);
+          await storeLastBatch(deps.redisClient, event.rideId, allBids);
+          await sendBidNotification(deps.whatsappNotifier, phone, allBids, meta.offerNgn)
+            .catch((err) => console.warn('[consumer] WhatsApp bid notification failed', err));
+        } else {
+          // Debounced. The bid is in Redis but the rider has NOT seen it — and
+          // acceptance reads getLastBatch (what was actually sent), so a bid
+          // that is never flushed is not just invisible, it is unacceptable.
+          // That was the hole: a driver re-bidding within 30s of the previous
+          // notification vanished from the rider's view forever. Flush once
+          // the debounce window ends.
+          scheduleBidFlush(deps, event.rideId, event.riderId);
+        }
       }
     } else {
       await registry.sendToUser(event.riderId, 'ride:counter_offer', {
