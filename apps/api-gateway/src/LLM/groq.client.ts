@@ -19,6 +19,12 @@ interface GroqChatCompletionResponse {
   };
 }
 
+/**
+ * Reasoning budget for JSON extraction calls. Empty string disables the
+ * parameter entirely, for models that reject it.
+ */
+const REASONING_EFFORT = (process.env['GROQ_REASONING_EFFORT'] ?? 'low').trim();
+
 export class GroqClient {
   constructor(private readonly config: GroqClientConfig) {}
 
@@ -54,10 +60,21 @@ export class GroqClient {
         model: this.config.model,
         messages,
         temperature: jsonMode ? 0.1 : 0.4,
-        max_completion_tokens: jsonMode ? 300 : 420,
+        // Reasoning models (gpt-oss) spend completion tokens thinking before
+        // they emit anything. At the old 300 the budget ran out mid-object and
+        // Groq rejected the truncated result with "Failed to generate JSON" —
+        // measured at 1 failure in 3. Every failure fell back to regex, which
+        // is why a plain address silently stopped being understood.
+        max_completion_tokens: jsonMode ? 700 : 600,
       };
       if (jsonMode) {
         body.response_format = { type: 'json_object' };
+        // Extraction needs no deep reasoning, and capping it keeps the reply
+        // inside the budget. Set GROQ_REASONING_EFFORT='' for models that do
+        // not accept the parameter.
+        if (REASONING_EFFORT) {
+          body.reasoning_effort = REASONING_EFFORT;
+        }
       }
 
       const response = await fetch(GROQ_CHAT_COMPLETIONS_URL, {
