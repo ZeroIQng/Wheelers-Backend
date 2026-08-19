@@ -108,6 +108,17 @@ export async function sendRideMatchedNotification(
   await sendMetaWhatsappMessage(deps, phone, msg);
 }
 
+export async function sendDriverArrivedNotification(
+  deps: WhatsappNotifierDeps,
+  phone: string,
+): Promise<void> {
+  await sendMetaWhatsappMessage(
+    deps,
+    phone,
+    'Your driver has arrived! 🚗 They are waiting at your pickup point.',
+  );
+}
+
 export async function sendRideStartedNotification(
   deps: WhatsappNotifierDeps,
   phone: string,

@@ -164,8 +164,15 @@ export const RideRouteUpdatedEvent = BaseRideEvent.extend({
   updatedBy:        z.enum(['rider', 'driver', 'system']),
 });
 
-// Fired by api-gateway when both rider and driver confirm pickup.
-// Consumed by: ride-service (start GPS stale detection cron for this rideId).
+// Fired when the driver reports arrival at the pickup point.
+// Consumed by: ride-service (persist ARRIVED), api-gateway (tell the rider —
+// this is the "your driver is outside" moment, previously never sent).
+export const RideArrivedEvent = BaseRideEvent.extend({
+  eventType: z.literal('RIDE_ARRIVED'),
+  riderId:   z.string().uuid(),
+  driverId:  z.string().uuid(),
+});
+
 export const RideStartedEvent = BaseRideEvent.extend({
   eventType:     z.literal('RIDE_STARTED'),
   riderId:       z.string().uuid(),
@@ -262,6 +269,7 @@ export const RideEvent = z.discriminatedUnion('eventType', [
   RideOfferAcceptedEvent,
   RideDriverAssignedEvent,
   RideRouteUpdatedEvent,
+  RideArrivedEvent,
   RideStartedEvent,
   RideCompletionRequestedEvent,
   RideCompletedEvent,
@@ -279,6 +287,7 @@ export type RideCounterOfferEvent    = z.infer<typeof RideCounterOfferEvent>;
 export type RideOfferAcceptedEvent   = z.infer<typeof RideOfferAcceptedEvent>;
 export type RideDriverAssignedEvent  = z.infer<typeof RideDriverAssignedEvent>;
 export type RideRouteUpdatedEvent    = z.infer<typeof RideRouteUpdatedEvent>;
+export type RideArrivedEvent       = z.infer<typeof RideArrivedEvent>;
 export type RideStartedEvent         = z.infer<typeof RideStartedEvent>;
 export type RideCompletionRequestedEvent = z.infer<typeof RideCompletionRequestedEvent>;
 export type RideCompletedEvent       = z.infer<typeof RideCompletedEvent>;

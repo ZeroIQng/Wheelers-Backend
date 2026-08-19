@@ -53,6 +53,14 @@ export function createTripLifecycleHandler(params?: {
         }
       }
 
+      if (event.eventType === 'RIDE_ARRIVED') {
+        try {
+          await rideClient.markArrived(event.rideId);
+        } catch (err) {
+          console.warn(`[ride-service] ride arrival persistence skipped:`, (err as any)?.message ?? err);
+        }
+      }
+
       if (event.eventType === 'RIDE_STARTED') {
         state?.rideParticipantsByRideId.set(event.rideId, {
           ...state.rideParticipantsByRideId.get(event.rideId),

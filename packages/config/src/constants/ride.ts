@@ -8,7 +8,7 @@ export const RIDE = {
 
   // How long one offer keeps ringing on a driver's phone — the countdown on
   // the request card.
-  OFFER_TTL_SECONDS: 30,
+  OFFER_TTL_SECONDS: 150,
 
   // How long the whole search runs before the rider is told nobody took it.
   // This MUST be much longer than OFFER_TTL_SECONDS. They were briefly the

@@ -11,6 +11,7 @@ import {
   RideDriverRejectedEvent,
   RideOfferAcceptedEvent,
   RideRiderCounterOfferEvent,
+  RideArrivedEvent,
   RideRouteUpdateRequestedEvent,
   RideRequestedEvent,
   RideStopConfirmedEvent,
@@ -509,11 +510,35 @@ export async function handleRideMessage(
   }
 
   if (type === 'ride:arrived') {
+    const rideId = requireString(payload, 'rideId');
+
+    // This used to ack the driver and publish nothing — so the rider was
+    // never told the car was outside. The app only sends rideId, so resolve
+    // the rider from the ride row.
+    const ride = await rideClient.findById(rideId).catch(() => null);
+    const riderId = getString(payload, 'riderId') ?? ride?.riderId;
+    const driverId = getString(payload, 'driverId') ?? auth.driverId ?? ride?.driverId;
+
+    if (riderId && driverId) {
+      const event = RideArrivedEvent.parse({
+        eventType: 'RIDE_ARRIVED',
+        rideId,
+        riderId,
+        driverId,
+        timestamp,
+      });
+      await publisher.publishRideEvent(event);
+    } else {
+      console.warn('[api-gateway][ride] arrival could not be attributed — rider not notified', {
+        rideId,
+        hasRider: Boolean(riderId),
+        hasDriver: Boolean(driverId),
+      });
+    }
+
     return {
       type: 'ride:arrived:ack',
-      payload: {
-        rideId: requireString(payload, 'rideId'),
-      },
+      payload: { rideId },
     };
   }
 

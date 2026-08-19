@@ -31,6 +31,7 @@ import type { WhatsappBid } from '../whatsapp-flows/bid-state';
 import {
   sendBidNotification,
   sendRideMatchedNotification,
+  sendDriverArrivedNotification,
   sendRideStartedNotification,
   sendRideCompletedNotification,
   sendRideCancelledNotification,
@@ -414,6 +415,24 @@ async function handleRideEvent(
       await registry.sendToUser(participants.driverUserId, 'ride:route:updated', routePayload);
     }
 
+    return;
+  }
+
+  if (event.eventType === 'RIDE_ARRIVED') {
+    // The "your driver is outside" moment. WhatsApp riders get a message; app
+    // riders get a socket event their ride screen can react to.
+    const waRider = await isWhatsappRider(deps.redisClient, event.riderId);
+    if (waRider && deps.whatsappNotifier) {
+      const phone = await lookupPhoneByUserId(deps.redisClient, event.riderId);
+      if (phone) {
+        await sendDriverArrivedNotification(deps.whatsappNotifier, phone).catch(() => {});
+      }
+    } else {
+      await registry.sendToUser(event.riderId, 'ride:driver_arrived', {
+        rideId: event.rideId,
+        driverId: event.driverId,
+      });
+    }
     return;
   }
 
