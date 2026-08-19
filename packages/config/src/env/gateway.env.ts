@@ -11,7 +11,11 @@ const GatewayEnvSchema = z.object({
   TWILIO_AUTH_TOKEN:  z.string().min(1).optional(),
   TWILIO_FROM_NUMBER: z.string().min(1).optional(),
   GROQ_API_KEY:       z.string().min(1).optional(),
-  GROQ_MODEL:         z.string().min(1).default('llama-3.3-70b-versatile'),
+  // llama-3.3-70b-versatile was decommissioned by Groq — every ride-intent
+  // parse failed with "model does not exist" and silently fell back to regex,
+  // so "take me from Ikeja to Lekki" was only understood when it matched a
+  // hard-coded pattern. Measured ~0.8-2.2s, inside GROQ_TIMEOUT_MS.
+  GROQ_MODEL:         z.string().min(1).default('openai/gpt-oss-120b'),
   GROQ_TIMEOUT_MS:    z.coerce.number().int().positive().default(6000),
   APP_BASE_URL:       z.string().url().optional(),
   TWILIO_WHATSAPP_NUMBER: z.string().min(1).optional(),
