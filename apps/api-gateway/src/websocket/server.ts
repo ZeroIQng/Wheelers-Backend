@@ -138,7 +138,14 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
   });
 
   wsServer.on('connection', (socket: WebSocket) => {
+    const openedAt = Date.now();
     let lastSeenAt = Date.now();
+    // socket.terminate() closes without a close frame, which surfaces as code
+    // 1006 — indistinguishable in the log from the client vanishing. Recording
+    // it is the difference between "we killed an idle socket" and "the network
+    // dropped", which are opposite problems with opposite fixes.
+    let idleTerminated = false;
+    let pongsSeen = 0;
 
     const touch = () => {
       lastSeenAt = Date.now();
@@ -146,6 +153,17 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
 
     const heartbeat = setInterval(() => {
       if (Date.now() - lastSeenAt > deps.idleTimeoutMs) {
+        idleTerminated = true;
+        console.warn('[ws] idle timeout — terminating', {
+          idleMs: Date.now() - lastSeenAt,
+          idleTimeoutMs: deps.idleTimeoutMs,
+          ageMs: Date.now() - openedAt,
+          // Zero pongs on a socket that lived past one heartbeat means the
+          // client never answered a single ping — a client-side keepalive
+          // problem, not a flaky network.
+          pongsSeen,
+          userId: deps.registry.getAuthContext(socket)?.userId ?? null,
+        });
         socket.terminate();
         return;
       }
@@ -155,7 +173,10 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
       }
     }, Math.max(10_000, Math.floor(deps.idleTimeoutMs / 2)));
 
-    socket.on('pong', touch);
+    socket.on('pong', () => {
+      pongsSeen += 1;
+      touch();
+    });
 
     socket.on('message', async (raw) => {
       touch();
@@ -215,6 +236,12 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
       console.info('[ws] closed', {
         code,
         reason: reason.toString() || null,
+        // Who ended it, and how long it lasted. A 1006 at roughly the idle
+        // timeout with closedBy 'server-idle-timeout' is us; a 1006 well short
+        // of it is the peer disappearing (backgrounded app, network switch).
+        closedBy: idleTerminated ? 'server-idle-timeout' : 'peer',
+        ageMs: Date.now() - openedAt,
+        pongsSeen,
         userId: auth?.userId ?? null,
         driverId: auth?.driverId ?? null,
       });
