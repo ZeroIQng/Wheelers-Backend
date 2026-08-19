@@ -403,6 +403,32 @@ function isMoreCommand(message: string): boolean {
   return /^(more|more\s+drivers|refresh|next)$/i.test(message.trim());
 }
 
+/**
+ * True when a reply is conversation rather than an attempt at an address.
+ *
+ * The booking stages assume the next message answers the question they asked,
+ * and hand it straight to the geocoder. But a stage survives in Redis for ten
+ * minutes, so a rider who wandered off mid-booking and came back with "Hey
+ * wassup" had their greeting geocoded — Google answered with "Nigeria", the
+ * whole country. Anything matching here is left for the intent parser and the
+ * chatbot instead.
+ */
+function looksLikeConversation(message: string): boolean {
+  const trimmed = message.trim();
+
+  // Greetings and small talk.
+  if (/^(hi|hey|hello|yo|wassup|sup|how far|good\s+(morning|afternoon|evening)|thanks?|thank you|abeg|please|ok(ay)?|hmm+)\b/i.test(trimmed)) {
+    return true;
+  }
+
+  // A question, or a restated trip — both belong to the intent parser.
+  if (/\?\s*$/.test(trimmed)) return true;
+
+  return /\b(i\s+(wanna|want|need|dey)|take me|carry me|book (a|me)|from\s+.+\s+to\s+|going to|go to|what'?s|who are|how much)\b/i.test(
+    trimmed,
+  );
+}
+
 function isCancelCommand(message: string): boolean {
   const m = message.trim().toLowerCase();
   if (/^cancel$/i.test(m)) return true;
@@ -1692,12 +1718,7 @@ export async function handleMetaWhatsappWebhookRoute(
       // sentence — which it answers with the country. Hand anything that
       // reads like a fresh request back to the intent parser by falling
       // through, rather than treating it as an address.
-      const looksLikeNewRequest =
-        /\b(i\s+(wanna|want|need|dey)|take me|carry me|book|from\s+.+\s+to\s+|going to|go to)\b/i.test(
-          answer,
-        );
-
-      if (looksLikeNewRequest) {
+      if (looksLikeConversation(answer)) {
         await clearPendingAreaHint(deps.redisClient, user.id);
         await clearBookingStage(deps.redisClient, user.id);
         // Deliberately no `return` — execution continues to intent parsing
@@ -1776,6 +1797,14 @@ export async function handleMetaWhatsappWebhookRoute(
         return;
       }
 
+      // Small talk is not a destination. This stage lives for ten minutes, so
+      // a rider returning to an abandoned booking with "Hey wassup" had their
+      // greeting geocoded. Leave it to the intent parser and the chatbot, and
+      // keep the stage so their next real answer still lands here.
+      if (looksLikeConversation(incomingMessage)) {
+        // deliberately no reply and no return — falls through to intent parsing
+      } else {
+
       // Try to geocode the typed destination
       const destGeo = await geocodeAddress(deps.googleMapsApiKey, incomingMessage.trim());
       if (!destGeo) {
@@ -1836,6 +1865,7 @@ export async function handleMetaWhatsappWebhookRoute(
       ]);
       await sendMetaReply(deps, phone, reply);
       return;
+      }
     }
 
     // ══════════════════════════════════════════════════════════════════════
