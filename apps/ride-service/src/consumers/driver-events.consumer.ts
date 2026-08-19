@@ -51,7 +51,11 @@ export function createDriverEventsConsumer(params: {
             (candidate) => candidate.driverId !== event.driverId,
           );
           if (pending.candidates.length !== before) {
-            pending.attemptedDriverIds.add(event.driverId);
+            // Deliberately NOT added to attemptedDriverIds. That set means
+            // "already offered this, or turned it down", and onDriverOnline
+            // skips anyone in it. Going offline is neither — marking them here
+            // meant a driver who dipped offline and came straight back was
+            // never re-sent a request that was still live.
             console.log(
               `[ride-service] driver ${event.driverId} went offline — removed from bidding on ride ${rideId}`,
             );

@@ -21,7 +21,6 @@
     "pm2:logs": "pm2 logs",
     "pm2:status": "pm2 status",
     "start:local": "npm run infra:up && npm run build && npm run db:migrate:deploy && npm run pm2:start",
-
     "start:api-gateway": "npm -w @wheleers/api-gateway run start",
     "start:ride-service": "npm -w @wheleers/ride-service run start",
     "start:group-ride": "npm -w @wheleers/group-ride run start",
@@ -30,7 +29,6 @@
     "start:notification-worker": "npm -w @wheleers/notification-worker run start",
     "start:whatsapp-gateway": "npm -w @wheleers/whatsapp-gateway run start",
     "start:compliance-worker": "npm -w @wheleers/compliance-worker run start",
-
     "db:generate": "node scripts/run-with-env.cjs npm -w @wheleers/db run db:generate",
     "db:migrate:dev": "node scripts/run-with-env.cjs npm -w @wheleers/db run db:migrate:dev",
     "db:migrate:deploy": "node scripts/run-with-env.cjs npm -w @wheleers/db run db:migrate:deploy",
@@ -41,7 +39,8 @@
     "test:group-ride:live": "npm run build && node --test test/group-ride.live.test.js",
     "test:payment-service": "npm run build && node --test test/payment-service.test.js",
     "test:wallet-service": "npm run build && node --test test/wallet-service.test.js",
-    "test:wallet-payment-integration": "npm run build && tsc -p test/tsconfig.json && node test/dist/payment-wallet.integration.js"
+    "test:wallet-payment-integration": "npm run build && tsc -p test/tsconfig.json && node test/dist/payment-wallet.integration.js",
+    "test:driver-reonline": "tsc -p test/tsconfig.json && node test/dist/driver-reonline.integration.js"
   },
   "name": "wheelers-backend",
   "version": "1.0.0",
