@@ -1686,6 +1686,24 @@ export async function handleMetaWhatsappWebhookRoute(
       const hint = await getPendingAreaHint(deps.redisClient, user.id);
       const answer = incomingMessage.trim();
 
+      // The question was "whereabouts in X?", so the expected answer is a
+      // landmark. Riders often restate the whole trip instead ("I wanna go
+      // from Allen"), and geocoding that verbatim asks Google to find a
+      // sentence — which it answers with the country. Hand anything that
+      // reads like a fresh request back to the intent parser by falling
+      // through, rather than treating it as an address.
+      const looksLikeNewRequest =
+        /\b(i\s+(wanna|want|need|dey)|take me|carry me|book|from\s+.+\s+to\s+|going to|go to)\b/i.test(
+          answer,
+        );
+
+      if (looksLikeNewRequest) {
+        await clearPendingAreaHint(deps.redisClient, user.id);
+        await clearBookingStage(deps.redisClient, user.id);
+        // Deliberately no `return` — execution continues to intent parsing
+        // below, which understands this sentence properly.
+      } else {
+
       // "roundabout" on its own geocodes to nothing — it only means something
       // combined with the area they already named. Word order matters more
       // than it looks: measured against Google, "Allen roundabout" resolves to
@@ -1731,6 +1749,7 @@ export async function handleMetaWhatsappWebhookRoute(
       ]);
       await sendMetaReply(deps, phone, reply);
       return;
+      }
     }
 
     if (bookingStage === 'awaiting_destination' && !isLocation) {
