@@ -519,10 +519,28 @@ async function handleFindDrivers(
     };
   }
 
-  const plannedRoute = await deps.routePlanner.planRoute({
-    origin: pickupGeo,
-    destination: destGeo,
-  });
+  let plannedRoute: Awaited<ReturnType<typeof deps.routePlanner.planRoute>>;
+  try {
+    plannedRoute = await deps.routePlanner.planRoute({
+      origin: pickupGeo,
+      destination: destGeo,
+    });
+  } catch (error) {
+    console.warn('[whatsapp-flow] route planning failed', {
+      pickup: pickupGeo.formattedAddress,
+      destination: destGeo.formattedAddress,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      screen: 'RIDE_SETUP',
+      data: buildRideSetupData({
+        pickupAddress,
+        destinationAddress,
+        suggestedFareNgn: offerAmount || 0,
+        error: 'Could not find a driving route between those two points. Please check the addresses.',
+      }),
+    };
+  }
 
   const suggestedFareNgn = plannedRoute.suggestedFareNgn;
   const riderOfferNgn = offerAmount > 0 ? offerAmount : suggestedFareNgn;

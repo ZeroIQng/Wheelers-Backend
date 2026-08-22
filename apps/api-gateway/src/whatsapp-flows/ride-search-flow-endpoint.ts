@@ -169,10 +169,23 @@ async function handleFlowAction(
       }
 
       // Plan route and create ride
-      const plannedRoute = await deps.routePlanner.planRoute({
-        origin: pickupGeo,
-        destination: destGeo,
-      });
+      let plannedRoute: Awaited<ReturnType<typeof deps.routePlanner.planRoute>>;
+      try {
+        plannedRoute = await deps.routePlanner.planRoute({
+          origin: pickupGeo,
+          destination: destGeo,
+        });
+      } catch (error) {
+        console.warn('[ride-search-flow] route planning failed', {
+          pickup: pickupGeo.formattedAddress,
+          destination: destGeo.formattedAddress,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return {
+          screen: 'ADDRESS_FORM',
+          data: buildAddressFormData(pending, 'Could not find a driving route between those two points. Please check the addresses.'),
+        };
+      }
 
       const rideId = randomUUID();
       const suggestedFareNgn = plannedRoute.suggestedFareNgn;

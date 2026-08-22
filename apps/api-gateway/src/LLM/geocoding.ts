@@ -15,6 +15,7 @@ interface GoogleGeocodingResponse {
     };
     formatted_address?: string;
     types?: string[];
+    partial_match?: boolean;
   }>;
 }
 
@@ -29,6 +30,31 @@ const TOO_COARSE_TYPES = new Set([
   'administrative_area_level_1',
   'administrative_area_level_2',
 ]);
+
+/**
+ * Google marks a result `partial_match` when it could not match the whole
+ * query and guessed. Some guesses are fine ("Shoprite Ikeja" → "Shoprite,
+ * Ikeja Roundabout") but some are garbage — "University gate" resolved to
+ * "Street U, Eti-Osa, Lekki", 50 km from anywhere the rider meant, purely
+ * because the street is named "U". The garbage guesses share no words with
+ * the query, so a partial match is accepted only when at least one meaningful
+ * query word appears in the returned address.
+ */
+const GENERIC_QUERY_WORDS = new Set([
+  'the', 'and', 'near', 'beside', 'opposite', 'behind',
+  'street', 'road', 'avenue', 'close', 'crescent', 'way',
+  'lagos', 'nigeria', 'state',
+]);
+
+function partialMatchLooksRelated(query: string, formattedAddress: string): boolean {
+  const address = formattedAddress.toLowerCase();
+  const meaningfulWords = query
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length >= 3 && !GENERIC_QUERY_WORDS.has(word));
+  if (meaningfulWords.length === 0) return false;
+  return meaningfulWords.some((word) => address.includes(word));
+}
 
 export async function reverseGeocode(
   apiKey: string,
@@ -149,6 +175,17 @@ async function geocodeOnce(
         address,
         resolvedTo: result.formatted_address,
         types: result.types,
+      });
+      return null;
+    }
+
+    if (
+      result.partial_match &&
+      !partialMatchLooksRelated(address, result.formatted_address ?? '')
+    ) {
+      console.warn('[geocoding] ignoring partial match — unrelated to query', {
+        address,
+        resolvedTo: result.formatted_address,
       });
       return null;
     }

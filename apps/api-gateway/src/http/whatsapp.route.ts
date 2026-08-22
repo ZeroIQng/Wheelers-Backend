@@ -429,6 +429,39 @@ function looksLikeConversation(message: string): boolean {
   );
 }
 
+/**
+ * Riders answer "where are you headed?" with "To University gate" — and the
+ * filler words get geocoded along with the place, which is enough to throw
+ * Google onto an unrelated fuzzy match. Strip them before geocoding.
+ */
+function stripDirectionPrefix(message: string): string {
+  const stripped = message
+    .trim()
+    .replace(/^(?:i(?:'m| am)?\s+(?:dey\s+)?(?:going|go|headed|heading)\s+to|take me to|carry me to|drop me (?:at|off at)|go(?:ing)? to|to|from)\s+/i, '')
+    .trim();
+  return stripped.length >= 3 ? stripped : message.trim();
+}
+
+async function planRouteSafe(
+  deps: MetaWhatsappRouteDeps,
+  pickup: { lat: number; lng: number; address: string },
+  destination: { lat: number; lng: number; address: string },
+): Promise<Awaited<ReturnType<GoogleMapsRoutePlanner['planRoute']>> | null> {
+  try {
+    return await deps.routePlanner.planRoute({ origin: pickup, destination });
+  } catch (error) {
+    console.warn('[whatsapp] route planning failed', {
+      pickup: pickup.address,
+      destination: destination.address,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+const ROUTE_PLAN_FAILED_REPLY =
+  'Could not find a driving route between those two points. 😕\n\nPlease double-check the addresses, or share a location pin 📍';
+
 function isCancelCommand(message: string): boolean {
   const m = message.trim().toLowerCase();
   if (/^cancel$/i.test(m)) return true;
@@ -1079,7 +1112,27 @@ export async function handleMetaWhatsappWebhookRoute(
               return;
             }
 
-            // Geocode succeeded — now cancel the old ride
+            const pickup = isPickup
+              ? { lat: geo.lat, lng: geo.lng, address: geo.formattedAddress }
+              : { lat: rideMeta.pickupLat, lng: rideMeta.pickupLng, address: rideMeta.pickupAddress };
+            const destination = !isPickup
+              ? { lat: geo.lat, lng: geo.lng, address: geo.formattedAddress }
+              : { lat: rideMeta.destinationLat, lng: rideMeta.destinationLng, address: rideMeta.destinationAddress };
+
+            // Plan the new route FIRST — don't cancel the ride until we know
+            // the new route is drivable
+            const plannedRoute = await planRouteSafe(deps, pickup, destination);
+            if (!plannedRoute) {
+              const reply = `${ROUTE_PLAN_FAILED_REPLY}\n\nYour ride is still active.`;
+              await appendWhatsappConversation(deps.redisClient, phone, [
+                { role: 'user', content: incomingMessage },
+                { role: 'assistant', content: reply },
+              ]);
+              await sendMetaReply(deps, phone, reply);
+              return;
+            }
+
+            // Route planned — now cancel the old ride
             const cancelEvent = RideCancelledEvent.parse({
               eventType: 'RIDE_CANCELLED',
               rideId: activeRideId,
@@ -1091,15 +1144,6 @@ export async function handleMetaWhatsappWebhookRoute(
             await clearActiveRide(deps.redisClient, user.id);
             await cleanupRideKeys(deps.redisClient, activeRideId);
             await clearPendingAccept(deps.redisClient, user.id);
-
-            const pickup = isPickup
-              ? { lat: geo.lat, lng: geo.lng, address: geo.formattedAddress }
-              : { lat: rideMeta.pickupLat, lng: rideMeta.pickupLng, address: rideMeta.pickupAddress };
-            const destination = !isPickup
-              ? { lat: geo.lat, lng: geo.lng, address: geo.formattedAddress }
-              : { lat: rideMeta.destinationLat, lng: rideMeta.destinationLng, address: rideMeta.destinationAddress };
-
-            const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
             const distanceKm = plannedRoute.distanceKm;
             const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
             const suggestedFare = plannedRoute.suggestedFareNgn;
@@ -1546,7 +1590,16 @@ export async function handleMetaWhatsappWebhookRoute(
             ? { lat: locationLat, lng: locationLng, address }
             : { lat: pendingRoute.destLat, lng: pendingRoute.destLng, address: pendingRoute.destAddress };
 
-          const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
+          const plannedRoute = await planRouteSafe(deps, pickup, destination);
+          if (!plannedRoute) {
+            const reply = `${ROUTE_PLAN_FAILED_REPLY}\n\nYour booking is unchanged — try a different pin.`;
+            await appendWhatsappConversation(deps.redisClient, phone, [
+              { role: 'user', content: `[Shared location: ${address}]` },
+              { role: 'assistant', content: reply },
+            ]);
+            await sendMetaReply(deps, phone, reply);
+            return;
+          }
           const distanceKm = plannedRoute.distanceKm;
           const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
           const suggestedFare = plannedRoute.suggestedFareNgn;
@@ -1633,11 +1686,10 @@ export async function handleMetaWhatsappWebhookRoute(
       const pickup = { lat: pendingPickup.lat, lng: pendingPickup.lng, address: pendingPickup.address };
       const destination = { lat: locationLat, lng: locationLng, address };
 
-      await clearPendingLocation(deps.redisClient, user.id);
-      await clearBookingStage(deps.redisClient, user.id);
-
       // Check for existing active ride
       if (activeRideId) {
+        await clearPendingLocation(deps.redisClient, user.id);
+        await clearBookingStage(deps.redisClient, user.id);
         const reply = 'You already have an active ride. Say *cancel* first to book a new one.';
         await appendWhatsappConversation(deps.redisClient, phone, [
           { role: 'user', content: `[Shared destination location: ${address}]` },
@@ -1648,7 +1700,20 @@ export async function handleMetaWhatsappWebhookRoute(
       }
 
       // Plan route, store it, and ask rider for their price
-      const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
+      const plannedRoute = await planRouteSafe(deps, pickup, destination);
+      if (!plannedRoute) {
+        // Keep the pending pickup and stage so the rider can re-share a pin
+        const reply = ROUTE_PLAN_FAILED_REPLY;
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: `[Shared destination location: ${address}]` },
+          { role: 'assistant', content: reply },
+        ]);
+        await sendMetaReply(deps, phone, reply);
+        return;
+      }
+
+      await clearPendingLocation(deps.redisClient, user.id);
+      await clearBookingStage(deps.redisClient, user.id);
       const distanceKm = plannedRoute.distanceKm;
       const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
       const suggestedFare = plannedRoute.suggestedFareNgn;
@@ -1806,9 +1871,10 @@ export async function handleMetaWhatsappWebhookRoute(
       } else {
 
       // Try to geocode the typed destination
-      const destGeo = await geocodeAddress(deps.googleMapsApiKey, incomingMessage.trim());
+      const typedDestination = stripDirectionPrefix(incomingMessage);
+      const destGeo = await geocodeAddress(deps.googleMapsApiKey, typedDestination);
       if (!destGeo) {
-        const reply = `Could not find "${incomingMessage.trim()}" on the map.\n\nPlease type a more specific destination address or share a location pin 📍`;
+        const reply = `Could not find "${typedDestination}" on the map.\n\nPlease type a more specific destination address or share a location pin 📍`;
         await appendWhatsappConversation(deps.redisClient, phone, [
           { role: 'user', content: incomingMessage },
           { role: 'assistant', content: reply },
@@ -1821,10 +1887,20 @@ export async function handleMetaWhatsappWebhookRoute(
       const pickup = { lat: pendingPickup.lat, lng: pendingPickup.lng, address: pendingPickup.address };
       const destination = { lat: destGeo.lat, lng: destGeo.lng, address: destGeo.formattedAddress };
 
+      const plannedRoute = await planRouteSafe(deps, pickup, destination);
+      if (!plannedRoute) {
+        // Keep the stage and pending pickup so their next answer still lands here
+        const reply = ROUTE_PLAN_FAILED_REPLY;
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage },
+          { role: 'assistant', content: reply },
+        ]);
+        await sendMetaReply(deps, phone, reply);
+        return;
+      }
+
       await clearPendingLocation(deps.redisClient, user.id);
       await clearBookingStage(deps.redisClient, user.id);
-
-      const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
       const distanceKm = plannedRoute.distanceKm;
       const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
       const suggestedFare = plannedRoute.suggestedFareNgn;
@@ -1897,10 +1973,11 @@ export async function handleMetaWhatsappWebhookRoute(
         return;
       }
 
-      const geo = await geocodeAddress(deps.googleMapsApiKey, incomingMessage.trim());
+      const typedEditAddress = stripDirectionPrefix(incomingMessage);
+      const geo = await geocodeAddress(deps.googleMapsApiKey, typedEditAddress);
       if (!geo) {
         const label = bookingStage === 'editing_pickup' ? 'pickup' : 'destination';
-        const reply = `Could not find "${incomingMessage.trim()}" on the map.\n\nPlease type a more specific ${label} address or share a location pin 📍`;
+        const reply = `Could not find "${typedEditAddress}" on the map.\n\nPlease type a more specific ${label} address or share a location pin 📍`;
         await appendWhatsappConversation(deps.redisClient, phone, [
           { role: 'user', content: incomingMessage },
           { role: 'assistant', content: reply },
@@ -1916,7 +1993,16 @@ export async function handleMetaWhatsappWebhookRoute(
         ? { lat: geo.lat, lng: geo.lng, address: geo.formattedAddress }
         : { lat: pendingRoute.destLat, lng: pendingRoute.destLng, address: pendingRoute.destAddress };
 
-      const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
+      const plannedRoute = await planRouteSafe(deps, pickup, destination);
+      if (!plannedRoute) {
+        const reply = `${ROUTE_PLAN_FAILED_REPLY}\n\nYour booking is unchanged.`;
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage },
+          { role: 'assistant', content: reply },
+        ]);
+        await sendMetaReply(deps, phone, reply);
+        return;
+      }
       const distanceKm = plannedRoute.distanceKm;
       const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
       const suggestedFare = plannedRoute.suggestedFareNgn;
@@ -2131,7 +2217,16 @@ export async function handleMetaWhatsappWebhookRoute(
               ? { lat: geo.lat, lng: geo.lng, address: geo.formattedAddress }
               : { lat: pendingRoute.destLat, lng: pendingRoute.destLng, address: pendingRoute.destAddress };
 
-            const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
+            const plannedRoute = await planRouteSafe(deps, pickup, destination);
+            if (!plannedRoute) {
+              const reply = `${ROUTE_PLAN_FAILED_REPLY}\n\nYour booking is unchanged.`;
+              await appendWhatsappConversation(deps.redisClient, phone, [
+                { role: 'user', content: incomingMessage },
+                { role: 'assistant', content: reply },
+              ]);
+              await sendMetaReply(deps, phone, reply);
+              return;
+            }
             const distanceKm = plannedRoute.distanceKm;
             const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
             const suggestedFare = plannedRoute.suggestedFareNgn;
@@ -2212,7 +2307,16 @@ export async function handleMetaWhatsappWebhookRoute(
           const pickup = { lat: pickupGeo.lat, lng: pickupGeo.lng, address: pickupGeo.formattedAddress };
           const destination = { lat: pendingRoute.destLat, lng: pendingRoute.destLng, address: pendingRoute.destAddress };
 
-          const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
+          const plannedRoute = await planRouteSafe(deps, pickup, destination);
+          if (!plannedRoute) {
+            const reply = `${ROUTE_PLAN_FAILED_REPLY}\n\nYour booking is unchanged.`;
+            await appendWhatsappConversation(deps.redisClient, phone, [
+              { role: 'user', content: incomingMessage },
+              { role: 'assistant', content: reply },
+            ]);
+            await sendMetaReply(deps, phone, reply);
+            return;
+          }
           const distanceKm = plannedRoute.distanceKm;
           const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
           const suggestedFare = plannedRoute.suggestedFareNgn;
@@ -2269,7 +2373,16 @@ export async function handleMetaWhatsappWebhookRoute(
           const pickup = { lat: pendingRoute.pickupLat, lng: pendingRoute.pickupLng, address: pendingRoute.pickupAddress };
           const destination = { lat: destGeo.lat, lng: destGeo.lng, address: destGeo.formattedAddress };
 
-          const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
+          const plannedRoute = await planRouteSafe(deps, pickup, destination);
+          if (!plannedRoute) {
+            const reply = `${ROUTE_PLAN_FAILED_REPLY}\n\nYour booking is unchanged.`;
+            await appendWhatsappConversation(deps.redisClient, phone, [
+              { role: 'user', content: incomingMessage },
+              { role: 'assistant', content: reply },
+            ]);
+            await sendMetaReply(deps, phone, reply);
+            return;
+          }
           const distanceKm = plannedRoute.distanceKm;
           const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
           const suggestedFare = plannedRoute.suggestedFareNgn;
@@ -2498,7 +2611,16 @@ export async function handleMetaWhatsappWebhookRoute(
         const pickup = { lat: pickupGeo.lat, lng: pickupGeo.lng, address: pickupGeo.formattedAddress };
         const destination = { lat: destGeo.lat, lng: destGeo.lng, address: destGeo.formattedAddress };
 
-        const plannedRoute = await deps.routePlanner.planRoute({ origin: pickup, destination });
+        const plannedRoute = await planRouteSafe(deps, pickup, destination);
+        if (!plannedRoute) {
+          const reply = ROUTE_PLAN_FAILED_REPLY;
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
+          return;
+        }
         const distanceKm = plannedRoute.distanceKm;
         const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
         const suggestedFare = plannedRoute.suggestedFareNgn;
