@@ -9,11 +9,19 @@ export function createRideEventsConsumer(params: {
   walletRepository: WalletRepository;
   walletEventsProducer: WalletEventsProducer;
   serviceId?: string;
+  /** Moves the driver's cut as real cash (rider VA → driver VA) after settle. */
+  settleRideCash?: (params: {
+    rideId: string;
+    riderId: string;
+    driverUserId: string;
+    driverPayoutNgn: number;
+  }) => Promise<void>;
 }) {
   const {
     walletRepository,
     walletEventsProducer,
     serviceId = 'wallet-service',
+    settleRideCash,
   } = params;
 
   return {
@@ -194,6 +202,18 @@ export function createRideEventsConsumer(params: {
             riderLockedAfterNgn: Number(result.riderWallet.lockedNgn),
             driverBalanceAfterNgn: Number(result.driverWallet.balanceNgn),
           });
+
+          // Ledger settled — now move the driver's cut as REAL cash from the
+          // rider's Pouch account into the driver's own, so their withdrawal
+          // draws from money that actually exists. Never throws.
+          if (settleRideCash) {
+            await settleRideCash({
+              rideId: event.rideId,
+              riderId: event.riderId,
+              driverUserId: event.driverUserId,
+              driverPayoutNgn: completionFees.driverPayoutNgn,
+            });
+          }
 
           // Publish rider debit event (total including tax + levy)
           await walletEventsProducer.publishDebited({
