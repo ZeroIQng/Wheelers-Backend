@@ -8,7 +8,7 @@ const GroupRideEnvSchema = z.object({
   GROUP_RIDE_BEARING_THRESHOLD_DEG: z.coerce.number().positive().max(180).default(35),
   GROUP_RIDE_MAX_CANDIDATES: z.coerce.number().int().positive().default(6),
   GROUP_RIDE_MAX_SIZE: z.coerce.number().int().min(2).max(4).default(3),
-  GROUP_RIDE_REQUEST_TTL_S: z.coerce.number().int().positive().default(600),
+  GROUP_RIDE_REQUEST_TTL_S: z.coerce.number().int().positive().default(1800),
 });
 
 export type GroupRideEnv = z.infer<typeof GroupRideEnvSchema>;

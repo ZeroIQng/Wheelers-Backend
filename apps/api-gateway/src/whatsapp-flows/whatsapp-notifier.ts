@@ -277,3 +277,20 @@ export async function sendGroupRideDispatchNotification(
 
   await sendMetaWhatsappMessage(deps, phone, msg);
 }
+
+export async function sendGroupRideWaitNudge(
+  deps: WhatsappNotifierDeps,
+  phone: string,
+  waitedMinutes: number,
+): Promise<void> {
+  const msg = [
+    `⏳ *Still looking for co-riders* — it's been ~${waitedMinutes} minutes with no group yet.`,
+    ``,
+    `Reply:`,
+    `• *normal* — book this trip as a normal ride right now`,
+    `• *wait* — keep looking for another ${waitedMinutes} minutes`,
+    `• *cancel group* — stop looking`,
+  ].join('\n');
+
+  await sendMetaWhatsappMessage(deps, phone, msg);
+}

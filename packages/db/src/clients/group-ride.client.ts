@@ -244,6 +244,21 @@ export const groupRideClient = {
       orderBy: { storedAt: 'desc' },
     }),
 
+  /**
+   * Open requests that have been waiting in the pool since before the cutoff
+   * — the ones whose riders deserve a "still waiting?" nudge.
+   */
+  findStaleOpenMatchRequests: (olderThan: Date, limit = 50) =>
+    prisma.groupRideMatchRequest.findMany({
+      where: {
+        status: { in: ['READY_FOR_MATCH', 'MATCHING'] },
+        readyForMatchAt: { lt: olderThan },
+      },
+      include: { faceVerification: true },
+      orderBy: { readyForMatchAt: 'asc' },
+      take: limit,
+    }),
+
   findReadyRequests: () =>
     prisma.groupRideMatchRequest.findMany({
       where: {

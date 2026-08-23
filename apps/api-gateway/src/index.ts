@@ -123,6 +123,7 @@ import {
 import { handleGetRideChatMessagesRoute } from "./http/chat.route";
 import { applyCorsHeaders, sendJson } from "./http/utils";
 import { startGatewayKafkaConsumer } from "./kafka/consumer";
+import { startGroupRideWaitNudgeSweep } from "./group-ride/wait-nudge";
 // COMMENTED OUT: WhatsApp Flows — using pure chat-based ride booking instead
 // import { handleWhatsappFlowEndpoint } from "./whatsapp-flows/flow-endpoint";
 // import { handleRideSearchFlowEndpoint } from "./whatsapp-flows/ride-search-flow-endpoint";
@@ -1409,6 +1410,19 @@ async function bootstrap(): Promise<void> {
     consumer,
     registry,
     publisher,
+    redisClient: redisCommandClient,
+    whatsappNotifier:
+      gatewayEnv.META_ACCESS_TOKEN && gatewayEnv.META_PHONE_NUMBER_ID
+        ? {
+            metaAccessToken: gatewayEnv.META_ACCESS_TOKEN,
+            metaPhoneNumberId: gatewayEnv.META_PHONE_NUMBER_ID,
+          }
+        : undefined,
+  });
+
+  // Riders stuck in the group matching pool get a "still waiting?" check-in
+  // (reply: normal / wait / cancel group) instead of silence.
+  startGroupRideWaitNudgeSweep({
     redisClient: redisCommandClient,
     whatsappNotifier:
       gatewayEnv.META_ACCESS_TOKEN && gatewayEnv.META_PHONE_NUMBER_ID

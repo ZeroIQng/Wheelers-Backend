@@ -1353,6 +1353,76 @@ async function cancelGroupRide(
     'Group ride cancelled. Type *group ride* whenever you want to start another, or book a normal ride any time. 🚗');
 }
 
+/**
+ * "normal" reply to the wait-nudge: stop the group search and rebook the
+ * same trip as a standard ride, landing the rider at the familiar
+ * quote → offer → bids flow.
+ */
+async function convertGroupToNormalRide(
+  deps: MetaWhatsappRouteDeps,
+  user: WhatsappUser,
+  phone: string,
+  incomingMessage: string,
+  matchRequestId: string,
+): Promise<void> {
+  const request = await groupRideClient.findMatchRequestByIdForUser(matchRequestId, user.id).catch(() => null);
+  if (!request || !['READY_FOR_MATCH', 'MATCHING', 'PENDING_FACE_UPLOAD'].includes(request.status)) {
+    await replyAndLog(deps, phone, incomingMessage,
+      'No waiting group ride found. Type *group ride* to start one, or share a pin for a normal ride 📍');
+    return;
+  }
+
+  try {
+    await groupRideClient.cancelMatchRequestForUser(matchRequestId, user.id, 'converted_to_normal_ride');
+    await deps.publisher.publishGroupRideEvent({
+      eventType: 'GROUP_RIDE_MATCH_CANCELLED',
+      rideId: matchRequestId,
+      riderId: user.id,
+      reason: 'converted_to_normal_ride',
+      timestamp: new Date().toISOString(),
+    });
+  } catch {
+    // already terminal — converting is still fine
+  }
+  await clearGroupRequestRider(deps.redisClient, user.id);
+  await clearPendingGroupRide(deps.redisClient, user.id);
+
+  const pickup = { lat: request.pickupLat, lng: request.pickupLng, address: request.pickupAddress };
+  const destination = { lat: request.destLat, lng: request.destLng, address: request.destAddress };
+
+  const plannedRoute = await planRouteSafe(deps, pickup, destination);
+  if (!plannedRoute) {
+    await replyAndLog(deps, phone, incomingMessage, ROUTE_PLAN_FAILED_REPLY);
+    return;
+  }
+
+  const distanceKm = plannedRoute.distanceKm;
+  const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
+  const suggestedFare = plannedRoute.suggestedFareNgn;
+  const minFare = plannedRoute.minOfferNgn;
+
+  await storePendingRoute(deps.redisClient, user.id, {
+    pickupLat: pickup.lat, pickupLng: pickup.lng, pickupAddress: pickup.address,
+    destLat: destination.lat, destLng: destination.lng, destAddress: destination.address,
+    distanceKm, durationSeconds: plannedRoute.durationSeconds,
+    suggestedFareNgn: suggestedFare, minOfferNgn: minFare,
+    ratePerKmNgn: plannedRoute.ratePerKmNgn, route: plannedRoute.geometry,
+  });
+  await setBookingStage(deps.redisClient, user.id, 'awaiting_price');
+
+  await replyAndLog(deps, phone, incomingMessage, [
+    `🚗 *Switched to a normal ride.*`,
+    ``,
+    `Pickup: *${pickup.address}*`,
+    `Destination: *${destination.address}*`,
+    `${distanceKm.toFixed(1)} km · ~${durationMin} min`,
+    `Minimum fare: ₦${minFare.toLocaleString()}`,
+    `Suggested fare: ₦${suggestedFare.toLocaleString()}`,
+    ``,
+    `Send your offer (e.g. *${suggestedFare.toLocaleString()}* or *${Math.round(suggestedFare * 0.85).toLocaleString()}*)`,
+  ].join('\n'));
+}
+
 async function sendGroupStatus(
   deps: MetaWhatsappRouteDeps,
   user: WhatsappUser,
@@ -1546,6 +1616,31 @@ export async function handleMetaWhatsappWebhookRoute(
     if (!isLocation && isGroupCancelCommand(incomingMessage)) {
       await cancelGroupRide(deps, user, phone, incomingMessage);
       return;
+    }
+
+    // "wait" / "normal" — answers to the pool wait-nudge. Only intercepted
+    // when the rider actually has an open group request; otherwise these
+    // words fall through to normal handling.
+    if (!isLocation && /^(wait|keep waiting)\b/i.test(incomingMessage.trim())) {
+      const matchRequestId = await getGroupRequestRider(deps.redisClient, user.id).catch(() => null);
+      if (matchRequestId) {
+        const request = await groupRideClient.findMatchRequestByIdForUser(matchRequestId, user.id).catch(() => null);
+        if (request && ['READY_FOR_MATCH', 'MATCHING'].includes(request.status) && request.faceVerification) {
+          await deps.publisher.publishGroupRideEvent(buildReadyForMatchEvent(request)).catch(() => {});
+          await deps.redisClient.del(`whatsapp:group:${request.id}:wait_nudge`).catch(() => {});
+          await replyAndLog(deps, phone, incomingMessage,
+            `👀 Still looking for co-riders — I'll check in again if nothing turns up.`);
+          return;
+        }
+      }
+    }
+
+    if (!isLocation && /^normal(\s*ride)?$/i.test(incomingMessage.trim())) {
+      const matchRequestId = await getGroupRequestRider(deps.redisClient, user.id).catch(() => null);
+      if (matchRequestId) {
+        await convertGroupToNormalRide(deps, user, phone, incomingMessage, matchRequestId);
+        return;
+      }
     }
 
     // A bare "group ride" typed mid-booking must start the group flow — the
