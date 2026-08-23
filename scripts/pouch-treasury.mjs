@@ -9,6 +9,10 @@
  *
  *   node scripts/pouch-treasury.mjs balance
  *     → prints the treasury balance (reads the id from .env).
+ *
+ *   node scripts/pouch-treasury.mjs payout 5000
+ *     → pays ₦5,000 of platform revenue from the treasury to the owner's
+ *       verified OPay account (destination hardcoded below).
  */
 import { readFileSync } from 'node:fs';
 
@@ -85,6 +89,42 @@ if (mode === 'create') {
   if (!id) { console.error('POUCH_TREASURY_VIRTUAL_ACCOUNT_ID not in .env — run create first.'); process.exit(1); }
   const b = await api(`/virtual-accounts/${id}/balance`);
   console.log(`Treasury balance: ₦${(Number(b.balance ?? 0) / 100).toLocaleString()}`);
+} else if (mode === 'payout') {
+  const OWNER_ACCOUNT = '7013201290'; // OLUWATIMILEHIN HARRY OLOWU @ OPay (verified)
+  const id = env.POUCH_TREASURY_VIRTUAL_ACCOUNT_ID;
+  if (!id) { console.error('POUCH_TREASURY_VIRTUAL_ACCOUNT_ID not in .env — run create first.'); process.exit(1); }
+  const amountNgn = Math.floor(Number(process.argv[3]));
+  if (!Number.isFinite(amountNgn) || amountNgn <= 0) {
+    console.error('Usage: node scripts/pouch-treasury.mjs payout <amountNgn>');
+    process.exit(1);
+  }
+
+  const banksRes = await api(`/banks?country=NG&currency=NGN`);
+  const banks = banksRes.banks ?? [];
+  const opay = banks.find((b) => (b.name ?? '').toLowerCase().includes('opay'));
+  if (!opay) { console.error('OPay not found in bank list'); process.exit(1); }
+
+  const verified = await api(`/payouts/validate`, {
+    method: 'POST',
+    body: JSON.stringify({ account_number: OWNER_ACCOUNT, bank_uuid: opay.uuid, country: 'NG', currency: 'NGN' }),
+  });
+  console.log(`Paying ₦${amountNgn.toLocaleString()} to ${verified.account_name} (${OWNER_ACCOUNT} @ ${opay.name})…`);
+
+  const payout = await api(`/payouts`, {
+    method: 'POST',
+    headers: { 'X-Idempotency-Key': `treasury-payout-${Date.now()}` },
+    body: JSON.stringify({
+      virtual_account_id: id,
+      reference: `treasury-payout-${Date.now()}`,
+      amount: amountNgn,
+      destination_account: OWNER_ACCOUNT,
+      destination_bank_uuid: opay.uuid,
+      country: 'NG',
+      currency: 'NGN',
+      narration: 'Wheelers platform revenue',
+    }),
+  });
+  console.log(`✅ payout ${payout.id} (${payout.status})`);
 } else {
-  console.log('Usage: node scripts/pouch-treasury.mjs create | balance');
+  console.log('Usage: node scripts/pouch-treasury.mjs create | balance | payout <amountNgn>');
 }
