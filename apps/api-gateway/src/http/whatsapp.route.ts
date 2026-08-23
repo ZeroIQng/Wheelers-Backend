@@ -18,6 +18,7 @@ import {
   RideOfferAcceptedEvent,
 } from '@wheleers/kafka-schemas';
 import type { PayoutCreatedEvent } from '@wheleers/kafka-schemas';
+import { classifyPouchPayoutStatus } from '@wheleers/pouch-client';
 import type { PouchBankAccount, PouchLiquifiaClient } from '@wheleers/pouch-client';
 import type { GatewayPublisher } from '../websocket/publisher';
 import { onboardWhatsappUser } from '../onboarding/user-onboarding';
@@ -661,6 +662,14 @@ async function submitWhatsappWithdrawal(params: {
       destinationBankUuid: bankUuid,
       idempotencyKey: reserveResult.request.id,
     });
+
+    // Pouch reports rejections inside an HTTP 200 — a payout it already
+    // refused must not be recorded (and reported to the rider) as created.
+    if (classifyPouchPayoutStatus(payout.status) === 'failed') {
+      throw new Error(
+        `The bank transfer was rejected by the payment provider (${payout.status}). Your balance has not been deducted.`,
+      );
+    }
 
     await withdrawalClient.attachPayout({
       withdrawalRequestId: reserveResult.request.id,

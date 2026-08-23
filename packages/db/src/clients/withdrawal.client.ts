@@ -78,9 +78,15 @@ export const withdrawalClient = {
     providerReference: string;
     providerPayload?: Record<string, unknown>;
     expiresAt?: Date;
-  }) =>
-    prisma.withdrawalRequest.update({
-      where: { id: input.withdrawalRequestId },
+  }) => {
+    // A payout.failed webhook can land before this write — never resurrect a
+    // request that has already reached a terminal state; only record the
+    // provider identifiers on it.
+    const advanced = await prisma.withdrawalRequest.updateMany({
+      where: {
+        id: input.withdrawalRequestId,
+        status: { in: ['PENDING', 'FUNDS_RESERVED'] },
+      },
       data: {
         pouchPayoutId: input.pouchPayoutId,
         providerReference: input.providerReference,
@@ -88,7 +94,24 @@ export const withdrawalClient = {
         expiresAt: input.expiresAt,
         status: 'PAYOUT_CREATED',
       },
-    }),
+    });
+
+    if (advanced.count === 0) {
+      await prisma.withdrawalRequest.updateMany({
+        where: { id: input.withdrawalRequestId },
+        data: {
+          pouchPayoutId: input.pouchPayoutId,
+          providerReference: input.providerReference,
+          providerPayload: asJson(input.providerPayload),
+          expiresAt: input.expiresAt,
+        },
+      });
+    }
+
+    return prisma.withdrawalRequest.findUnique({
+      where: { id: input.withdrawalRequestId },
+    });
+  },
 
   markProcessing: async (providerReference: string) =>
     prisma.withdrawalRequest.updateMany({
@@ -235,6 +258,23 @@ export const withdrawalClient = {
       throw error;
     }
   },
+
+  /**
+   * In-flight withdrawals that have gone quiet — payout created or processing
+   * with no status change for a while. These are the rows a lost webhook
+   * leaves behind (rider's money locked, no resolution), so a periodic
+   * reconciliation sweep re-checks them against the provider.
+   */
+  findStaleInFlight: (olderThan: Date, limit = 50) =>
+    prisma.withdrawalRequest.findMany({
+      where: {
+        status: { in: ['PAYOUT_CREATED', 'PROCESSING'] },
+        updatedAt: { lt: olderThan },
+        pouchPayoutId: { not: null },
+      },
+      orderBy: { updatedAt: 'asc' },
+      take: limit,
+    }),
 
   listByUser: (userId: string, limit = 20, cursor?: string) =>
     prisma.withdrawalRequest.findMany({

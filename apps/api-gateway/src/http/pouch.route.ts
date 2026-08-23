@@ -90,8 +90,9 @@ export async function handlePouchWebhookRoute(
       'transaction_reference', 'id', 'eventId', 'event_id',
     ]);
 
+    let dedupKey: string | null = null;
     if (dedupRef && deps.redisClient) {
-      const dedupKey = `pouch:webhook:${eventName}:${dedupRef}`;
+      dedupKey = `pouch:webhook:${eventName}:${dedupRef}`;
       const isNew = await deps.redisClient.setIfNotExists(dedupKey, '1', 86400);
       if (!isNew) {
         console.log('[api-gateway][pouch-webhook] duplicate event skipped', { eventName, dedupRef });
@@ -102,25 +103,34 @@ export async function handlePouchWebhookRoute(
 
     /* ---------- dispatch by event type ---------- */
 
-    switch (eventName) {
-      case 'inbound_transfer.received':
-      case 'virtual_account.credited':
-        await handleVirtualAccountCredited(data, deps.publisher);
-        break;
+    try {
+      switch (eventName) {
+        case 'inbound_transfer.received':
+        case 'virtual_account.credited':
+          await handleVirtualAccountCredited(data, deps.publisher);
+          break;
 
-      case 'payout.completed':
-      case 'payout.success':
-        await handlePayoutSuccess(data, deps.publisher);
-        break;
+        case 'payout.completed':
+        case 'payout.success':
+          await handlePayoutSuccess(data, deps.publisher);
+          break;
 
-      case 'payout.failed':
-        await handlePayoutFailed(data, deps.publisher);
-        break;
+        case 'payout.failed':
+          await handlePayoutFailed(data, deps.publisher);
+          break;
 
-      default:
-        console.log('[api-gateway][pouch-webhook] unhandled event type', { eventName });
-        sendJson(res, 200, { received: true, processed: false, reason: `Unhandled event: ${eventName}` });
-        return;
+        default:
+          console.log('[api-gateway][pouch-webhook] unhandled event type', { eventName });
+          sendJson(res, 200, { received: true, processed: false, reason: `Unhandled event: ${eventName}` });
+          return;
+      }
+    } catch (handlerError) {
+      // The event wasn't processed — clear the dedup marker so the provider's
+      // retry isn't dropped as a duplicate of an attempt that failed.
+      if (dedupKey && deps.redisClient) {
+        await deps.redisClient.del(dedupKey).catch(() => {});
+      }
+      throw handlerError;
     }
 
     sendJson(res, 200, { received: true, processed: true });
@@ -281,19 +291,28 @@ async function handlePayoutFailed(
   data: Record<string, unknown>,
   publisher: GatewayPublisher,
 ): Promise<void> {
+  // Same alias list as payout.success — the failure payload must never be
+  // dropped just because Pouch named the reference differently on it.
   const providerReference = pickString(data, [
     'reference',
     'providerReference',
+    'transactionReference',
+    'transaction_reference',
+    'payoutReference',
+    'payout_reference',
     'data.reference',
   ]);
   const pouchPayoutId = pickString(data, [
     'payoutId',
     'pouchPayoutId',
+    'payout_id',
+    'id',
     'data.payoutId',
   ]);
   const failureReason = pickString(data, [
     'reason',
     'failureReason',
+    'failure_reason',
     'data.reason',
     'message',
   ]) ?? 'Payout failed';
@@ -305,10 +324,12 @@ async function handlePayoutFailed(
 
   const withdrawal = await withdrawalClient.findByProviderReference(providerReference);
   if (!withdrawal) {
-    console.warn('[api-gateway][pouch-webhook] withdrawal not found for payout.failed', {
-      providerReference,
-    });
-    return;
+    // Likely the race where this webhook beat attachPayout's write of
+    // providerReference. Fail the request so the provider retries — with the
+    // dedup marker cleared upstream, the retry will find the row and refund.
+    throw new Error(
+      `payout.failed: no withdrawal found for reference ${providerReference} (possible attachPayout race — provider should retry)`,
+    );
   }
 
   await withdrawalClient.releaseFailedRequest({

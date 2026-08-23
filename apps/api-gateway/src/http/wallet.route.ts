@@ -12,6 +12,7 @@ import { isRecord, pickNumber, pickString } from "../utils/object";
 import type { GatewayPublisher } from "../websocket/publisher";
 import {
   PouchLiquifiaClient,
+  classifyPouchPayoutStatus,
   type PouchBankAccount,
   type PouchPayout,
 } from "@wheleers/pouch-client";
@@ -356,21 +357,17 @@ async function syncPayoutStatus(
   providerReference: string,
 ): Promise<PouchPayout> {
   const payout = await deps.pouchLiquifiaClient.getPayout(pouchPayoutId);
-  const status = (payout.status ?? "").toUpperCase();
+  const outcome = classifyPouchPayoutStatus(payout.status);
 
-  if (status === "SUCCESSFUL" || status === "COMPLETED") {
+  if (outcome === "settled") {
     await withdrawalClient.settle(providerReference);
-  } else if (
-    status === "FAILED" ||
-    status === "REVERSED" ||
-    status === "CANCELLED"
-  ) {
+  } else if (outcome === "failed") {
     await withdrawalClient.releaseFailedRequest({
       providerReference,
-      failureReason: `Payout ${status.toLowerCase()}`,
+      failureReason: `Payout ${(payout.status ?? "failed").toLowerCase()}`,
       status: "FAILED",
     });
-  } else if (status === "PROCESSING" || status === "PENDING") {
+  } else {
     await withdrawalClient.markProcessing(providerReference);
   }
 
@@ -558,8 +555,9 @@ export async function handleCreateWalletWithdrawalRoute(
     // Look up user's virtual account for the payout source
     const virtualAccount = await virtualAccountClient.findByUserId(user.id);
     if (!virtualAccount) {
-      sendJson(res, 400, {
-        error: "No virtual account found. Please set up deposits first.",
+      sendJson(res, 404, {
+        error: "Account not found. Please set up deposits first.",
+        code: "VIRTUAL_ACCOUNT_NOT_FOUND",
       });
       return;
     }
@@ -591,6 +589,15 @@ export async function handleCreateWalletWithdrawalRoute(
           destinationBankUuid: bankUuid,
           idempotencyKey: reserveResult.request.id,
         });
+
+        // Pouch reports rejections inside an HTTP 200 — a payout with
+        // status FAILED/REJECTED must not be recorded as created, or the
+        // rider is told "submitted" while their money sits locked forever.
+        if (classifyPouchPayoutStatus(payout.status) === "failed") {
+          throw new Error(
+            `The bank transfer was rejected by the payment provider (${payout.status}). Your balance has not been deducted — please check the account details and try again.`,
+          );
+        }
 
         // Attach the payout to the withdrawal request
         await withdrawalClient.attachPayout({
@@ -675,6 +682,7 @@ export async function handleCreateWalletWithdrawalRoute(
         error instanceof Error
           ? error.message
           : "Could not create wallet withdrawal.",
+      code: "WITHDRAWAL_FAILED",
     });
   }
 }
@@ -835,6 +843,17 @@ export async function handleVerifyWithdrawalBankAccountRoute(
       bankUuid,
     });
 
+    // Pouch answers an unknown account with an empty body rather than an
+    // error. A missing account_name means the account could not be resolved —
+    // report that plainly instead of letting clients invent a placeholder name.
+    if (typeof verified.account_name !== "string" || !verified.account_name.trim()) {
+      sendJson(res, 404, {
+        error: "Account not found. Check the account number and bank.",
+        code: "BANK_ACCOUNT_NOT_FOUND",
+      });
+      return;
+    }
+
     sendJson(res, 200, {
       bankAccount: {
         accountNumber:
@@ -872,7 +891,8 @@ export async function handleWalletDepositInfoRoute(
 
     if (!virtualAccount) {
       sendJson(res, 404, {
-        error: "No virtual account found. Please complete onboarding first.",
+        error: "Account not found. Please complete onboarding first.",
+        code: "VIRTUAL_ACCOUNT_NOT_FOUND",
       });
       return;
     }

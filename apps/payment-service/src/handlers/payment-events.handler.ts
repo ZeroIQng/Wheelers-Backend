@@ -1,4 +1,5 @@
 import { withdrawalClient } from '@wheleers/db';
+import { classifyPouchPayoutStatus } from '@wheleers/pouch-client';
 import type { PouchLiquifiaClient } from '@wheleers/pouch-client';
 import type {
   VirtualAccountCreditedEvent,
@@ -51,30 +52,30 @@ export function createPaymentEventsHandler(deps: PaymentEventsHandlerDeps) {
 
       try {
         const payout = await pouchClient.getPayout(event.pouchPayoutId);
-        const status = (payout.status ?? '').toUpperCase();
+        const outcome = classifyPouchPayoutStatus(payout.status);
 
         console.log(
-          `${TAG} payout ${event.pouchPayoutId} provider status: ${status}`,
+          `${TAG} payout ${event.pouchPayoutId} provider status: ${payout.status} (${outcome})`,
         );
 
         // Sync local state with Pouch's current status
-        if (status === 'PROCESSING' || status === 'PENDING') {
-          await withdrawalClient.markProcessing(payout.reference);
-        } else if (status === 'SUCCESSFUL' || status === 'COMPLETED') {
+        if (outcome === 'settled') {
           // Race condition: payout settled before event processed
           await withdrawalClient.settle(payout.reference);
           console.warn(
             `${TAG} payout ${event.pouchPayoutId} already settled — synced`,
           );
-        } else if (status === 'FAILED' || status === 'REVERSED' || status === 'CANCELLED') {
+        } else if (outcome === 'failed') {
           await withdrawalClient.releaseFailedRequest({
             providerReference: payout.reference,
-            failureReason: `Payout ${status.toLowerCase()} (detected at creation)`,
+            failureReason: `Payout ${(payout.status ?? 'failed').toLowerCase()} (detected at creation)`,
             status: 'FAILED',
           });
           console.warn(
-            `${TAG} payout ${event.pouchPayoutId} already ${status.toLowerCase()} — released`,
+            `${TAG} payout ${event.pouchPayoutId} ${(payout.status ?? '').toLowerCase()} — released`,
           );
+        } else {
+          await withdrawalClient.markProcessing(payout.reference);
         }
       } catch (error) {
         // Non-critical — webhook will handle final state

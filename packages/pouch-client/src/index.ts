@@ -1,6 +1,8 @@
 export { PouchLiquifiaClient } from './client';
 export {
   PouchApiError,
+  classifyPouchPayoutStatus,
+  type PouchPayoutOutcome,
   type PouchClientConfig,
   type PouchCustomer,
   type PouchVirtualAccount,

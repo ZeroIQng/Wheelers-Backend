@@ -10,6 +10,7 @@ import { PouchLiquifiaClient } from '@wheleers/pouch-client';
 import { createPaymentEventsConsumer } from './consumers/payment-events.consumer';
 import { applyPaymentServiceDefaults, getPaymentServiceId } from './config/runtime';
 import { createPaymentEventsHandler } from './handlers/payment-events.handler';
+import { startPayoutReconciliation } from './handlers/payout-reconciliation';
 import { createPaymentEventsProducer } from './producers/payment-events.producer';
 
 export async function startPaymentService(): Promise<void> {
@@ -57,6 +58,11 @@ export async function startPaymentService(): Promise<void> {
       }
     },
   );
+
+  const stopReconciliation = startPayoutReconciliation(pouchClient);
+  onShutdown(async () => {
+    stopReconciliation();
+  });
 
   console.log(`[${serviceId}] consuming`);
 }

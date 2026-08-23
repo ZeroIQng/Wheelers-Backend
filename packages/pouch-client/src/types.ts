@@ -106,3 +106,31 @@ export class PouchApiError extends Error {
     this.code = code;
   }
 }
+
+/**
+ * Pouch reports payout state as a free-form string, and a payout it has
+ * already rejected still comes back as an HTTP 200 — callers that only check
+ * for a thrown error treat those rejections as successes. Every caller that
+ * receives a PouchPayout must classify its status through this function.
+ */
+export type PouchPayoutOutcome = 'settled' | 'failed' | 'pending';
+
+const SETTLED_PAYOUT_STATUSES = new Set(['SUCCESSFUL', 'SUCCESS', 'COMPLETED', 'SETTLED']);
+const FAILED_PAYOUT_STATUSES = new Set([
+  'FAILED',
+  'FAILURE',
+  'REVERSED',
+  'CANCELLED',
+  'CANCELED',
+  'REJECTED',
+  'DECLINED',
+  'RETURNED',
+  'EXPIRED',
+]);
+
+export function classifyPouchPayoutStatus(status: string | null | undefined): PouchPayoutOutcome {
+  const normalized = (status ?? '').trim().toUpperCase();
+  if (SETTLED_PAYOUT_STATUSES.has(normalized)) return 'settled';
+  if (FAILED_PAYOUT_STATUSES.has(normalized)) return 'failed';
+  return 'pending';
+}
