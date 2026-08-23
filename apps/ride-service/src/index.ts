@@ -64,10 +64,20 @@ export type CounterOfferDriverInfo = {
  * then, so a re-send without it showed a shared multi-pickup trip as a plain
  * solo ride.
  */
+export type GroupRideMemberSeatInfo = {
+  rideId: string;
+  riderId: string;
+  pickup: { lat: number; lng: number; address: string };
+  dropoff: { lat: number; lng: number; address: string };
+  offerNgn: number;
+};
+
 export type PendingRideGroupInfo = {
   groupId: string;
   riderCount: number;
   stopKinds: Array<'pickup' | 'dropoff'>;
+  /** Per-seat legs and offers — drivers bid with each rider individually. */
+  members?: GroupRideMemberSeatInfo[];
   /** Every member, so driver assignment can notify the whole group. */
   rideIds: string[];
   riderIds: string[];

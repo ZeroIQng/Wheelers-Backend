@@ -87,14 +87,20 @@ async function resolveSuggestedFareNgn(rideId: string): Promise<number | null> {
 
   const groupRequest = await groupRideClient.findMatchRequestById(rideId).catch(() => null);
   if (groupRequest) {
-    // Price the group leg off its planned distance where we have it, so the
-    // floor applies to group bids the same way it does to solo ones.
+    // fareEstimateNgn on a match request is the rider's OWN seat offer — the
+    // price actually being negotiated. Validating a seat bid against the solo
+    // fare for the same leg rejected every legitimately-cheap seat (a seat is
+    // deliberately cheaper than riding alone).
+    const seatOfferNgn =
+      groupRequest.fareEstimateNgn !== null && groupRequest.fareEstimateNgn !== undefined
+        ? Number(groupRequest.fareEstimateNgn)
+        : 0;
+    if (seatOfferNgn > 0) return seatOfferNgn;
+
     if (groupRequest.plannedDistanceKm) {
       return calculateSuggestedFare(groupRequest.plannedDistanceKm).suggestedFareNgn;
     }
-    return groupRequest.fareEstimateNgn !== null && groupRequest.fareEstimateNgn !== undefined
-      ? Number(groupRequest.fareEstimateNgn)
-      : 0;
+    return 0;
   }
 
   return null;

@@ -109,6 +109,15 @@ export const RideOfferSentEvent = BaseRideEvent.extend({
   // which are drop-offs, so a shared route reads as a plan rather than a
   // list of anonymous coordinates.
   stopKinds:             z.array(z.enum(['pickup', 'dropoff'])).max(5).optional(),
+  // Group rides: each member's own leg and seat offer, so the driver can
+  // accept or bid per rider instead of on a lump sum.
+  groupMembers: z.array(z.object({
+    rideId: z.string().uuid(),
+    riderId: z.string().uuid(),
+    pickup: LatLng,
+    dropoff: LatLng,
+    offerNgn: z.number().nonnegative(),
+  })).max(5).optional(),
 });
 
 // Fired by api-gateway when driver sends a counter-offer via WebSocket.

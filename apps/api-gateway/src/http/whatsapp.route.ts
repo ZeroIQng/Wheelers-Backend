@@ -72,6 +72,10 @@ import {
   storePendingGeoChoices,
   getPendingGeoChoices,
   clearPendingGeoChoices,
+  getGroupSeat,
+  recordAcceptedSeat,
+  clearAcceptedSeats,
+  getGroupSeatMembers,
   storePendingAccept,
   getPendingAccept,
   clearPendingAccept,
@@ -924,11 +928,15 @@ async function presentGroupQuote(
     return;
   }
 
+  // Every seat has its own price, set by its own rider. Suggested is 25%
+  // off the solo fare — sharing should always beat riding alone.
+  const suggestedSeatNgn = Math.round((plannedRoute.suggestedFareNgn * 0.75) / 50) * 50;
+
   await storePendingGroupRide(deps.redisClient, user.id, {
     ...pending,
     plannedDistanceKm: plannedRoute.distanceKm,
     plannedDurationSeconds: plannedRoute.durationSeconds,
-    fareEstimateNgn: plannedRoute.suggestedFareNgn,
+    fareEstimateNgn: suggestedSeatNgn,
   });
   await setBookingStage(deps.redisClient, user.id, 'group_awaiting_confirm');
 
@@ -940,10 +948,10 @@ async function presentGroupQuote(
     `Destination: *${destination.address}*`,
     `${plannedRoute.distanceKm.toFixed(1)} km · ~${durationMin} min`,
     ``,
-    `Solo fare estimate: ₦${plannedRoute.suggestedFareNgn.toLocaleString()}`,
-    `You'll *split the fare* with riders matched along your route — paid from your Naira wallet.`,
+    `Solo fare: ₦${plannedRoute.suggestedFareNgn.toLocaleString()}`,
+    `💺 *Your seat, your price.* Suggested: *₦${suggestedSeatNgn.toLocaleString()}* (25% off solo).`,
     ``,
-    `Reply *yes* to continue, or *cancel* to stop.`,
+    `Reply *yes* to offer ₦${suggestedSeatNgn.toLocaleString()}, send *your own price*, or *cancel*.`,
   ].join('\n'));
 }
 
@@ -1046,10 +1054,25 @@ async function handleGroupStageText(
   if (stage === 'group_awaiting_confirm') {
     if (/^(yes|yeah|yea|yep|ok|okay|confirm|y)\b/i.test(incomingMessage.trim())) {
       await createGroupMatchRequest(deps, user, phone, incomingMessage);
-    } else {
-      await replyAndLog(deps, phone, incomingMessage,
-        'Reply *yes* to continue with the group ride, or *cancel* to stop.');
+      return;
     }
+
+    // A number here is the rider naming their own seat price.
+    const offered = parseCounterOffer(incomingMessage);
+    if (offered !== null && offered >= 500) {
+      const pending = await getPendingGroupRide(deps.redisClient, user.id);
+      if (pending) {
+        await storePendingGroupRide(deps.redisClient, user.id, {
+          ...pending,
+          fareEstimateNgn: offered,
+        });
+      }
+      await createGroupMatchRequest(deps, user, phone, incomingMessage);
+      return;
+    }
+
+    await replyAndLog(deps, phone, incomingMessage,
+      'Reply *yes* to use the suggested seat price, send *your own price* (e.g. *4200*), or *cancel*.');
     return;
   }
 
@@ -2165,6 +2188,62 @@ export async function handleMetaWhatsappWebhookRoute(
           totalRides = driver.totalRides ?? 0;
         } catch {
           // Non-critical
+        }
+
+        // ── Group seat: this accept books ONE seat, not the whole car ──
+        const seatInfo = await getGroupSeat(deps.redisClient, activeRideId);
+        if (seatInfo) {
+          const seats = await recordAcceptedSeat(deps.redisClient, seatInfo.anchorRideId, {
+            memberRideId: activeRideId,
+            riderId: user.id,
+            driverId: selectedBid.driverId,
+            driverUserId: selectedBid.driverUserId,
+            driverName: selectedBid.driverName,
+            amountNgn: selectedBid.counterOfferNgn,
+            etaSeconds: selectedBid.etaSeconds,
+          });
+
+          const sameDriverSeats = seats.filter((s) => s.driverId === selectedBid.driverId);
+          const allAgreed = sameDriverSeats.length >= seatInfo.memberCount;
+          const members = await getGroupSeatMembers(deps.redisClient, seatInfo.anchorRideId);
+
+          if (allAgreed) {
+            const totalNgn = sameDriverSeats.reduce((sum, s) => sum + s.amountNgn, 0);
+            await deps.publisher.publishRideEvent(RideOfferAcceptedEvent.parse({
+              eventType: 'RIDE_OFFER_ACCEPTED',
+              rideId: seatInfo.anchorRideId,
+              riderId: user.id,
+              driverId: selectedBid.driverId,
+              driverUserId: selectedBid.driverUserId,
+              agreedFareNgn: totalNgn,
+              paymentMethod: 'WALLET',
+              timestamp: new Date().toISOString(),
+            }));
+            await clearAcceptedSeats(deps.redisClient, seatInfo.anchorRideId);
+
+            // Every member's active ride moves onto the trip itself so trip
+            // updates (started, GPS, completed) reach them all.
+            for (const member of members) {
+              await setActiveRide(deps.redisClient, member.riderId, seatInfo.anchorRideId).catch(() => {});
+            }
+
+            await replyAndLog(deps, phone, incomingMessage,
+              `✅ Seat booked with *${selectedBid.driverName}* at ₦${selectedBid.counterOfferNgn.toLocaleString()}.\n\nThat was the last seat — your group is confirmed! 🚗 Driver details coming right up.`);
+            return;
+          }
+
+          const remaining = seatInfo.memberCount - sameDriverSeats.length;
+          await replyAndLog(deps, phone, incomingMessage,
+            `✅ Seat booked with *${selectedBid.driverName}* at ₦${selectedBid.counterOfferNgn.toLocaleString()}.\n\n${sameDriverSeats.length}/${seatInfo.memberCount} seats booked with ${selectedBid.driverName} — waiting for ${remaining} co-rider${remaining === 1 ? '' : 's'}.`);
+
+          // Nudge members who haven't booked with THIS driver yet.
+          const bookedRiderIds = new Set(sameDriverSeats.map((s) => s.riderId));
+          for (const member of members) {
+            if (bookedRiderIds.has(member.riderId) || !member.phone) continue;
+            await sendMetaReply(deps, member.phone,
+              `👥 A co-rider booked their seat with *${selectedBid.driverName}*. If ${selectedBid.driverName} has an offer in your list, reply its number to complete the group — the car moves when every seat is booked with the same driver.`).catch(() => {});
+          }
+          return;
         }
 
         // Store pending accept — rider must pay before seeing full details

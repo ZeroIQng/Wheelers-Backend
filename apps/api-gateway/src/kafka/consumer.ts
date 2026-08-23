@@ -30,6 +30,8 @@ import {
   getGroupRequestRider,
   storeWhatsappRide,
   setActiveRide,
+  storeGroupSeat,
+  storeGroupSeatMembers,
 } from '../whatsapp-flows/bid-state';
 import type { WhatsappBid } from '../whatsapp-flows/bid-state';
 import {
@@ -212,6 +214,7 @@ async function handleRideEvent(
       isGroupRide: event.isGroupRide ?? false,
       riderCount: event.riderCount ?? 1,
       stopKinds: event.stopKinds ?? [],
+      groupMembers: event.groupMembers ?? [],
     });
     return;
   }
@@ -832,37 +835,50 @@ async function handleGroupRideEvent(
   const registry = deps.registry;
 
   if (event.eventType === 'GROUP_RIDE_DRIVER_DISPATCH_REQUESTED') {
-    // Drivers are about to bid on this group. Bids land on the ANCHOR rider,
-    // who negotiates for the group — so a WhatsApp anchor needs the same bid
-    // state a solo booking gets, or the bids would go to a socket they don't
-    // have and nobody could ever pick a driver.
-    const anchorRiderId = event.riderIds[0];
-    if (!anchorRiderId) return;
+    // Per-seat bidding: every member negotiates their own seat with the
+    // driver. Each WhatsApp member gets their own bid state keyed by THEIR
+    // match-request id, so driver seat-bids arrive on their own phone and
+    // their replies answer only for themselves.
+    const members = event.members ?? [];
+    if (members.length === 0) return;
 
-    const isWhatsappGroupRider = await getGroupRequestRider(deps.redisClient, anchorRiderId).catch(() => null);
-    if (!isWhatsappGroupRider) return;
+    const seatMembers: Array<{ memberRideId: string; riderId: string; phone: string | null; offerNgn: number }> = [];
 
-    const phone = await resolveGroupRiderPhone(deps, anchorRiderId);
-    if (!phone) return;
+    for (const member of members) {
+      const isWhatsappGroupRider = await getGroupRequestRider(deps.redisClient, member.riderId).catch(() => null);
+      const phone = isWhatsappGroupRider ? await resolveGroupRiderPhone(deps, member.riderId) : null;
+      seatMembers.push({
+        memberRideId: member.rideId,
+        riderId: member.riderId,
+        phone,
+        offerNgn: member.offerNgn,
+      });
 
-    const stops = event.stops ?? [];
-    const lastDropoff = [...stops].reverse().find((stop) => stop.kind === 'dropoff');
+      if (!phone) continue;
 
-    await storeWhatsappRide(deps.redisClient, event.anchorRideId, {
-      riderId: anchorRiderId,
-      phone,
-      pickupAddress: event.firstPickup.address,
-      destinationAddress: lastDropoff?.address ?? 'Shared route',
-      offerNgn: event.fareEstimateNgn,
-      suggestedFareNgn: event.fareEstimateNgn,
-      paymentMethod: 'WALLET',
-      createdAt: new Date().toISOString(),
-    });
-    await setActiveRide(deps.redisClient, anchorRiderId, event.anchorRideId);
+      await storeWhatsappRide(deps.redisClient, member.rideId, {
+        riderId: member.riderId,
+        phone,
+        pickupAddress: member.pickup.address,
+        destinationAddress: member.dropoff.address,
+        offerNgn: member.offerNgn,
+        suggestedFareNgn: member.offerNgn,
+        paymentMethod: 'WALLET',
+        createdAt: new Date().toISOString(),
+      });
+      await setActiveRide(deps.redisClient, member.riderId, member.rideId);
+      await storeGroupSeat(deps.redisClient, member.rideId, {
+        anchorRideId: event.anchorRideId,
+        groupId: event.groupId,
+        memberCount: members.length,
+      });
 
-    if (deps.whatsappNotifier) {
-      await sendGroupRideDispatchNotification(deps.whatsappNotifier, phone).catch(() => {});
+      if (deps.whatsappNotifier) {
+        await sendGroupRideDispatchNotification(deps.whatsappNotifier, phone, member.offerNgn).catch(() => {});
+      }
     }
+
+    await storeGroupSeatMembers(deps.redisClient, event.anchorRideId, seatMembers);
     return;
   }
 

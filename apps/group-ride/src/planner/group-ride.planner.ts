@@ -158,6 +158,27 @@ export function createGroupRidePlanner(params: {
         // Trigger driver dispatch — first pickup stop becomes the driver's target
         const firstPickup = event.stops.find((s) => s.kind === 'pickup');
         if (firstPickup) {
+          // Per-seat economics: each member set their own offer when they
+          // booked; the driver bids with each rider individually and the
+          // headline total is simply the sum of the seats.
+          const members = event.rideIds
+            .map((rideId) => {
+              const request = params.state.pendingRequestsByRideId.get(rideId);
+              if (!request) return null;
+              return {
+                rideId: request.rideId,
+                riderId: request.riderId,
+                pickup: request.pickup,
+                dropoff: request.destination,
+                offerNgn: request.fareEstimateNgn > 0
+                  ? request.fareEstimateNgn
+                  : calculateSuggestedFare(event.totalDistanceKm / event.rideIds.length).suggestedFareNgn,
+              };
+            })
+            .filter((m): m is NonNullable<typeof m> => m !== null);
+
+          const seatTotalNgn = members.reduce((sum, m) => sum + m.offerNgn, 0);
+
           await params.groupRideEventsProducer.publish({
             eventType: 'GROUP_RIDE_DRIVER_DISPATCH_REQUESTED',
             groupId: event.groupId,
@@ -168,10 +189,10 @@ export function createGroupRidePlanner(params: {
             stops: event.stops,
             totalDistanceKm: event.totalDistanceKm,
             totalDurationSeconds: event.totalDurationSeconds,
-            // Was `totalDistanceKm * 100` — a third of the real ₦300/km rate,
-            // with no minimum fare. Group rides now price through the same
-            // function as every other ride, so the floor applies here too.
-            fareEstimateNgn: calculateSuggestedFare(event.totalDistanceKm).suggestedFareNgn,
+            fareEstimateNgn: seatTotalNgn > 0
+              ? seatTotalNgn
+              : calculateSuggestedFare(event.totalDistanceKm).suggestedFareNgn,
+            members: members.length >= 2 ? members : undefined,
             route: event.route,
             timestamp: new Date().toISOString(),
           });

@@ -17,7 +17,7 @@ import {
 } from '@wheleers/kafka-schemas';
 import { randomUUID } from 'node:crypto';
 
-import type { OnlineDriver } from '../index';
+import type { GroupRideMemberSeatInfo, OnlineDriver } from '../index';
 import { estimateEtaSeconds, haversineKm } from '../utils/geo';
 
 /** Driver→pickup distance/ETA for an offer, from match data or coordinates. */
@@ -46,7 +46,7 @@ export type RideEventsProducer = {
     rideRequested: RideRequestedEvent;
     expiresAt: Date;
     /** Set for group rides so the driver app can badge the offer. */
-    group?: { riderCount: number; stopKinds?: Array<'pickup' | 'dropoff'> };
+    group?: { riderCount: number; stopKinds?: Array<'pickup' | 'dropoff'>; members?: GroupRideMemberSeatInfo[] };
   }): Promise<void>;
   sendUpdatedOfferToDriver(params: {
     driver: OnlineDriver;
@@ -54,7 +54,7 @@ export type RideEventsProducer = {
     updatedOfferNgn: number;
     expiresAt: Date;
     /** Same badge as the original offer — a re-price does not change the job. */
-    group?: { riderCount: number; stopKinds?: Array<'pickup' | 'dropoff'> };
+    group?: { riderCount: number; stopKinds?: Array<'pickup' | 'dropoff'>; members?: GroupRideMemberSeatInfo[] };
   }): Promise<void>;
   gpsStaleWarning(event: GpsStaleWarningEvent): Promise<void>;
 };
@@ -138,6 +138,7 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
                 isGroupRide: true,
                 riderCount: group.riderCount,
                 ...(group.stopKinds ? { stopKinds: group.stopKinds } : {}),
+                ...(group.members ? { groupMembers: group.members } : {}),
               }
             : {}),
         };
@@ -224,6 +225,7 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
               isGroupRide: true,
               riderCount: group.riderCount,
               ...(group.stopKinds ? { stopKinds: group.stopKinds } : {}),
+              ...(group.members ? { groupMembers: group.members } : {}),
             }
           : {}),
       };

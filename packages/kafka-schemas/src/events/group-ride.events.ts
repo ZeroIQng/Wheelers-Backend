@@ -113,6 +113,16 @@ export const GroupRideRouteBuiltEvent = BaseGroupRideEvent.extend({
   routeAlgorithm: z.enum(['google_routes_segments']),
 });
 
+// One seat in a shared ride: the member's own leg and their own offer.
+// Drivers negotiate per seat, not on a lump sum.
+export const GroupRideMemberSeat = z.object({
+  rideId: z.string().uuid(),
+  riderId: z.string().uuid(),
+  pickup: LatLng,
+  dropoff: LatLng,
+  offerNgn: z.number().nonnegative(),
+});
+
 // Emitted by group-ride after the route is built — triggers driver dispatch in ride-service.
 export const GroupRideDriverDispatchRequestedEvent = BaseGroupRideEvent.extend({
   eventType: z.literal('GROUP_RIDE_DRIVER_DISPATCH_REQUESTED'),
@@ -127,6 +137,8 @@ export const GroupRideDriverDispatchRequestedEvent = BaseGroupRideEvent.extend({
   totalDistanceKm: z.number().nonnegative(),
   totalDurationSeconds: z.number().int().nonnegative(),
   fareEstimateNgn: z.number().nonnegative(),
+  // Per-seat legs and offers — the driver bids with each rider individually.
+  members: z.array(GroupRideMemberSeat).max(5).optional(),
   route: RouteGeometry,
 });
 

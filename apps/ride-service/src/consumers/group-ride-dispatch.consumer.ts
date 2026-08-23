@@ -152,6 +152,7 @@ export function createGroupRideDispatchConsumer(params: {
       stopKinds: middles.slice(0, 5).map((s) => s.kind),
       rideIds: [...event.rideIds],
       riderIds: [...event.riderIds],
+      members: event.members,
     };
 
     const result = await matchDriver({

@@ -687,3 +687,115 @@ export async function clearPendingGeoChoices(
 ): Promise<void> {
   await redis.del(geoChoicesKey(userId));
 }
+
+// ── Group seat bidding (per-rider negotiation on shared rides) ────────────
+
+export interface GroupSeatInfo {
+  /** The group's anchor ride id — the id drivers and assignment run on. */
+  anchorRideId: string;
+  groupId: string;
+  memberCount: number;
+}
+
+function groupSeatKey(memberRideId: string): string {
+  return `whatsapp:group_seat:${memberRideId}`;
+}
+
+export async function storeGroupSeat(
+  redis: RedisClient,
+  memberRideId: string,
+  info: GroupSeatInfo,
+): Promise<void> {
+  await redis.set(groupSeatKey(memberRideId), JSON.stringify(info), 1800);
+}
+
+export async function getGroupSeat(
+  redis: RedisClient,
+  memberRideId: string,
+): Promise<GroupSeatInfo | null> {
+  const raw = await redis.get(groupSeatKey(memberRideId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as GroupSeatInfo;
+  } catch {
+    return null;
+  }
+}
+
+export interface AcceptedSeat {
+  memberRideId: string;
+  riderId: string;
+  driverId: string;
+  driverUserId: string;
+  driverName: string;
+  amountNgn: number;
+  etaSeconds: number;
+}
+
+function acceptedSeatsKey(anchorRideId: string): string {
+  return `whatsapp:group:${anchorRideId}:accepted_seats`;
+}
+
+/** Record one member's seat acceptance; returns all seats accepted so far. */
+export async function recordAcceptedSeat(
+  redis: RedisClient,
+  anchorRideId: string,
+  seat: AcceptedSeat,
+): Promise<AcceptedSeat[]> {
+  const raw = await redis.get(acceptedSeatsKey(anchorRideId));
+  let seats: AcceptedSeat[] = [];
+  if (raw) {
+    try {
+      seats = JSON.parse(raw) as AcceptedSeat[];
+    } catch {
+      seats = [];
+    }
+  }
+  const existing = seats.findIndex((s) => s.memberRideId === seat.memberRideId);
+  if (existing >= 0) {
+    seats[existing] = seat;
+  } else {
+    seats.push(seat);
+  }
+  await redis.set(acceptedSeatsKey(anchorRideId), JSON.stringify(seats), 1800);
+  return seats;
+}
+
+export async function clearAcceptedSeats(
+  redis: RedisClient,
+  anchorRideId: string,
+): Promise<void> {
+  await redis.del(acceptedSeatsKey(anchorRideId));
+}
+
+export interface GroupSeatMember {
+  memberRideId: string;
+  riderId: string;
+  phone: string | null;
+  offerNgn: number;
+}
+
+function groupMembersKey(anchorRideId: string): string {
+  return `whatsapp:group:${anchorRideId}:members`;
+}
+
+export async function storeGroupSeatMembers(
+  redis: RedisClient,
+  anchorRideId: string,
+  members: GroupSeatMember[],
+): Promise<void> {
+  await redis.set(groupMembersKey(anchorRideId), JSON.stringify(members), 1800);
+}
+
+export async function getGroupSeatMembers(
+  redis: RedisClient,
+  anchorRideId: string,
+): Promise<GroupSeatMember[]> {
+  const raw = await redis.get(groupMembersKey(anchorRideId));
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as GroupSeatMember[];
+  } catch {
+    return [];
+  }
+}
