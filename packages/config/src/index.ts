@@ -19,7 +19,7 @@ export type { WhatsappEnv }     from './env/whatsapp.env';
 
 // Constants
 export { FEES }                        from './constants/fees';
-export { MIN_WITHDRAWAL_NGN }          from './constants/withdrawal';
+export { MIN_WITHDRAWAL_NGN, POUCH_PAYOUT_FEE_NGN } from './constants/withdrawal';
 export { GPS }                         from './constants/gps';
 export { RIDE }                        from './constants/ride';
 export {

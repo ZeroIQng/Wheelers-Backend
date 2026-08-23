@@ -19,7 +19,7 @@ import {
 } from "@wheleers/pouch-client";
 import type { RedisClient } from "../redis/client";
 import type { PayoutCreatedEvent } from "@wheleers/kafka-schemas";
-import { MIN_WITHDRAWAL_NGN } from "@wheleers/config";
+import { MIN_WITHDRAWAL_NGN, POUCH_PAYOUT_FEE_NGN } from "@wheleers/config";
 
 // ─── Deps ──────────────────────────────────────────────────────────
 
@@ -563,6 +563,32 @@ export async function handleCreateWalletWithdrawalRoute(
       sendJson(res, 404, {
         error: "Account not found. Please set up deposits first.",
         code: "VIRTUAL_ACCOUNT_NOT_FOUND",
+      });
+      return;
+    }
+
+    // The cash leaves the Pouch virtual account, plus a flat payout fee —
+    // check the vault BEFORE reserving ledger funds so a shortfall fails
+    // fast with an honest message instead of an opaque provider rejection.
+    const vaBalance = await deps.pouchLiquifiaClient
+      .getVirtualAccountBalance(virtualAccount.pouchVirtualAccountId)
+      .catch(() => null);
+    const vaBalanceNgn = vaBalance ? Number(vaBalance.balance ?? 0) / 100 : null;
+    if (vaBalanceNgn !== null && vaBalanceNgn < requestedAmountNgn + POUCH_PAYOUT_FEE_NGN) {
+      console.error("[api-gateway][wallet-withdrawal] LIQUIDITY MISMATCH — ledger balance not backed by virtual account", {
+        userId: user.id,
+        requestedAmountNgn,
+        vaBalanceNgn,
+        feeNgn: POUCH_PAYOUT_FEE_NGN,
+      });
+      const withdrawableNgn = Math.floor(vaBalanceNgn - POUCH_PAYOUT_FEE_NGN);
+      sendJson(res, 400, {
+        error:
+          withdrawableNgn >= MIN_WITHDRAWAL_NGN
+            ? `You can withdraw up to NGN ${withdrawableNgn.toLocaleString("en-NG")} right now (a NGN ${POUCH_PAYOUT_FEE_NGN} transfer fee applies). Your wallet balance is untouched.`
+            : "Withdrawals are temporarily unavailable for your account. Your wallet balance is untouched — please try again later.",
+        code: "PAYOUT_ACCOUNT_SHORT",
+        withdrawableNgn: Math.max(0, withdrawableNgn),
       });
       return;
     }

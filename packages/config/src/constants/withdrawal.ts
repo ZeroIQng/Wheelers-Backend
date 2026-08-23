@@ -27,3 +27,10 @@ function readMinWithdrawalNgn(): number {
 }
 
 export const MIN_WITHDRAWAL_NGN = readMinWithdrawalNgn();
+
+/**
+ * Flat fee Pouch charges per payout, taken from the virtual account on top
+ * of the transfer amount. Confirmed empirically: a payout of N requires
+ * N + 20 available ("Required: 715020" for a 715000 request).
+ */
+export const POUCH_PAYOUT_FEE_NGN = Number(process.env.POUCH_PAYOUT_FEE_NGN ?? 20);

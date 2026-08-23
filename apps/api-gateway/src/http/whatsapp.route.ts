@@ -12,6 +12,7 @@ import {
   calculateRideFees,
   validateRiderOffer,
   MIN_WITHDRAWAL_NGN,
+  POUCH_PAYOUT_FEE_NGN,
 } from '@wheleers/config';
 import {
   RideRequestedEvent,
@@ -734,6 +735,29 @@ async function submitWhatsappWithdrawal(params: {
     const virtualAccount = await virtualAccountClient.findByUserId(userId);
     if (!virtualAccount) {
       throw new Error('No deposit account found. Please complete wallet setup first.');
+    }
+
+    // The ledger says the rider has this money, but the cash actually leaves
+    // their Pouch virtual account — plus a flat payout fee. Check the vault
+    // BEFORE freezing the ledger, and say something honest when they differ
+    // instead of an opaque provider rejection.
+    const vaBalance = await deps.pouchLiquifiaClient
+      .getVirtualAccountBalance(virtualAccount.pouchVirtualAccountId)
+      .catch(() => null);
+    const vaBalanceNgn = vaBalance ? Number(vaBalance.balance ?? 0) / 100 : null;
+    if (vaBalanceNgn !== null && vaBalanceNgn < amountNgn + POUCH_PAYOUT_FEE_NGN) {
+      console.error('[api-gateway][whatsapp-withdrawal] LIQUIDITY MISMATCH — ledger balance not backed by virtual account', {
+        userId,
+        requestedNgn: amountNgn,
+        vaBalanceNgn,
+        feeNgn: POUCH_PAYOUT_FEE_NGN,
+      });
+      const withdrawableNgn = Math.floor(vaBalanceNgn - POUCH_PAYOUT_FEE_NGN);
+      throw new Error(
+        withdrawableNgn >= MIN_WITHDRAWAL_NGN
+          ? `You can withdraw up to ₦${withdrawableNgn.toLocaleString()} right now (a ₦${POUCH_PAYOUT_FEE_NGN} transfer fee applies). Your wallet balance is safe.`
+          : 'Withdrawals are temporarily unavailable for your account. Your wallet balance is safe — please try again later.',
+      );
     }
 
     const reserveResult = await withdrawalClient.reserve({
@@ -1908,7 +1932,12 @@ export async function handleMetaWhatsappWebhookRoute(
             userId: user.id,
             error: error instanceof Error ? error.message : String(error),
           });
-          await sendWhatsappText(deps, phone, incomingMessage, 'Withdrawal failed. Please try again later.\n\nYour wallet balance was not deducted. Reply *withdraw* to retry.');
+          // Surface our own honest explanations; keep provider internals generic.
+          const friendly =
+            error instanceof Error && /wallet balance is safe/i.test(error.message)
+              ? error.message
+              : 'Withdrawal failed. Please try again later.\n\nYour wallet balance was not deducted.';
+          await sendWhatsappText(deps, phone, incomingMessage, `${friendly}\n\nReply *withdraw* to retry.`);
         }
         return;
       }
