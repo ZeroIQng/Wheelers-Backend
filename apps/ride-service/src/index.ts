@@ -167,9 +167,12 @@ async function bootstrap(): Promise<void> {
         // re-offering it to a late joiner would put two drivers on one trip.
         if (state.assignedDriversByRideId.has(rideId)) continue;
 
-        // Skip if this driver already has been offered or rejected this ride
+        // Skip drivers who rejected this ride or were already assigned one.
+        // Being in `candidates` is deliberately NOT a skip: a driver whose
+        // socket blipped re-announces driver:online on reconnect, and the
+        // offer they missed during the gap must be re-sent — the app replaces
+        // offer cards by rideId, so a re-send is harmless when they saw it.
         if (pending.attemptedDriverIds.has(event.driverId)) continue;
-        if (pending.candidates.some((c) => c.driverId === event.driverId)) continue;
 
         const dist = haversineKm(
           pending.rideRequested.pickup.lat,
@@ -178,8 +181,9 @@ async function bootstrap(): Promise<void> {
           driver.lng,
         );
         if (dist <= radiusKm) {
-          // Add to candidates and send offer
-          pending.candidates.push(driver);
+          if (!pending.candidates.some((c) => c.driverId === event.driverId)) {
+            pending.candidates.push(driver);
+          }
           const expiresAt = new Date(Date.now() + RIDE.OFFER_TTL_SECONDS * 1000);
           await rideEventsProducer.broadcastRideOffer({
             drivers: [driver],
