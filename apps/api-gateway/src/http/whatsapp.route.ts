@@ -109,6 +109,8 @@ export interface MetaWhatsappRouteDeps {
   appBaseUrl?: string;
   driverKycStorage?: DriverKycStorage;
   groupRideFaceStorage?: GroupRideFaceStorage;
+  /** Platform treasury VA — payouts draw from this float when configured. */
+  treasuryVirtualAccountId?: string;
 }
 
 /* ─── Meta Cloud API helpers ─── */
@@ -732,17 +734,21 @@ async function submitWhatsappWithdrawal(params: {
     const wallet = await walletClient.findByUserId(userId);
     if (!wallet) throw new Error('No wallet found. Fund your account first.');
 
-    const virtualAccount = await virtualAccountClient.findByUserId(userId);
-    if (!virtualAccount) {
+    // With a treasury configured, payouts draw from the platform float and
+    // the user needs no personal VA.
+    const virtualAccount = await virtualAccountClient.findByUserId(userId).catch(() => null);
+    const payoutSourceVaId =
+      deps.treasuryVirtualAccountId ?? virtualAccount?.pouchVirtualAccountId;
+    if (!payoutSourceVaId) {
       throw new Error('No deposit account found. Please complete wallet setup first.');
     }
 
     // The ledger says the rider has this money, but the cash actually leaves
-    // their Pouch virtual account — plus a flat payout fee. Check the vault
-    // BEFORE freezing the ledger, and say something honest when they differ
+    // the Pouch account — plus a flat payout fee. Check the vault BEFORE
+    // freezing the ledger, and say something honest when they differ
     // instead of an opaque provider rejection.
     const vaBalance = await deps.pouchLiquifiaClient
-      .getVirtualAccountBalance(virtualAccount.pouchVirtualAccountId)
+      .getVirtualAccountBalance(payoutSourceVaId)
       .catch(() => null);
     const vaBalanceNgn = vaBalance ? Number(vaBalance.balance ?? 0) / 100 : null;
     if (vaBalanceNgn !== null && vaBalanceNgn < amountNgn + POUCH_PAYOUT_FEE_NGN) {
@@ -771,7 +777,7 @@ async function submitWhatsappWithdrawal(params: {
     reservedRequestId = reserveResult.request.id;
 
     const payout = await deps.pouchLiquifiaClient.createPayout({
-      virtualAccountId: virtualAccount.pouchVirtualAccountId,
+      virtualAccountId: payoutSourceVaId,
       reference: reserveResult.request.id,
       amount: amountNgn,
       destinationAccount: accountNumber,

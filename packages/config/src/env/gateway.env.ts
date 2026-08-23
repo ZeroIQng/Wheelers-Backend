@@ -35,6 +35,9 @@ const GatewayEnvSchema = z.object({
   POUCH_LIQUIFIA_API_KEY: z.string().min(1),
   POUCH_LIQUIFIA_BASE_URL: z.string().url().default('https://fiat-api.pouchfinance.xyz/api/v1'),
   POUCH_WEBHOOK_SECRET: z.string().min(1).optional(),
+  // Platform treasury VA: the single funded account all payouts draw from.
+  // Without it, payouts fall back to each user's own (usually empty) VA.
+  POUCH_TREASURY_VIRTUAL_ACCOUNT_ID: z.string().min(1).optional(),
   GOOGLE_MAPS_API_KEY: z.string().min(1),
   GOOGLE_MAPS_BASE_URL: z.string().url().default('https://routes.googleapis.com'),
   GROUP_RIDE_FACE_S3_BUCKET: z.string().min(1).optional(),

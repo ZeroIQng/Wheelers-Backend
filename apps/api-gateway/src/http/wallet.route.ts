@@ -28,6 +28,13 @@ interface WalletRouteDeps {
   publisher: GatewayPublisher;
   pouchLiquifiaClient: PouchLiquifiaClient;
   redisClient?: RedisClient;
+  /**
+   * Platform treasury VA — the single funded Pouch account all payouts draw
+   * from. Without it, payouts fall back to the user's own virtual account,
+   * which for drivers is empty (earnings are ledger-only) and withdrawals
+   * cannot work.
+   */
+  treasuryVirtualAccountId?: string;
 }
 
 // ─── Constants ─────────────────────────────────────────────────────
@@ -558,8 +565,12 @@ export async function handleCreateWalletWithdrawalRoute(
     }
 
     // Look up user's virtual account for the payout source
-    const virtualAccount = await virtualAccountClient.findByUserId(user.id);
-    if (!virtualAccount) {
+    // With a treasury configured, payouts draw from the platform float and
+    // the user needs no personal VA (drivers never have a funded one).
+    const virtualAccount = await virtualAccountClient.findByUserId(user.id).catch(() => null);
+    const payoutSourceVaId =
+      deps.treasuryVirtualAccountId ?? virtualAccount?.pouchVirtualAccountId;
+    if (!payoutSourceVaId) {
       sendJson(res, 404, {
         error: "Account not found. Please set up deposits first.",
         code: "VIRTUAL_ACCOUNT_NOT_FOUND",
@@ -571,7 +582,7 @@ export async function handleCreateWalletWithdrawalRoute(
     // check the vault BEFORE reserving ledger funds so a shortfall fails
     // fast with an honest message instead of an opaque provider rejection.
     const vaBalance = await deps.pouchLiquifiaClient
-      .getVirtualAccountBalance(virtualAccount.pouchVirtualAccountId)
+      .getVirtualAccountBalance(payoutSourceVaId)
       .catch(() => null);
     const vaBalanceNgn = vaBalance ? Number(vaBalance.balance ?? 0) / 100 : null;
     if (vaBalanceNgn !== null && vaBalanceNgn < requestedAmountNgn + POUCH_PAYOUT_FEE_NGN) {
@@ -611,9 +622,9 @@ export async function handleCreateWalletWithdrawalRoute(
         });
         reservedRequestId = reserveResult.request.id;
 
-        // Create payout via Pouch Liquifia
+        // Create payout via Pouch Liquifia (from the treasury when configured)
         const payout = await deps.pouchLiquifiaClient.createPayout({
-          virtualAccountId: virtualAccount.pouchVirtualAccountId,
+          virtualAccountId: payoutSourceVaId,
           reference: reserveResult.request.id,
           amount: requestedAmountNgn,
           destinationAccount: accountNumber,

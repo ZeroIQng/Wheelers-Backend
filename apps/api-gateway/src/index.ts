@@ -409,6 +409,7 @@ async function bootstrap(): Promise<void> {
     publisher,
     pouchLiquifiaClient,
     redisClient: redisCommandClient,
+    treasuryVirtualAccountId: gatewayEnv.POUCH_TREASURY_VIRTUAL_ACCOUNT_ID,
   };
 
   const kycDeps = {
@@ -728,6 +729,7 @@ async function bootstrap(): Promise<void> {
         appBaseUrl: gatewayEnv.APP_BASE_URL,
         driverKycStorage: driverKycStorage ?? undefined,
         groupRideFaceStorage: groupRideFaceStorage ?? undefined,
+        treasuryVirtualAccountId: gatewayEnv.POUCH_TREASURY_VIRTUAL_ACCOUNT_ID,
       };
 
       if (req.method === "GET") {
