@@ -79,6 +79,7 @@ import {
   handleAdminRiderAnalyticsRoute,
   handleAdminRecentRidesRoute,
   handleAdminUserActivityRoute,
+  handleAdminActivityFeedRoute,
 } from "./http/admin-analytics.route";
 import {
   handleCancelGroupRideMatchRequestRoute,
@@ -1030,6 +1031,19 @@ async function bootstrap(): Promise<void> {
       }
 
       await handleAdminUserActivityRoute(req, res, {
+        adminApiKey: process.env.ADMIN_API_KEY ?? '',
+        jwtSecret: gatewayEnv.JWT_SECRET,
+      }, url);
+      return;
+    }
+
+    if (url.pathname === "/admin/analytics/activity-feed") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleAdminActivityFeedRoute(req, res, {
         adminApiKey: process.env.ADMIN_API_KEY ?? '',
         jwtSecret: gatewayEnv.JWT_SECRET,
       }, url);

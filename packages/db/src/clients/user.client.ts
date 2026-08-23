@@ -11,6 +11,13 @@ export const userClient = {
       include: { wallet: true },
     }),
 
+  /** Lightweight batch lookup for labelling ids in admin views. */
+  findManyByIds: (userIds: string[]) =>
+    prisma.user.findMany({
+      where: { id: { in: userIds } },
+      select: { id: true, name: true, phone: true, email: true, role: true },
+    }),
+
   findByPrivyDid: (privyDid: string) =>
     prisma.user.findUnique({
       where: { privyDid },

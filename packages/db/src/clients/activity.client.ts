@@ -51,6 +51,25 @@ export const activityClient = {
     });
   },
 
+  /** Latest activity across ALL users — the admin dashboard's live feed. */
+  listRecent: async (limit = 50) =>
+    prisma.userActivityEvent.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(limit, 200),
+    }),
+
+  /** Event counts by type since a cutoff — the dashboard's 24h pulse. */
+  countsByType: async (since: Date) => {
+    const rows = await prisma.userActivityEvent.groupBy({
+      by: ['eventType'],
+      where: { createdAt: { gte: since } },
+      _count: { _all: true },
+      orderBy: { _count: { id: 'desc' } },
+      take: 30,
+    });
+    return rows.map((row) => ({ eventType: row.eventType, count: row._count._all }));
+  },
+
   listByUser: async (
     userId: string,
     options?: { limit?: number; cursor?: string; eventType?: string },
