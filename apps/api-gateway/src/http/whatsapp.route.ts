@@ -958,6 +958,42 @@ async function handleGroupStageText(
   }
 
   if (stage === 'group_awaiting_pickup' || stage === 'group_awaiting_destination') {
+    // Riders often answer the pickup question with the whole route
+    // ("From 108 Opebi to 15 Aiyetoro Street") — take both in one go.
+    const routeMatch = incomingMessage.trim().match(/^from\s+(.+?)\s+to\s+(.+)$/i);
+    if (routeMatch) {
+      const [pickupGeo, destGeo] = await Promise.all([
+        geocodeAddress(deps.googleMapsApiKey, routeMatch[1]!.trim()),
+        geocodeAddress(deps.googleMapsApiKey, routeMatch[2]!.trim()),
+      ]);
+      if (pickupGeo && destGeo) {
+        const pending = (await getPendingGroupRide(deps.redisClient, user.id)) ?? {};
+        await storePendingGroupRide(deps.redisClient, user.id, {
+          ...pending,
+          pickupLat: pickupGeo.lat,
+          pickupLng: pickupGeo.lng,
+          pickupAddress: pickupGeo.formattedAddress,
+          destLat: destGeo.lat,
+          destLng: destGeo.lng,
+          destAddress: destGeo.formattedAddress,
+        });
+        await presentGroupQuote(deps, user, phone, incomingMessage);
+        return;
+      }
+      if (!pickupGeo) {
+        await replyAndLog(deps, phone, incomingMessage,
+          `Could not find "${routeMatch[1]!.trim()}" on the map.\n\nPlease type a more specific pickup address or share a location pin 📍`);
+        return;
+      }
+      // Pickup resolved but destination didn't — keep it and ask again.
+      await applyGroupLocation(deps, user, phone, incomingMessage, 'group_awaiting_pickup', {
+        lat: pickupGeo.lat,
+        lng: pickupGeo.lng,
+        address: pickupGeo.formattedAddress,
+      });
+      return;
+    }
+
     const typed = stripDirectionPrefix(incomingMessage);
     const geo = await geocodeAddress(deps.googleMapsApiKey, typed);
     if (!geo) {

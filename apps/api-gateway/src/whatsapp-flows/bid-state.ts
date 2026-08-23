@@ -328,7 +328,11 @@ export async function setBookingStage(
   userId: string,
   stage: BookingStage,
 ): Promise<void> {
-  await redis.set(bookingStageKey(userId), stage, PENDING_LOCATION_TTL);
+  // Group-ride stages get a longer window: riders answer the pickup and
+  // selfie prompts on their own time, and a 10-minute expiry silently dumped
+  // them into the solo flow mid-conversation.
+  const ttl = stage.startsWith('group_') ? 1800 : PENDING_LOCATION_TTL;
+  await redis.set(bookingStageKey(userId), stage, ttl);
 }
 
 export async function getBookingStage(
@@ -581,7 +585,7 @@ export interface PendingGroupRide {
   faceAttempts?: number;
 }
 
-const PENDING_GROUP_TTL = 900; // 15 minutes — the selfie step takes a moment
+const PENDING_GROUP_TTL = 1800; // 30 minutes — matches the group booking stages
 
 function pendingGroupKey(userId: string): string {
   return `whatsapp:user:${userId}:pending_group`;
