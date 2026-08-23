@@ -134,7 +134,9 @@ export function createGroupRideDispatchConsumer(params: {
       destination: toLatLng(finalStop),
       stops: intermediateStops,
       fareEstimateNgn: event.fareEstimateNgn,
-      paymentMethod: 'WALLET',
+      // CASH until per-seat wallet settlement exists — each rider pays the
+      // driver their own seat price; no single wallet must escrow the total.
+      paymentMethod: 'CASH',
       riderOfferNgn: event.fareEstimateNgn,
       suggestedFareNgn: pricing.suggestedFareNgn,
       minOfferNgn: pricing.minOfferNgn,

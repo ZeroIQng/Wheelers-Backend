@@ -2209,6 +2209,10 @@ export async function handleMetaWhatsappWebhookRoute(
 
           if (allAgreed) {
             const totalNgn = sameDriverSeats.reduce((sum, s) => sum + s.amountNgn, 0);
+            // CASH, deliberately: a WALLET acceptance makes wallet-service
+            // escrow the ENTIRE group total from whichever member accepted
+            // last. Until per-seat wallet settlement exists, each rider pays
+            // the driver their own seat price directly.
             await deps.publisher.publishRideEvent(RideOfferAcceptedEvent.parse({
               eventType: 'RIDE_OFFER_ACCEPTED',
               rideId: seatInfo.anchorRideId,
@@ -2216,7 +2220,7 @@ export async function handleMetaWhatsappWebhookRoute(
               driverId: selectedBid.driverId,
               driverUserId: selectedBid.driverUserId,
               agreedFareNgn: totalNgn,
-              paymentMethod: 'WALLET',
+              paymentMethod: 'CASH',
               timestamp: new Date().toISOString(),
             }));
             await clearAcceptedSeats(deps.redisClient, seatInfo.anchorRideId);

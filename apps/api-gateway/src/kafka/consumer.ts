@@ -853,28 +853,34 @@ async function handleGroupRideEvent(
         phone,
         offerNgn: member.offerNgn,
       });
+    }
 
-      if (!phone) continue;
+    // Only members who can actually answer count toward "all seats agreed" —
+    // an unreachable member would deadlock the group forever.
+    const reachable = seatMembers.filter((m) => m.phone !== null);
+    if (reachable.length === 0) return;
 
-      await storeWhatsappRide(deps.redisClient, member.rideId, {
+    for (const member of reachable) {
+      const seat = members.find((m) => m.rideId === member.memberRideId)!;
+      await storeWhatsappRide(deps.redisClient, member.memberRideId, {
         riderId: member.riderId,
-        phone,
-        pickupAddress: member.pickup.address,
-        destinationAddress: member.dropoff.address,
+        phone: member.phone!,
+        pickupAddress: seat.pickup.address,
+        destinationAddress: seat.dropoff.address,
         offerNgn: member.offerNgn,
         suggestedFareNgn: member.offerNgn,
         paymentMethod: 'WALLET',
         createdAt: new Date().toISOString(),
       });
-      await setActiveRide(deps.redisClient, member.riderId, member.rideId);
-      await storeGroupSeat(deps.redisClient, member.rideId, {
+      await setActiveRide(deps.redisClient, member.riderId, member.memberRideId);
+      await storeGroupSeat(deps.redisClient, member.memberRideId, {
         anchorRideId: event.anchorRideId,
         groupId: event.groupId,
-        memberCount: members.length,
+        memberCount: reachable.length,
       });
 
       if (deps.whatsappNotifier) {
-        await sendGroupRideDispatchNotification(deps.whatsappNotifier, phone, member.offerNgn).catch(() => {});
+        await sendGroupRideDispatchNotification(deps.whatsappNotifier, member.phone!, member.offerNgn).catch(() => {});
       }
     }
 

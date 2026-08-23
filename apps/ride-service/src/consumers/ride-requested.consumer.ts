@@ -205,8 +205,24 @@ export function createRideRequestedConsumer(params: {
     startBidTimeout(event);
   }
 
+  /**
+   * A seat bid arrives on the MEMBER's ride id, but the group's pending match
+   * lives under the anchor id — resolve it so driver details and timeout
+   * resets land where assignment reads them.
+   */
+  function findPendingForRideId(rideId: string): PendingRideMatch | undefined {
+    const direct = state.pendingMatchesByRideId.get(rideId);
+    if (direct) return direct;
+    for (const pending of state.pendingMatchesByRideId.values()) {
+      if (pending.group?.members?.some((member) => member.rideId === rideId)) {
+        return pending;
+      }
+    }
+    return undefined;
+  }
+
   async function handleCounterOffer(event: RideCounterOfferEvent): Promise<void> {
-    const pending = state.pendingMatchesByRideId.get(event.rideId);
+    const pending = findPendingForRideId(event.rideId);
     if (!pending) return;
 
     // Reset the bid timeout since we got activity
@@ -233,14 +249,27 @@ export function createRideRequestedConsumer(params: {
   }
 
   async function handleRiderCounterOffer(event: RideRiderCounterOfferEvent): Promise<void> {
-    const pending = state.pendingMatchesByRideId.get(event.rideId);
+    const pending = findPendingForRideId(event.rideId);
     if (!pending) return;
 
-    // Update the rider's offer amount for this ride
-    pending.rideRequested = {
-      ...pending.rideRequested,
-      riderOfferNgn: event.counterOfferNgn,
-    };
+    // A group member countering on THEIR seat: update that seat's offer and
+    // re-broadcast so every driver's card shows the new per-seat price. The
+    // headline total becomes the sum of current seat offers.
+    const seatMember = pending.group?.members?.find((m) => m.rideId === event.rideId);
+    if (seatMember && pending.group?.members) {
+      seatMember.offerNgn = event.counterOfferNgn;
+      const seatTotal = pending.group.members.reduce((sum, m) => sum + m.offerNgn, 0);
+      pending.rideRequested = {
+        ...pending.rideRequested,
+        riderOfferNgn: seatTotal,
+      };
+    } else {
+      // Update the rider's offer amount for this ride
+      pending.rideRequested = {
+        ...pending.rideRequested,
+        riderOfferNgn: event.counterOfferNgn,
+      };
+    }
 
     // Reset bid timeout since there's activity
     if (pending.timeout) {
@@ -250,6 +279,11 @@ export function createRideRequestedConsumer(params: {
     startBidTimeout(pending.rideRequested);
 
     const expiresAt = new Date(Date.now() + OFFER_TTL_MS);
+    // For a seat counter, the card's headline number is the updated TOTAL —
+    // the per-seat change itself travels in group.members.
+    const broadcastOfferNgn = seatMember
+      ? pending.rideRequested.riderOfferNgn
+      : event.counterOfferNgn;
 
     if (event.driverId) {
       // Targeted counter-offer to a specific driver
@@ -264,7 +298,7 @@ export function createRideRequestedConsumer(params: {
       await rideEventsProducer.sendUpdatedOfferToDriver({
         driver,
         rideRequested: pending.rideRequested,
-        updatedOfferNgn: event.counterOfferNgn,
+        updatedOfferNgn: broadcastOfferNgn,
         expiresAt,
         group: pending.group,
       });
@@ -278,7 +312,7 @@ export function createRideRequestedConsumer(params: {
             rideEventsProducer.sendUpdatedOfferToDriver({
               driver,
               rideRequested: pending.rideRequested,
-              updatedOfferNgn: event.counterOfferNgn,
+              updatedOfferNgn: broadcastOfferNgn,
               expiresAt,
               group: pending.group,
             }),
