@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  CopyObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -102,6 +103,37 @@ export class GroupRideFaceStorage {
       objectKey,
       mimeType: params.mimeType,
       sizeBytes: params.imageBuffer.length,
+      capturedAt: new Date(),
+    };
+  }
+
+  /**
+   * Reuse a previously verified selfie for a new match request. The
+   * verification table is unique on (bucket, objectKey), so the object is
+   * copied to a key under the new request rather than shared.
+   */
+  async copyFrom(params: {
+    sourceBucket: string;
+    sourceObjectKey: string;
+    matchRequestId: string;
+    userId: string;
+    mimeType: string;
+  }): Promise<StoredGroupRideFaceObject> {
+    const objectKey = this.buildObjectKey(params.matchRequestId, params.userId, params.mimeType);
+    await this.s3.send(
+      new CopyObjectCommand({
+        Bucket: this.bucket,
+        Key: objectKey,
+        CopySource: `${params.sourceBucket}/${params.sourceObjectKey}`,
+        ContentType: params.mimeType,
+        MetadataDirective: 'REPLACE',
+      }),
+    );
+
+    return {
+      bucket: this.bucket,
+      objectKey,
+      mimeType: params.mimeType,
       capturedAt: new Date(),
     };
   }

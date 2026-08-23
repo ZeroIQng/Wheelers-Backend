@@ -234,6 +234,16 @@ export const groupRideClient = {
       },
     }),
 
+  /**
+   * The rider's most recent verified selfie — group-ride verification is
+   * once per person, not once per request; later requests reuse it.
+   */
+  findLatestStoredFaceVerificationByUser: (userId: string) =>
+    prisma.groupRideFaceVerification.findFirst({
+      where: { userId, uploadStatus: 'STORED' },
+      orderBy: { storedAt: 'desc' },
+    }),
+
   findReadyRequests: () =>
     prisma.groupRideMatchRequest.findMany({
       where: {

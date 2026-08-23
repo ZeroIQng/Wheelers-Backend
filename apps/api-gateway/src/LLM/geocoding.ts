@@ -139,6 +139,66 @@ export async function geocodeAddress(
   return restricted;
 }
 
+/**
+ * All plausible matches for an ambiguous place name. "Aiyetoro Street" exists
+ * in both Surulere and Akoka — assuming one silently books a ride to the
+ * wrong district. Callers show ≥2 candidates as a numbered choice; a query
+ * that already pins the area ("15 Aiyetoro Street Akoka") returns one.
+ */
+export async function geocodeAddressCandidates(
+  apiKey: string,
+  address: string,
+  limit = 3,
+): Promise<GeocodeResult[]> {
+  const biased = await geocodeManyOnce(apiKey, address, {
+    ...(GEOCODE_REGION ? { region: GEOCODE_REGION } : {}),
+  }, limit);
+  if (biased.length > 0) return biased;
+
+  if (!GEOCODE_FALLBACK_COUNTRY) return [];
+  return geocodeManyOnce(apiKey, address, {
+    components: `country:${GEOCODE_FALLBACK_COUNTRY}`,
+  }, limit);
+}
+
+async function geocodeManyOnce(
+  apiKey: string,
+  address: string,
+  extra: Record<string, string>,
+  limit: number,
+): Promise<GeocodeResult[]> {
+  const params = new URLSearchParams({ address, key: apiKey, ...extra });
+  const url = `https://maps.googleapis.com/maps/api/geocode/json?${params.toString()}`;
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return [];
+
+    const data = (await response.json()) as GoogleGeocodingResponse;
+    if (data.status !== 'OK' || !data.results?.length) return [];
+
+    const seen = new Set<string>();
+    const candidates: GeocodeResult[] = [];
+    for (const result of data.results) {
+      const location = result.geometry?.location;
+      if (!location?.lat || !location?.lng) continue;
+      if (result.types?.some((type) => TOO_COARSE_TYPES.has(type))) continue;
+      if (
+        result.partial_match &&
+        !partialMatchLooksRelated(address, result.formatted_address ?? '')
+      ) continue;
+      const formattedAddress = result.formatted_address ?? address;
+      if (seen.has(formattedAddress)) continue;
+      seen.add(formattedAddress);
+      candidates.push({ lat: location.lat, lng: location.lng, formattedAddress });
+      if (candidates.length >= limit) break;
+    }
+    return candidates;
+  } catch {
+    return [];
+  }
+}
+
 async function geocodeOnce(
   apiKey: string,
   address: string,

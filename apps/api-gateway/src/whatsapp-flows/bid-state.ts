@@ -647,3 +647,43 @@ export async function clearGroupRequestRider(
 ): Promise<void> {
   await redis.del(groupRequestRiderKey(userId));
 }
+
+// ── Pending geocode disambiguation (numbered "which one did you mean?") ───
+
+export interface PendingGeoChoices {
+  /** Which field the answer fills. */
+  context: 'group_pickup' | 'group_destination' | 'destination';
+  options: Array<{ lat: number; lng: number; address: string }>;
+}
+
+function geoChoicesKey(userId: string): string {
+  return `whatsapp:user:${userId}:geo_choices`;
+}
+
+export async function storePendingGeoChoices(
+  redis: RedisClient,
+  userId: string,
+  data: PendingGeoChoices,
+): Promise<void> {
+  await redis.set(geoChoicesKey(userId), JSON.stringify(data), 600);
+}
+
+export async function getPendingGeoChoices(
+  redis: RedisClient,
+  userId: string,
+): Promise<PendingGeoChoices | null> {
+  const raw = await redis.get(geoChoicesKey(userId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as PendingGeoChoices;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearPendingGeoChoices(
+  redis: RedisClient,
+  userId: string,
+): Promise<void> {
+  await redis.del(geoChoicesKey(userId));
+}

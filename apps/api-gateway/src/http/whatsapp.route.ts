@@ -30,7 +30,7 @@ import {
 import { WhatsappBotService } from '../LLM/whatsapp-bot.service';
 import { GroqClient } from '../LLM/groq.client';
 import { parseRideIntent } from '../LLM/ride-intent-parser';
-import { geocodeAddress, reverseGeocode } from '../LLM/geocoding';
+import { geocodeAddress, geocodeAddressCandidates, reverseGeocode } from '../LLM/geocoding';
 import { verifySelfiePhoto } from '../LLM/face-check';
 import { downloadMetaMedia } from '../whatsapp-flows/meta-media';
 import { buildReadyForMatchEvent } from '../group-ride/ready-event';
@@ -69,6 +69,9 @@ import {
   setGroupRequestRider,
   getGroupRequestRider,
   clearGroupRequestRider,
+  storePendingGeoChoices,
+  getPendingGeoChoices,
+  clearPendingGeoChoices,
   storePendingAccept,
   getPendingAccept,
   clearPendingAccept,
@@ -995,16 +998,47 @@ async function handleGroupStageText(
     }
 
     const typed = stripDirectionPrefix(incomingMessage);
-    const geo = await geocodeAddress(deps.googleMapsApiKey, typed);
-    if (!geo) {
+
+    // A bare number answers a pending "which one did you mean?" list.
+    if (/^[1-9]$/.test(typed)) {
+      const choices = await getPendingGeoChoices(deps.redisClient, user.id);
+      const expectedContext = stage === 'group_awaiting_pickup' ? 'group_pickup' : 'group_destination';
+      const pick = choices?.context === expectedContext ? choices.options[Number(typed) - 1] : undefined;
+      if (pick) {
+        await clearPendingGeoChoices(deps.redisClient, user.id);
+        await applyGroupLocation(deps, user, phone, incomingMessage, stage, pick);
+        return;
+      }
+    }
+
+    const candidates = await geocodeAddressCandidates(deps.googleMapsApiKey, typed);
+    if (candidates.length === 0) {
       await replyAndLog(deps, phone, incomingMessage,
         `Could not find "${typed}" on the map.\n\nPlease type a more specific address or share a location pin 📍`);
       return;
     }
+
+    // Ambiguous place name ("Aiyetoro" exists in Surulere AND Akoka) — ask
+    // instead of assuming. A query that pins the area returns one candidate.
+    if (candidates.length > 1) {
+      await storePendingGeoChoices(deps.redisClient, user.id, {
+        context: stage === 'group_awaiting_pickup' ? 'group_pickup' : 'group_destination',
+        options: candidates.map((c) => ({ lat: c.lat, lng: c.lng, address: c.formattedAddress })),
+      });
+      await replyAndLog(deps, phone, incomingMessage, [
+        `Found a few places matching "${typed}" — which one did you mean?`,
+        ``,
+        ...candidates.map((c, i) => `*${i + 1}.* ${c.formattedAddress}`),
+        ``,
+        `Reply with the number.`,
+      ].join('\n'));
+      return;
+    }
+
     await applyGroupLocation(deps, user, phone, incomingMessage, stage, {
-      lat: geo.lat,
-      lng: geo.lng,
-      address: geo.formattedAddress,
+      lat: candidates[0]!.lat,
+      lng: candidates[0]!.lng,
+      address: candidates[0]!.formattedAddress,
     });
     return;
   }
@@ -1099,6 +1133,55 @@ async function createGroupMatchRequest(
       faceAttempts: 0,
     });
     await setGroupRequestRider(deps.redisClient, user.id, request.id);
+
+    // Verification is once per person, not once per ride — a rider with a
+    // previously verified selfie goes straight into matching.
+    const priorVerification = await groupRideClient
+      .findLatestStoredFaceVerificationByUser(user.id)
+      .catch(() => null);
+    if (priorVerification && deps.groupRideFaceStorage) {
+      try {
+        const stored = await deps.groupRideFaceStorage.copyFrom({
+          sourceBucket: priorVerification.bucket,
+          sourceObjectKey: priorVerification.objectKey,
+          matchRequestId: request.id,
+          userId: user.id,
+          mimeType: priorVerification.mimeType,
+        });
+        await groupRideClient.upsertFaceVerificationUpload({
+          matchRequestId: request.id,
+          userId: user.id,
+          bucket: stored.bucket,
+          objectKey: stored.objectKey,
+          mimeType: stored.mimeType,
+          capturedAt: stored.capturedAt,
+        });
+        const completed = await groupRideClient.completeFaceVerificationAndMarkReady({
+          matchRequestId: request.id,
+          sizeBytes: priorVerification.sizeBytes ?? undefined,
+          capturedAt: stored.capturedAt,
+        });
+        await deps.publisher.publishGroupRideEvent(buildReadyForMatchEvent(completed.request));
+
+        await clearPendingGroupRide(deps.redisClient, user.id);
+        await clearBookingStage(deps.redisClient, user.id);
+
+        await replyAndLog(deps, phone, incomingMessage, [
+          `✅ You're already verified — no selfie needed this time.`,
+          ``,
+          `🔎 *Matching in progress!* We're finding riders heading your way — you'll get a message here the moment your group is formed.`,
+          ``,
+          `Reply *group status* to check, or *cancel group* to leave.`,
+        ].join('\n'));
+        return;
+      } catch (error) {
+        console.warn('[whatsapp][group-ride] selfie reuse failed — asking for a fresh one', {
+          userId: user.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     await setBookingStage(deps.redisClient, user.id, 'group_awaiting_face_photo');
     await replyAndLog(deps, phone, incomingMessage, GROUP_SELFIE_PROMPT);
   } catch (error) {
@@ -1197,11 +1280,13 @@ async function handleGroupSelfie(
     await clearBookingStage(deps.redisClient, user.id);
 
     await replyAndLog(deps, phone, '[Selfie]', [
-      `✅ *You're in the matching pool!*`,
+      `✅ *Selfie verified — you're all set!*`,
       ``,
-      `We're looking for riders heading your way. You'll get a message here the moment your group is formed.`,
+      `🔎 *Matching in progress!* We're finding riders heading your way — you'll get a message here the moment your group is formed.`,
       ``,
-      `Reply *group status* to check, or *cancel group* to leave the pool.`,
+      `You won't need a selfie again for future group rides.`,
+      ``,
+      `Reply *group status* to check, or *cancel group* to leave.`,
     ].join('\n'));
   } catch (error) {
     console.error('[whatsapp][group-ride] face upload failed', {
@@ -1270,8 +1355,8 @@ async function sendGroupStatus(
 
   const statusLine: Record<string, string> = {
     PENDING_FACE_UPLOAD: 'Waiting for your selfie 🤳 — send a clear photo of your face.',
-    READY_FOR_MATCH: 'In the matching pool — looking for riders heading your way. 👀',
-    MATCHING: 'Matching now — almost there! 👀',
+    READY_FOR_MATCH: '🔎 Matching in progress — looking for riders heading your way.',
+    MATCHING: '🔎 Matching in progress — almost there!',
     GROUPED: 'Group found! 🎉 Getting your route ready.',
     BOOKED: 'Group booked — finding your driver now. 🚗',
     EXPIRED: 'That request expired. Type *group ride* to start a new one.',
@@ -2517,7 +2602,48 @@ export async function handleMetaWhatsappWebhookRoute(
 
       // Try to geocode the typed destination
       const typedDestination = stripDirectionPrefix(incomingMessage);
-      const destGeo = await geocodeAddress(deps.googleMapsApiKey, typedDestination);
+
+      // A bare number answers a pending "which one did you mean?" list.
+      let destGeo: { lat: number; lng: number; formattedAddress: string } | null = null;
+      if (/^[1-9]$/.test(typedDestination)) {
+        const choices = await getPendingGeoChoices(deps.redisClient, user.id);
+        const pick = choices?.context === 'destination'
+          ? choices.options[Number(typedDestination) - 1]
+          : undefined;
+        if (pick) {
+          await clearPendingGeoChoices(deps.redisClient, user.id);
+          destGeo = { lat: pick.lat, lng: pick.lng, formattedAddress: pick.address };
+        }
+      }
+
+      if (!destGeo) {
+        const candidates = await geocodeAddressCandidates(deps.googleMapsApiKey, typedDestination);
+
+        // Ambiguous place ("Aiyetoro" is in Surulere AND Akoka) — ask, don't
+        // assume. A query that pins the area returns a single candidate.
+        if (candidates.length > 1) {
+          await storePendingGeoChoices(deps.redisClient, user.id, {
+            context: 'destination',
+            options: candidates.map((c) => ({ lat: c.lat, lng: c.lng, address: c.formattedAddress })),
+          });
+          const reply = [
+            `Found a few places matching "${typedDestination}" — which one did you mean?`,
+            ``,
+            ...candidates.map((c, i) => `*${i + 1}.* ${c.formattedAddress}`),
+            ``,
+            `Reply with the number.`,
+          ].join('\n');
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
+          return;
+        }
+
+        destGeo = candidates[0] ?? null;
+      }
+
       if (!destGeo) {
         const reply = `Could not find "${typedDestination}" on the map.\n\nPlease type a more specific destination address or share a location pin 📍`;
         await appendWhatsappConversation(deps.redisClient, phone, [
