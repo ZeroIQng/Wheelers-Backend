@@ -552,7 +552,7 @@ async function buildGroupSuggestionLine(
 ): Promise<string> {
   const suggestion = await findGroupRideSuggestion(userId, pickup, destination);
   if (!suggestion) return '';
-  return `\n\n💡 ${suggestion.count} rider${suggestion.count === 1 ? ' is' : 's are'} already heading your way. Reply *group* to share the ride and split the fare! 👥`;
+  return `\n\n💡 ${suggestion.count} rider${suggestion.count === 1 ? ' is' : 's are'} already heading your way. Reply *group* to share the car — you set your own seat price, always cheaper than riding alone! 👥`;
 }
 
 function isCancelCommand(message: string): boolean {
