@@ -224,30 +224,10 @@ export function createRideRequestedConsumer(params: {
       etaSeconds: event.etaSeconds,
     });
 
-    // Group rides are system-priced and the riders were told "we'll find you
-    // a driver" — there is no negotiation loop, and the anchor may be a
-    // WhatsApp rider with no way to see a bid at all. The first driver who
-    // accepts at (or under) the group fare gets the job on the spot; a bid
-    // above the fare is ignored and the request stays open.
-    if (pending.group) {
-      if (event.counterOfferNgn <= pending.rideRequested.riderOfferNgn) {
-        console.log(`[ride-service] group ride ${event.rideId}: driver ${event.driverId} accepted at ₦${event.counterOfferNgn} — auto-assigning`);
-        await rideEventsProducer.rideOfferAccepted({
-          eventType: 'RIDE_OFFER_ACCEPTED',
-          rideId: event.rideId,
-          riderId: event.riderId,
-          driverId: event.driverId,
-          driverUserId: event.driverUserId,
-          agreedFareNgn: event.counterOfferNgn,
-          paymentMethod: pending.rideRequested.paymentMethod,
-          timestamp: new Date().toISOString(),
-        });
-      } else {
-        console.log(`[ride-service] group ride ${event.rideId}: ignoring over-fare bid ₦${event.counterOfferNgn} from driver ${event.driverId} (fare ₦${pending.rideRequested.riderOfferNgn})`);
-      }
-      return;
-    }
-
+    // Group rides negotiate like solo rides: bids are forwarded to the
+    // anchor rider, who picks the driver for the group. The gateway sets up
+    // the anchor's WhatsApp bid state at dispatch time so this works even
+    // when the anchor booked over WhatsApp.
     // Counter-offer is forwarded to rider via gateway Kafka consumer → WebSocket
     console.log(`[ride-service] counter-offer on ride ${event.rideId} from driver ${event.driverId}: ₦${event.counterOfferNgn}`);
   }

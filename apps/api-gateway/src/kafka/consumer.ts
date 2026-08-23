@@ -28,6 +28,8 @@ import {
   storeAcceptedBid,
   storeLastBatch,
   getGroupRequestRider,
+  storeWhatsappRide,
+  setActiveRide,
 } from '../whatsapp-flows/bid-state';
 import type { WhatsappBid } from '../whatsapp-flows/bid-state';
 import {
@@ -42,6 +44,7 @@ import {
   sendDepositConfirmation,
   sendGroupRideGroupedNotification,
   sendGroupRideDriverAssignedNotification,
+  sendGroupRideDispatchNotification,
 } from '../whatsapp-flows/whatsapp-notifier';
 import type { WhatsappNotifierDeps } from '../whatsapp-flows/whatsapp-notifier';
 import type { GatewayPublisher } from '../websocket/publisher';
@@ -827,6 +830,41 @@ async function handleGroupRideEvent(
   deps: StartGatewayConsumerDeps,
 ): Promise<void> {
   const registry = deps.registry;
+
+  if (event.eventType === 'GROUP_RIDE_DRIVER_DISPATCH_REQUESTED') {
+    // Drivers are about to bid on this group. Bids land on the ANCHOR rider,
+    // who negotiates for the group — so a WhatsApp anchor needs the same bid
+    // state a solo booking gets, or the bids would go to a socket they don't
+    // have and nobody could ever pick a driver.
+    const anchorRiderId = event.riderIds[0];
+    if (!anchorRiderId) return;
+
+    const isWhatsappGroupRider = await getGroupRequestRider(deps.redisClient, anchorRiderId).catch(() => null);
+    if (!isWhatsappGroupRider) return;
+
+    const phone = await resolveGroupRiderPhone(deps, anchorRiderId);
+    if (!phone) return;
+
+    const stops = event.stops ?? [];
+    const lastDropoff = [...stops].reverse().find((stop) => stop.kind === 'dropoff');
+
+    await storeWhatsappRide(deps.redisClient, event.anchorRideId, {
+      riderId: anchorRiderId,
+      phone,
+      pickupAddress: event.firstPickup.address,
+      destinationAddress: lastDropoff?.address ?? 'Shared route',
+      offerNgn: event.fareEstimateNgn,
+      suggestedFareNgn: event.fareEstimateNgn,
+      paymentMethod: 'WALLET',
+      createdAt: new Date().toISOString(),
+    });
+    await setActiveRide(deps.redisClient, anchorRiderId, event.anchorRideId);
+
+    if (deps.whatsappNotifier) {
+      await sendGroupRideDispatchNotification(deps.whatsappNotifier, phone).catch(() => {});
+    }
+    return;
+  }
 
   if (event.eventType === 'GROUP_RIDE_ROUTE_BUILT') {
     const riderCount = event.riderIds.length;

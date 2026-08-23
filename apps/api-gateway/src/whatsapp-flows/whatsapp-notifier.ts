@@ -261,3 +261,18 @@ export async function sendGroupRideDriverAssignedNotification(
 
   await sendMetaWhatsappMessage(deps, phone, msg);
 }
+
+export async function sendGroupRideDispatchNotification(
+  deps: WhatsappNotifierDeps,
+  phone: string,
+): Promise<void> {
+  const msg = [
+    `🚗 *Drivers are seeing your group ride now!*`,
+    ``,
+    `You're the lead rider — driver offers will land here as a numbered list, and your pick drives the whole group.`,
+    ``,
+    `Reply with a driver's *number* to book them, or a *price* to counter-offer.`,
+  ].join('\n');
+
+  await sendMetaWhatsappMessage(deps, phone, msg);
+}
