@@ -19,6 +19,8 @@ import {
 } from '@wheleers/kafka-schemas';
 import type { GatewayAuthContext } from '../../types';
 import { getBoolean, getNumber, getRecord, getString } from '../../utils/object';
+import { estimateEtaSeconds, haversineKm } from '../../utils/geo';
+import { findGroupRideSuggestion } from '../../group-ride/suggestion';
 import type { GatewayPublisher } from '../publisher';
 import type { HandlerResponse } from './types';
 import { buildRideEstimatePricing } from '../../pricing/ride-estimate';
@@ -96,6 +98,33 @@ async function resolveSuggestedFareNgn(rideId: string): Promise<number | null> {
   }
 
   return null;
+}
+
+/**
+ * Driver apps used to hardcode etaSeconds on every bid, so riders saw the
+ * same "5 min away" for every driver. Recompute distance and ETA from the
+ * driver's last known position and the ride's pickup; fall back to the
+ * client-supplied value only when either side is missing.
+ */
+async function computeBidProximity(
+  driverUserId: string,
+  rideId: string,
+  fallbackEtaSeconds: number,
+): Promise<{ etaSeconds: number; distanceKm?: number }> {
+  try {
+    const [driver, ride] = await Promise.all([
+      driverClient.findByUserId(driverUserId),
+      rideClient.findById(rideId),
+    ]);
+    if (driver && driver.lat != null && driver.lng != null && ride) {
+      const distanceKm =
+        Math.round(haversineKm(driver.lat, driver.lng, ride.pickupLat, ride.pickupLng) * 100) / 100;
+      return { etaSeconds: estimateEtaSeconds(distanceKm), distanceKm };
+    }
+  } catch {
+    // fall through to the client value
+  }
+  return { etaSeconds: fallbackEtaSeconds };
 }
 
 function requireNumber(payload: Record<string, unknown>, key: string): number {
@@ -268,6 +297,12 @@ export async function handleRideMessage(
       throw error;
     }
 
+    // Every normal booking is a potential group ride — if open group requests
+    // share this corridor, surface it. Never blocks or fails the booking.
+    const groupSuggestion = await findGroupRideSuggestion(auth.userId, pickup, destination).catch(
+      () => null,
+    );
+
     return {
       type: 'ride:request:accepted',
       payload: {
@@ -277,6 +312,7 @@ export async function handleRideMessage(
         destination,
         stops,
         route: plannedRoute.geometry,
+        groupSuggestion: groupSuggestion ?? undefined,
         plannedDistanceKm: event.plannedDistanceKm,
         plannedDurationSeconds: event.plannedDurationSeconds,
         paymentMethod,
@@ -293,9 +329,15 @@ export async function handleRideMessage(
   }
 
   if (type === 'ride:counter_offer') {
+    const counterRideId = requireString(payload, 'rideId');
+    const proximity = await computeBidProximity(
+      auth.userId,
+      counterRideId,
+      requireNumber(payload, 'etaSeconds'),
+    );
     const event = RideCounterOfferEvent.parse({
       eventType: 'RIDE_COUNTER_OFFER',
-      rideId: requireString(payload, 'rideId'),
+      rideId: counterRideId,
       riderId: requireString(payload, 'riderId'),
       driverId: getString(payload, 'driverId') ?? auth.driverId ?? auth.userId,
       driverUserId: auth.userId,
@@ -304,7 +346,8 @@ export async function handleRideMessage(
       driverRating: requireNumber(payload, 'driverRating'),
       vehiclePlate: requireString(payload, 'vehiclePlate'),
       vehicleModel: requireString(payload, 'vehicleModel'),
-      etaSeconds: requireNumber(payload, 'etaSeconds'),
+      etaSeconds: proximity.etaSeconds,
+      distanceKm: proximity.distanceKm,
       timestamp,
     });
 
@@ -563,9 +606,16 @@ export async function handleRideMessage(
       // Use client-provided fallbacks
     }
 
+    const acceptRideId = requireString(payload, 'rideId');
+    const proximity = await computeBidProximity(
+      auth.userId,
+      acceptRideId,
+      requireNumber(payload, 'etaSeconds'),
+    );
+
     const counterOfferEvent = RideCounterOfferEvent.parse({
       eventType: 'RIDE_COUNTER_OFFER',
-      rideId: requireString(payload, 'rideId'),
+      rideId: acceptRideId,
       riderId: requireString(payload, 'riderId'),
       driverId,
       driverUserId: auth.userId,
@@ -574,7 +624,8 @@ export async function handleRideMessage(
       driverRating,
       vehiclePlate,
       vehicleModel,
-      etaSeconds: requireNumber(payload, 'etaSeconds'),
+      etaSeconds: proximity.etaSeconds,
+      distanceKm: proximity.distanceKm,
       timestamp,
     });
 

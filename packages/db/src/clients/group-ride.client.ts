@@ -248,6 +248,54 @@ export const groupRideClient = {
         readyForMatchAt: 'asc',
       },
     }),
+
+  /**
+   * Open (unmatched) group requests whose pickup is within radiusKm of the
+   * given point — the pool behind "someone's already heading your way" ride
+   * suggestions. Same raw-SQL haversine as driverClient.findNearby; corridor
+   * direction is filtered in JS by the caller.
+   */
+  findNearbyOpenMatchRequests: (lat: number, lng: number, radiusKm: number, limit = 20) =>
+    prisma.$queryRaw<Array<{
+      id:            string;
+      userId:        string;
+      pickupLat:     number;
+      pickupLng:     number;
+      pickupAddress: string;
+      destLat:       number;
+      destLng:       number;
+      destAddress:   string;
+      pickupDistanceKm: number;
+    }>>`
+      SELECT
+        g.id,
+        g."userId",
+        g."pickupLat",
+        g."pickupLng",
+        g."pickupAddress",
+        g."destLat",
+        g."destLng",
+        g."destAddress",
+        ROUND(CAST(
+          6371 * acos(
+            cos(radians(${lat})) * cos(radians(g."pickupLat")) *
+            cos(radians(g."pickupLng") - radians(${lng})) +
+            sin(radians(${lat})) * sin(radians(g."pickupLat"))
+          )
+        AS numeric), 3) AS "pickupDistanceKm"
+      FROM "GroupRideMatchRequest" g
+      WHERE
+        g.status IN ('READY_FOR_MATCH', 'MATCHING')
+        AND (
+          6371 * acos(
+            cos(radians(${lat})) * cos(radians(g."pickupLat")) *
+            cos(radians(g."pickupLng") - radians(${lng})) +
+            sin(radians(${lat})) * sin(radians(g."pickupLat"))
+          )
+        ) <= ${radiusKm}
+      ORDER BY "pickupDistanceKm" ASC
+      LIMIT ${limit}
+    `,
 };
 
 function buildStatusUpdate(status: GroupRideMatchRequestStatus) {

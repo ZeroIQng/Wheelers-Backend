@@ -22,6 +22,8 @@ export type OnlineDriver = {
   lng: number;
   vehiclePlate: string;
   vehicleModel: string;
+  /** Driver→pickup at match time, when the match query computed it. */
+  distanceKm?: number;
 };
 
 export type RideGpsState = {
@@ -66,6 +68,9 @@ export type PendingRideGroupInfo = {
   groupId: string;
   riderCount: number;
   stopKinds: Array<'pickup' | 'dropoff'>;
+  /** Every member, so driver assignment can notify the whole group. */
+  rideIds: string[];
+  riderIds: string[];
 };
 
 export type PendingRideMatch = {

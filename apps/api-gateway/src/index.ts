@@ -78,6 +78,7 @@ import {
   handleAdminDriverAnalyticsRoute,
   handleAdminRiderAnalyticsRoute,
   handleAdminRecentRidesRoute,
+  handleAdminUserActivityRoute,
 } from "./http/admin-analytics.route";
 import {
   handleCancelGroupRideMatchRequestRoute,
@@ -724,6 +725,7 @@ async function bootstrap(): Promise<void> {
         groqTimeoutMs: gatewayEnv.GROQ_TIMEOUT_MS,
         appBaseUrl: gatewayEnv.APP_BASE_URL,
         driverKycStorage: driverKycStorage ?? undefined,
+        groupRideFaceStorage: groupRideFaceStorage ?? undefined,
       };
 
       if (req.method === "GET") {
@@ -1018,6 +1020,19 @@ async function bootstrap(): Promise<void> {
         adminApiKey: process.env.ADMIN_API_KEY ?? '',
         jwtSecret: gatewayEnv.JWT_SECRET,
       });
+      return;
+    }
+
+    if (url.pathname === "/admin/analytics/activity") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleAdminUserActivityRoute(req, res, {
+        adminApiKey: process.env.ADMIN_API_KEY ?? '',
+        jwtSecret: gatewayEnv.JWT_SECRET,
+      }, url);
       return;
     }
 

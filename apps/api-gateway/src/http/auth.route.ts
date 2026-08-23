@@ -11,6 +11,7 @@ import { getString, isRecord } from '../utils/object';
 import type { GatewayPublisher } from '../websocket/publisher';
 import type { PouchLiquifiaClient } from '@wheleers/pouch-client';
 import { readJsonBody, sendJson } from './utils';
+import { logActivity } from '../analytics/log-activity';
 import { provisionPouchAccount } from '../onboarding/user-onboarding';
 import { sendEmail } from '../email/resend';
 import { buildWelcomeDriverEmail } from '../email/templates';
@@ -217,6 +218,12 @@ export async function handleUsernamePasswordSignupRoute(
       });
     }
 
+    logActivity({
+      userId: created.id,
+      eventType: 'auth_signup',
+      metadata: { method: 'password', role },
+    });
+
     sendJson(res, 201, {
       created: true,
       accessToken: createLocalAccessToken(created.id, deps.jwtSecret),
@@ -273,6 +280,12 @@ export async function handleUsernamePasswordSigninRoute(
       sendJson(res, 401, { error: 'Invalid email or password.' });
       return;
     }
+
+    logActivity({
+      userId: user.id,
+      eventType: 'auth_login',
+      metadata: { method: 'password' },
+    });
 
     sendJson(res, 200, {
       accessToken: createLocalAccessToken(user.id, deps.jwtSecret),

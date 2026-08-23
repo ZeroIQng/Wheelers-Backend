@@ -48,7 +48,11 @@ function formatBidList(bids: WhatsappBid[], riderOfferNgn: number): string {
   const lines = bids.map((bid, i) => {
     const num = i + 1;
     const etaMin = Math.ceil(bid.etaSeconds / 60);
-    return `*${num}.* ${bid.driverName} — ₦${bid.counterOfferNgn.toLocaleString()}\n    ${bid.vehicleModel} · ${bid.driverRating.toFixed(1)}★ · ${etaMin} min away`;
+    const away =
+      bid.distanceKm !== undefined
+        ? `${bid.distanceKm.toFixed(1)} km · ${etaMin} min away`
+        : `${etaMin} min away`;
+    return `*${num}.* ${bid.driverName} — ₦${bid.counterOfferNgn.toLocaleString()}\n    ${bid.vehicleModel} · ${bid.driverRating.toFixed(1)}★ · ${away}`;
   });
 
   // Lead with the shortest thing that works. Riders reply to a numbered list
@@ -99,10 +103,9 @@ export async function sendRideMatchedNotification(
     `Driver: *${driverName}*`,
     `Vehicle: ${vehicleModel} (${vehiclePlate})`,
     `Rating: ${driverRating.toFixed(1)}★`,
-    `ETA: ${etaMin} min`,
     `Fare: ₦${fees.totalNgn.toLocaleString()}`,
     ``,
-    `Your driver is on the way! 🚗`,
+    `🚗 ${driverName} is on the way — they'll be with you in ~${etaMin} min.`,
   ].join('\n');
 
   await sendMetaWhatsappMessage(deps, phone, msg);
@@ -211,6 +214,49 @@ export async function sendSearchingNotification(
     `Payment: ${payLabel}`,
     ``,
     `I'll message you when drivers respond! 🚗`,
+  ].join('\n');
+
+  await sendMetaWhatsappMessage(deps, phone, msg);
+}
+
+export async function sendGroupRideGroupedNotification(
+  deps: WhatsappNotifierDeps,
+  phone: string,
+  riderCount: number,
+  totalDistanceKm: number,
+  totalDurationSeconds: number,
+): Promise<void> {
+  const durationMin = Math.max(1, Math.ceil(totalDurationSeconds / 60));
+  const msg = [
+    `🎉 *Group found!*`,
+    ``,
+    `You've been matched with ${riderCount - 1} other rider${riderCount - 1 === 1 ? '' : 's'} heading your way.`,
+    `Shared route: ${totalDistanceKm.toFixed(1)} km · ~${durationMin} min`,
+    ``,
+    `We're finding a driver for your group now — I'll message you the moment one accepts. 🚗`,
+  ].join('\n');
+
+  await sendMetaWhatsappMessage(deps, phone, msg);
+}
+
+export async function sendGroupRideDriverAssignedNotification(
+  deps: WhatsappNotifierDeps,
+  phone: string,
+  driverName: string,
+  vehicleModel: string,
+  vehiclePlate: string,
+  driverRating: number,
+  etaSeconds: number,
+): Promise<void> {
+  const etaMin = Math.max(1, Math.ceil(etaSeconds / 60));
+  const msg = [
+    `✅ *Driver found for your group ride!*`,
+    ``,
+    `Driver: *${driverName}*`,
+    `Vehicle: ${vehicleModel}${vehiclePlate ? ` (${vehiclePlate})` : ''}`,
+    `Rating: ${driverRating.toFixed(1)}★`,
+    ``,
+    `🚗 ${driverName} is on the way — they'll reach the first pickup in ~${etaMin} min.`,
   ].join('\n');
 
   await sendMetaWhatsappMessage(deps, phone, msg);

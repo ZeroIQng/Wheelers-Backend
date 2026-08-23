@@ -17,6 +17,8 @@ export { chatClient }           from './clients/chat.client';
 export { riderKycClient }       from './clients/rider-kyc.client';
 export { adminClient }          from './clients/admin.client';
 export { analyticsClient }      from './clients/analytics.client';
+export { activityClient }       from './clients/activity.client';
+export type { ActivityEventInput } from './clients/activity.client';
 
 // Re-export Prisma types so services don't need to install @prisma/client directly
 export type {

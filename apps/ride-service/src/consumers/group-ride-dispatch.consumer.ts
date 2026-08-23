@@ -150,6 +150,8 @@ export function createGroupRideDispatchConsumer(params: {
       riderCount: event.riderIds.length,
       // Kept parallel to `stops` above — same slice, same order.
       stopKinds: middles.slice(0, 5).map((s) => s.kind),
+      rideIds: [...event.rideIds],
+      riderIds: [...event.riderIds],
     };
 
     const result = await matchDriver({

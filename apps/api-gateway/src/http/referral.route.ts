@@ -3,6 +3,7 @@ import { referralClient } from "@wheleers/db";
 import { authenticateHttpUser } from "./authenticate";
 import { readJsonBody, sendJson } from "./utils";
 import { getNumber, getString, isRecord } from "../utils/object";
+import { logActivity } from "../analytics/log-activity";
 
 interface ReferralRouteDeps {
   jwtSecret: string;
@@ -117,6 +118,12 @@ export async function handleApplyReferralCodeRoute(
     const result = await referralClient.applyCode({
       referredUserId: user.id,
       code,
+    });
+
+    logActivity({
+      userId: user.id,
+      eventType: "referral_code_applied",
+      metadata: { code },
     });
 
     sendJson(res, 201, {

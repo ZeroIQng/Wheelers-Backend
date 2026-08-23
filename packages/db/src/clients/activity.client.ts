@@ -1,0 +1,76 @@
+import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
+import { prisma } from '../prisma';
+
+export type ActivityEventInput = {
+  userId: string;
+  eventType: string;
+  source: string;
+  rideId?: string | null;
+  metadata?: Record<string, unknown> | null;
+  /** Kafka rows: "{topic}:{partition}:{offset}". Omit for synchronous rows. */
+  dedupKey?: string;
+  occurredAt?: Date;
+};
+
+function toCreateData(input: ActivityEventInput) {
+  return {
+    userId: input.userId,
+    eventType: input.eventType,
+    source: input.source,
+    rideId: input.rideId ?? null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    metadata: (input.metadata ?? undefined) as any,
+    dedupKey: input.dedupKey ?? randomUUID(),
+    occurredAt: input.occurredAt ?? new Date(),
+  };
+}
+
+export const activityClient = {
+  /** Idempotent single insert — a replayed dedupKey is silently a no-op. */
+  record: async (input: ActivityEventInput) => {
+    try {
+      return await prisma.userActivityEvent.create({ data: toCreateData(input) });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        return null; // duplicate delivery — already recorded
+      }
+      throw error;
+    }
+  },
+
+  /** Buffered flush for the Kafka sink. skipDuplicates keeps replays safe. */
+  recordMany: async (inputs: ActivityEventInput[]) => {
+    if (inputs.length === 0) return { count: 0 };
+    return prisma.userActivityEvent.createMany({
+      data: inputs.map(toCreateData),
+      skipDuplicates: true,
+    });
+  },
+
+  listByUser: async (
+    userId: string,
+    options?: { limit?: number; cursor?: string; eventType?: string },
+  ) => {
+    const limit = Math.min(options?.limit ?? 50, 200);
+    const items = await prisma.userActivityEvent.findMany({
+      where: {
+        userId,
+        ...(options?.eventType ? { eventType: options.eventType } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit + 1,
+      ...(options?.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),
+    });
+
+    const hasMore = items.length > limit;
+    const page = hasMore ? items.slice(0, limit) : items;
+    return {
+      items: page,
+      nextCursor: hasMore ? page[page.length - 1]?.id ?? null : null,
+    };
+  },
+};

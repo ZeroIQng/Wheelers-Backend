@@ -807,3 +807,22 @@ model RiderKycAttempt {
 
   @@index([userId, createdAt])
 }
+
+// Platform-wide per-user activity log: one row per user action, fed by a
+// Kafka sink (analytics-worker) plus synchronous logActivity calls in the
+// api-gateway for actions that never touch Kafka. dedupKey makes at-least-once
+// Kafka delivery safe to replay.
+model UserActivityEvent {
+  id         String   @id @default(uuid())
+  userId     String
+  eventType  String
+  source     String
+  rideId     String?
+  metadata   Json?
+  dedupKey   String   @unique
+  occurredAt DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([eventType, createdAt])
+}

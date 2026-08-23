@@ -5,6 +5,7 @@ import type { RedisClient } from '../redis/client';
 import { verifyLocalAccessToken } from '../auth/local';
 import { getString, isRecord } from '../utils/object';
 import { readJsonBody, sendJson } from './utils';
+import { logActivity } from '../analytics/log-activity';
 
 const PHONE_OTP_KEY_PREFIX = 'auth:phone-otp:';
 const PHONE_OTP_LENGTH = 6;
@@ -330,6 +331,8 @@ export async function handleVerifyPhoneOtpRoute(
     });
 
     await deps.redisClient.del(buildOtpRedisKey(user.id));
+
+    logActivity({ userId: user.id, eventType: 'phone_verified', metadata: {} });
 
     sendJson(res, 200, {
       verified: true,

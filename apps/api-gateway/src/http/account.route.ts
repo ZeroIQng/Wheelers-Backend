@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { userClient } from '@wheleers/db';
 import { authenticateHttpUser } from './authenticate';
 import { sendJson } from './utils';
+import { logActivity } from '../analytics/log-activity';
 import type { RedisClient } from '../redis/client';
 
 /**
@@ -41,7 +42,7 @@ export async function handleLogoutRoute(
 ): Promise<void> {
   try {
     // Authenticate to confirm this is a valid token
-    await authenticateHttpUser(req, deps.jwtSecret);
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
 
     // Blacklist the token signature in Redis
     const sig = extractTokenSignature(
@@ -52,6 +53,8 @@ export async function handleLogoutRoute(
       const key = `${BLACKLIST_PREFIX}${sig}`;
       await deps.redisClient.set(key, '1', MAX_TOKEN_TTL_SECONDS);
     }
+
+    logActivity({ userId: user.id, eventType: 'auth_logout' });
 
     sendJson(res, 200, { success: true });
   } catch (error) {
@@ -95,6 +98,8 @@ export async function handleDeleteAccountRoute(
     }
 
     console.info('[account] account deleted', { userId: user.id });
+
+    logActivity({ userId: user.id, eventType: 'account_deleted' });
 
     sendJson(res, 200, { deleted: true });
   } catch (error) {

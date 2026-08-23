@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { WheelersConsumer } from '@wheleers/kafka-client';
 import { referralClient, walletClient, virtualAccountClient, driverClient, userClient } from '@wheleers/db';
 import {
@@ -26,6 +27,7 @@ import {
   getBids,
   storeAcceptedBid,
   storeLastBatch,
+  getGroupRequestRider,
 } from '../whatsapp-flows/bid-state';
 import type { WhatsappBid } from '../whatsapp-flows/bid-state';
 import {
@@ -38,6 +40,8 @@ import {
   sendBidTimeoutNotification,
   sendRiderPaidNotification,
   sendDepositConfirmation,
+  sendGroupRideGroupedNotification,
+  sendGroupRideDriverAssignedNotification,
 } from '../whatsapp-flows/whatsapp-notifier';
 import type { WhatsappNotifierDeps } from '../whatsapp-flows/whatsapp-notifier';
 import type { GatewayPublisher } from '../websocket/publisher';
@@ -118,7 +122,7 @@ export async function startGatewayKafkaConsumer(deps: StartGatewayConsumerDeps):
         if (!parsed.success) {
           throw new Error(`Invalid group ride event: ${parsed.error.message}`);
         }
-        await handleGroupRideEvent(parsed.data, deps.registry);
+        await handleGroupRideEvent(parsed.data, deps);
       }
     },
   );
@@ -198,6 +202,8 @@ async function handleRideEvent(
       ratePerKmNgn: event.ratePerKmNgn,
       plannedDistanceKm: event.plannedDistanceKm,
       plannedDurationSeconds: event.plannedDurationSeconds,
+      pickupDistanceKm: event.pickupDistanceKm,
+      pickupEtaSeconds: event.pickupEtaSeconds,
       expiresAt: event.expiresAt,
       route: event.route,
       isGroupRide: event.isGroupRide ?? false,
@@ -219,6 +225,7 @@ async function handleRideEvent(
         vehiclePlate: event.vehiclePlate,
         vehicleModel: event.vehicleModel,
         etaSeconds: event.etaSeconds,
+        distanceKm: event.distanceKm,
         receivedAt: new Date().toISOString(),
       };
       await addBid(deps.redisClient, event.rideId, bid);
@@ -254,6 +261,7 @@ async function handleRideEvent(
         vehiclePlate: event.vehiclePlate,
         vehicleModel: event.vehicleModel,
         etaSeconds: event.etaSeconds,
+        distanceKm: event.distanceKm,
       });
     }
     return;
@@ -361,6 +369,20 @@ async function handleRideEvent(
         paymentMethod: event.paymentMethod,
         driverPhone,
       });
+
+      // Push too — the socket only reaches a foregrounded app, and "driver
+      // on the way" is exactly the message a backgrounded rider must see.
+      const etaMin = Math.max(1, Math.ceil(event.etaSeconds / 60));
+      await deps.publisher.publishNotificationEvent({
+        eventType: 'PUSH_SEND',
+        notificationId: randomUUID(),
+        userId: event.riderId,
+        title: 'Driver found! 🚗',
+        body: `${event.driverName} is on the way — they'll be with you in ~${etaMin} min.`,
+        data: { type: 'ride:matched', rideId: event.rideId },
+        priority: 'high',
+        timestamp: new Date().toISOString(),
+      }).catch(() => {});
     }
 
     // Notify driver via WebSocket (app) — include fee breakdown
@@ -778,10 +800,56 @@ async function handleComplianceEvent(event: ComplianceEvent, registry: SocketReg
   });
 }
 
+/**
+ * A group rider who booked over WhatsApp has no socket — resolve their phone
+ * so status updates reach the channel they actually used.
+ */
+async function resolveGroupRiderPhone(
+  deps: StartGatewayConsumerDeps,
+  riderId: string,
+): Promise<string | null> {
+  const isGroupWhatsappRider = await getGroupRequestRider(deps.redisClient, riderId).catch(() => null);
+  if (!isGroupWhatsappRider) return null;
+
+  const cached = await lookupPhoneByUserId(deps.redisClient, riderId);
+  if (cached) return cached;
+
+  try {
+    const user = await userClient.findById(riderId);
+    return user?.phone ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function handleGroupRideEvent(
   event: GroupRideEvent,
-  registry: SocketRegistry,
+  deps: StartGatewayConsumerDeps,
 ): Promise<void> {
+  const registry = deps.registry;
+
+  if (event.eventType === 'GROUP_RIDE_ROUTE_BUILT') {
+    const riderCount = event.riderIds.length;
+    for (const riderId of event.riderIds) {
+      const phone = deps.whatsappNotifier ? await resolveGroupRiderPhone(deps, riderId) : null;
+      if (phone && deps.whatsappNotifier) {
+        await sendGroupRideGroupedNotification(
+          deps.whatsappNotifier, phone,
+          riderCount, event.totalDistanceKm, event.totalDurationSeconds,
+        ).catch(() => {});
+      } else {
+        await registry.sendToUser(riderId, 'group-ride:grouped', {
+          groupId: event.groupId,
+          rideIds: event.rideIds,
+          riderCount,
+          totalDistanceKm: event.totalDistanceKm,
+          totalDurationSeconds: event.totalDurationSeconds,
+        });
+      }
+    }
+    return;
+  }
+
   if (event.eventType === 'GROUP_RIDE_DRIVER_ASSIGNED') {
     const payload = {
       groupId: event.groupId,
@@ -795,9 +863,18 @@ async function handleGroupRideEvent(
       etaSeconds: event.etaSeconds,
     };
 
-    // Notify ALL riders in the group
+    // Notify ALL riders in the group — WhatsApp riders on WhatsApp
     for (const riderId of event.riderIds) {
-      await registry.sendToUser(riderId, 'group-ride:driver-assigned', payload);
+      const phone = deps.whatsappNotifier ? await resolveGroupRiderPhone(deps, riderId) : null;
+      if (phone && deps.whatsappNotifier) {
+        await sendGroupRideDriverAssignedNotification(
+          deps.whatsappNotifier, phone,
+          event.driverName, event.vehicleModel, event.vehiclePlate,
+          event.driverRating, event.etaSeconds,
+        ).catch(() => {});
+      } else {
+        await registry.sendToUser(riderId, 'group-ride:driver-assigned', payload);
+      }
     }
   }
 }

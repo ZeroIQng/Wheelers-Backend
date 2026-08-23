@@ -9,6 +9,7 @@ import { authenticateHttpUser } from "./authenticate";
 import { runIdempotentJsonRequest } from "./idempotency";
 import { readJsonBody, sendJson } from "./utils";
 import { isRecord, pickNumber, pickString } from "../utils/object";
+import { logActivity } from "../analytics/log-activity";
 import type { GatewayPublisher } from "../websocket/publisher";
 import {
   PouchLiquifiaClient,
@@ -463,9 +464,12 @@ export async function handleCreateWalletWithdrawalRoute(
   deps: WalletRouteDeps,
 ): Promise<void> {
   let reservedRequestId: string | undefined;
+  let auditUserId: string | undefined;
+  let auditAmountNgn: number | undefined;
 
   try {
     const user = await authenticateHttpUser(req, deps.jwtSecret);
+    auditUserId = user.id;
     const rawBody = await readJsonBody(req);
     if (!isRecord(rawBody)) {
       sendJson(res, 400, { error: "Body must be a JSON object" });
@@ -492,6 +496,7 @@ export async function handleCreateWalletWithdrawalRoute(
     }
 
     const requestedAmountNgn = roundNgn(amountNgn);
+    auditAmountNgn = requestedAmountNgn;
 
     // Below the provider's floor — reject before reserving funds, so we never
     // lock the user's money for a payout the provider was always going to refuse.
@@ -643,6 +648,12 @@ export async function handleCreateWalletWithdrawalRoute(
     });
 
     sendJson(res, result.statusCode, result.body);
+
+    logActivity({
+      userId: user.id,
+      eventType: "withdrawal_created",
+      metadata: { amountNgn: requestedAmountNgn },
+    });
   } catch (error) {
     // Previously silent: a failed payout returned a 400 to the client and left
     // no server-side trace at all, so provider rejections were invisible.
@@ -675,6 +686,17 @@ export async function handleCreateWalletWithdrawalRoute(
             error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr),
           });
         });
+    }
+
+    if (auditUserId) {
+      logActivity({
+        userId: auditUserId,
+        eventType: "withdrawal_failed",
+        metadata: {
+          amountNgn: auditAmountNgn ?? null,
+          reason: error instanceof Error ? error.message : "unknown",
+        },
+      });
     }
 
     sendJson(res, 400, {
@@ -1001,6 +1023,12 @@ export async function handleProvisionVirtualAccountRoute(
       }
       throw dbError;
     }
+
+    logActivity({
+      userId: user.id,
+      eventType: "virtual_account_provisioned",
+      metadata: {},
+    });
 
     sendJson(res, 201, {
       accountNumber: created.accountNumber,

@@ -6,6 +6,7 @@ import { createLocalAccessToken } from '../auth/local';
 import { provisionPouchAccount } from '../onboarding/user-onboarding';
 import { isRecord, getString } from '../utils/object';
 import { readJsonBody, sendJson } from './utils';
+import { logActivity } from '../analytics/log-activity';
 import { sendEmail } from '../email/resend';
 import { buildWelcomeDriverEmail } from '../email/templates';
 
@@ -213,7 +214,7 @@ async function findOrCreateDriverUser(
   jwtSecret?: string,
   pouchLiquifiaClient?: PouchLiquifiaClient,
   resendApiKey?: string,
-): Promise<{ accessToken: string; user: Record<string, unknown>; isNewUser: boolean }> {
+): Promise<{ accessToken: string; user: Record<string, unknown>; userId: string; isNewUser: boolean }> {
   const privyDid = `${provider}:${sub}`;
 
   const existing = await userClient.findByPrivyDid(privyDid);
@@ -280,6 +281,7 @@ async function findOrCreateDriverUser(
 
   return {
     accessToken,
+    userId,
     user: {
       id: userRecord.id,
       privyDid: userRecord.privyDid,
@@ -333,6 +335,12 @@ export async function handleAppleAuthRoute(
       deps.resendApiKey,
     );
 
+    logActivity({
+      userId: result.userId,
+      eventType: 'auth_login',
+      metadata: { method: 'apple', isNewUser: result.isNewUser },
+    });
+
     sendJson(res, 200, {
       accessToken: result.accessToken,
       tokenType: 'Bearer',
@@ -382,6 +390,12 @@ export async function handleGoogleAuthRoute(
       deps.pouchLiquifiaClient,
       deps.resendApiKey,
     );
+
+    logActivity({
+      userId: result.userId,
+      eventType: 'auth_login',
+      metadata: { method: 'google', isNewUser: result.isNewUser },
+    });
 
     sendJson(res, 200, {
       accessToken: result.accessToken,

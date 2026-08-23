@@ -3,6 +3,7 @@ import { driverClient, userClient } from '@wheleers/db';
 import { verifyLocalAccessToken } from '../auth/local';
 import { isRecord, getString } from '../utils/object';
 import { readJsonBody, sendJson } from './utils';
+import { logActivity } from '../analytics/log-activity';
 import type { DriverKycStorage } from '../storage/driver-kyc-storage';
 
 interface DriverKycDeps {
@@ -141,6 +142,8 @@ export async function handleDriverKycSubmitRoute(
     if (phone) {
       await userClient.updateProfile(userId, { phone });
     }
+
+    logActivity({ userId, eventType: 'driver_kyc_submitted', metadata: {} });
 
     sendJson(res, 200, { status: 'SUBMITTED' });
   } catch (error) {

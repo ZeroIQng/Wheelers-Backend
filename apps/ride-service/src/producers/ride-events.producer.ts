@@ -1,6 +1,7 @@
 import type { WheelersProducer } from '@wheleers/kafka-client';
 import {
   TOPICS,
+  type GroupRideDriverAssignedEvent,
   type GpsStaleWarningEvent,
   type InAppSendEvent,
   type PushSendEvent,
@@ -16,6 +17,18 @@ import {
 import { randomUUID } from 'node:crypto';
 
 import type { OnlineDriver } from '../index';
+import { estimateEtaSeconds, haversineKm } from '../utils/geo';
+
+/** Driver→pickup distance/ETA for an offer, from match data or coordinates. */
+function pickupProximity(
+  driver: OnlineDriver,
+  pickup: { lat: number; lng: number },
+): { pickupDistanceKm: number; pickupEtaSeconds: number } {
+  const distanceKm =
+    driver.distanceKm ?? haversineKm(driver.lat, driver.lng, pickup.lat, pickup.lng);
+  const rounded = Math.round(distanceKm * 100) / 100;
+  return { pickupDistanceKm: rounded, pickupEtaSeconds: estimateEtaSeconds(rounded) };
+}
 
 export type RideEventsProducer = {
   rideRequested(event: RideRequestedEvent): Promise<void>;
@@ -25,6 +38,7 @@ export type RideEventsProducer = {
   rideCompleted(event: RideCompletedEvent): Promise<void>;
   rideRouteUpdated(event: RideRouteUpdatedEvent): Promise<void>;
   rideBidTimeout(event: RideBidTimeoutEvent): Promise<void>;
+  groupRideDriverAssigned(event: GroupRideDriverAssignedEvent): Promise<void>;
   broadcastRideOffer(params: {
     drivers: OnlineDriver[];
     rideRequested: RideRequestedEvent;
@@ -73,6 +87,10 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
       await producer.send(TOPICS.RIDE_EVENTS, event as any, { key: event.rideId });
     },
 
+    async groupRideDriverAssigned(event) {
+      await producer.send(TOPICS.GROUP_RIDE_EVENTS, event as any, { key: event.groupId });
+    },
+
     async broadcastRideOffer({ drivers, rideRequested, expiresAt, group }) {
       const timestamp = new Date().toISOString();
       const title = group ? `Group ride · ${group.riderCount} riders` : 'New ride request';
@@ -105,6 +123,7 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
           ratePerKmNgn: rideRequested.ratePerKmNgn,
           plannedDistanceKm: rideRequested.plannedDistanceKm,
           plannedDurationSeconds: rideRequested.plannedDurationSeconds,
+          ...pickupProximity(driver, rideRequested.pickup),
           expiresAt: expiresAt.toISOString(),
           route: rideRequested.route,
           timestamp,
@@ -187,6 +206,7 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
         ratePerKmNgn: rideRequested.ratePerKmNgn,
         plannedDistanceKm: rideRequested.plannedDistanceKm,
         plannedDurationSeconds: rideRequested.plannedDurationSeconds,
+        ...pickupProximity(driver, rideRequested.pickup),
         expiresAt: expiresAt.toISOString(),
         route: rideRequested.route,
         timestamp,

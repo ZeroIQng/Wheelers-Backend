@@ -47,6 +47,71 @@ export class GroqClient {
     }
   }
 
+  /**
+   * JSON verdict about an image, via a Groq vision model (the configured chat
+   * model can't see). Sends the image inline as a base64 data URL.
+   */
+  async completeVisionJson(
+    prompt: string,
+    imageBuffer: Buffer,
+    mimeType: string,
+  ): Promise<Record<string, unknown> | null> {
+    if (!this.config.apiKey) return null;
+
+    // Default verified against the live account (2026-08): qwen3.6-27b is the
+    // multimodal model this key has access to — llama-4 vision returns 404.
+    const visionModel = (process.env['GROQ_VISION_MODEL'] ?? 'qwen/qwen3.6-27b').trim();
+    const dataUrl = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
+
+    try {
+      const response = await fetch(GROQ_CHAT_COMPLETIONS_URL, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${this.config.apiKey}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: visionModel,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: prompt },
+                { type: 'image_url', image_url: { url: dataUrl } },
+              ],
+            },
+          ],
+          temperature: 0.1,
+          // Reasoning-capable models spend completion tokens thinking before
+          // the JSON — 300 truncated mid-object on qwen3.6.
+          max_completion_tokens: 1500,
+          response_format: { type: 'json_object' },
+        }),
+        signal: controller.signal,
+      });
+
+      const payload = (await response.json().catch(() => null)) as GroqChatCompletionResponse | null;
+      if (!response.ok) {
+        const message = payload?.error?.message ?? `Groq vision request failed with status ${response.status}`;
+        throw new Error(message);
+      }
+
+      const content = payload?.choices?.[0]?.message?.content?.trim();
+      if (!content) return null;
+      try {
+        return JSON.parse(content) as Record<string, unknown>;
+      } catch {
+        console.warn('[groq] Failed to parse vision JSON response', { raw: content.slice(0, 200) });
+        return null;
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   private async chat(messages: LlmChatMessage[], jsonMode: boolean): Promise<string | null> {
     if (!this.config.apiKey) {
       return null;

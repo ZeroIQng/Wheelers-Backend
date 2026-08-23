@@ -1,3 +1,4 @@
+import { driverClient } from '@wheleers/db';
 import {
   DriverOfflineEvent,
   DriverOnlineEvent,
@@ -91,12 +92,30 @@ export async function handleDriverMessage(
   }
 
   if (type === 'driver:gps') {
+    // Without a rideId this is an idle position ping. The driver's row used to
+    // be written only at go-online, so matching (and the pickup distance shown
+    // to riders) worked off wherever the driver was when they came online —
+    // hours stale by the afternoon. Idle pings refresh the row and stay off
+    // the gps.stream topic, which is reserved for in-trip telemetry.
+    const rideId = getString(payload, 'rideId');
+    const driverId = resolveDriverId(payload, auth);
+    const lat = requireNumber(payload, 'lat');
+    const lng = requireNumber(payload, 'lng');
+
+    if (!rideId) {
+      await driverClient.updateLocation(driverId, lat, lng);
+      return {
+        type: 'driver:gps:accepted',
+        payload: { rideId: null },
+      };
+    }
+
     const event = GpsUpdateEvent.parse({
       eventType: 'GPS_UPDATE',
-      rideId: requireString(payload, 'rideId'),
-      driverId: resolveDriverId(payload, auth),
-      lat: requireNumber(payload, 'lat'),
-      lng: requireNumber(payload, 'lng'),
+      rideId,
+      driverId,
+      lat,
+      lng,
       speedKmh: getNumber(payload, 'speedKmh'),
       headingDeg: getNumber(payload, 'headingDeg'),
       accuracyM: getNumber(payload, 'accuracyM'),

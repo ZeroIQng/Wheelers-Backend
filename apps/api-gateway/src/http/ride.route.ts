@@ -12,6 +12,7 @@ import { runIdempotentJsonRequest } from "./idempotency";
 import { readJsonBody, sendJson } from "./utils";
 import { getBoolean, getNumber, getRecord, getString, isRecord } from "../utils/object";
 import { buildRideEstimatePricing } from "../pricing/ride-estimate";
+import { logActivity } from "../analytics/log-activity";
 import type { RedisClient } from "../redis/client";
 
 interface RideRouteDeps {
@@ -178,7 +179,7 @@ export async function handleRideEstimateRoute(
   deps: RideRouteDeps,
 ): Promise<void> {
   try {
-    await authenticateHttpUser(req, deps.jwtSecret);
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
 
     const rawBody = await readJsonBody(req);
     if (!isRecord(rawBody)) {
@@ -193,6 +194,12 @@ export async function handleRideEstimateRoute(
       origin: pickup,
       stops,
       destination,
+    });
+
+    logActivity({
+      userId: user.id,
+      eventType: "ride_estimate_requested",
+      metadata: { distanceKm: plannedRoute.distanceKm },
     });
 
     sendJson(res, 200, {
@@ -384,6 +391,12 @@ export async function handleCreateScheduledRideRoute(
       },
     });
 
+    logActivity({
+      userId: user.id,
+      eventType: "scheduled_ride_created",
+      metadata: {},
+    });
+
     sendJson(res, result.statusCode, result.body);
   } catch (error) {
     sendJson(res, 400, {
@@ -456,6 +469,12 @@ export async function handleCancelScheduledRideRoute(
           err,
         ),
       );
+    logActivity({
+      userId: user.id,
+      eventType: "scheduled_ride_cancelled",
+      metadata: { scheduledRideId },
+    });
+
     sendJson(res, 200, {
       cancelled: true,
       scheduledRideId,

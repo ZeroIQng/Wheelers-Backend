@@ -76,6 +76,36 @@ export class GroupRideFaceStorage {
     };
   }
 
+  /**
+   * Server-side upload for channels where the client can't PUT to a presigned
+   * URL itself — the WhatsApp flow downloads the rider's selfie from Meta and
+   * stores it here directly.
+   */
+  async uploadBuffer(params: {
+    matchRequestId: string;
+    userId: string;
+    imageBuffer: Buffer;
+    mimeType: string;
+  }): Promise<StoredGroupRideFaceObject> {
+    const objectKey = this.buildObjectKey(params.matchRequestId, params.userId, params.mimeType);
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: objectKey,
+        Body: params.imageBuffer,
+        ContentType: params.mimeType,
+      }),
+    );
+
+    return {
+      bucket: this.bucket,
+      objectKey,
+      mimeType: params.mimeType,
+      sizeBytes: params.imageBuffer.length,
+      capturedAt: new Date(),
+    };
+  }
+
   async verifyUploadedObject(params: {
     bucket: string;
     objectKey: string;

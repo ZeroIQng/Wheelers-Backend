@@ -341,6 +341,31 @@ export function createRideRequestedConsumer(params: {
       timestamp: new Date().toISOString(),
     });
 
+    // Group rides: the solo RIDE_DRIVER_ASSIGNED above is keyed to the anchor
+    // rideId only, so the other members would never hear a driver was found.
+    // Tell the whole group.
+    if (pending?.group) {
+      await rideEventsProducer.groupRideDriverAssigned({
+        eventType: 'GROUP_RIDE_DRIVER_ASSIGNED',
+        groupId: pending.group.groupId,
+        rideIds: pending.group.rideIds,
+        riderIds: pending.group.riderIds,
+        driverId: event.driverId,
+        driverUserId: event.driverUserId,
+        driverName: counterOfferInfo?.driverName ?? dbDriver?.user?.name ?? 'Driver',
+        driverRating: counterOfferInfo?.driverRating ?? Number(dbDriver?.rating ?? 5.0),
+        vehiclePlate: counterOfferInfo?.vehiclePlate ?? poolDriver?.vehiclePlate ?? dbDriver?.vehiclePlate ?? '',
+        vehicleModel: counterOfferInfo?.vehicleModel ?? poolDriver?.vehicleModel ?? dbDriver?.vehicleModel ?? '',
+        etaSeconds: counterOfferInfo?.etaSeconds ?? 0,
+        timestamp: new Date().toISOString(),
+      }).catch((err) => {
+        console.warn('[ride-service] failed to publish GROUP_RIDE_DRIVER_ASSIGNED', {
+          groupId: pending.group?.groupId,
+          error: (err as any)?.message ?? err,
+        });
+      });
+    }
+
     // Clean up pending state
     state.pendingMatchesByRideId.delete(event.rideId);
   }

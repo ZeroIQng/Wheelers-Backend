@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { analyticsClient } from '@wheleers/db';
+import { activityClient, analyticsClient } from '@wheleers/db';
 import { verifyAdminAuth } from './admin-auth.route';
 import { sendJson } from './utils';
 
@@ -66,4 +66,32 @@ export async function handleAdminRecentRidesRoute(
 
   const rides = await analyticsClient.recentRides();
   sendJson(res, 200, { rides });
+}
+
+export async function handleAdminUserActivityRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: AnalyticsDeps,
+  url: URL,
+): Promise<void> {
+  const auth = await verifyAdminAuth(req, deps);
+  if (!auth) {
+    sendJson(res, 401, { error: 'Unauthorized' });
+    return;
+  }
+
+  const userId = url.searchParams.get('userId');
+  if (!userId) {
+    sendJson(res, 400, { error: 'userId query parameter is required' });
+    return;
+  }
+
+  const limitRaw = Number.parseInt(url.searchParams.get('limit') ?? '', 10);
+  const result = await activityClient.listByUser(userId, {
+    limit: Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : undefined,
+    cursor: url.searchParams.get('cursor') ?? undefined,
+    eventType: url.searchParams.get('type') ?? undefined,
+  });
+
+  sendJson(res, 200, result);
 }

@@ -3,6 +3,7 @@ import { userClient } from "@wheleers/db";
 import { authenticateHttpUser } from "./authenticate";
 import { readJsonBody, sendJson } from "./utils";
 import { getString, isRecord } from "../utils/object";
+import { logActivity } from "../analytics/log-activity";
 
 interface ProfileRouteDeps {
   jwtSecret: string;
@@ -134,6 +135,16 @@ export async function handleUpdateCurrentProfileRoute(
       name,
       email,
       phone,
+    });
+
+    logActivity({
+      userId: user.id,
+      eventType: "profile_updated",
+      metadata: {
+        fields: Object.entries({ username, name, email, phone })
+          .filter(([, value]) => value !== undefined)
+          .map(([key]) => key),
+      },
     });
 
     sendJson(res, 200, {

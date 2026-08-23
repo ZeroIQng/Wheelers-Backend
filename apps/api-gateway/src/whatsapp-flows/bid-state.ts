@@ -35,6 +35,8 @@ export interface WhatsappBid {
   vehiclePlate: string;
   vehicleModel: string;
   etaSeconds: number;
+  /** Driver→pickup km at bid time — shown next to the ETA in the bid list. */
+  distanceKm?: number;
   receivedAt: string;
 }
 
@@ -315,7 +317,7 @@ export async function clearPendingLocation(
 
 // ── Rider booking stage (tracks where the rider is in the booking flow) ───
 
-export type BookingStage = 'awaiting_pickup' | 'awaiting_destination' | 'awaiting_route_confirmation' | 'awaiting_price' | 'awaiting_payment' | 'awaiting_cancel_reason' | 'awaiting_withdrawal_amount' | 'awaiting_withdrawal_bank' | 'awaiting_withdrawal_account' | 'awaiting_withdrawal_confirmation' | 'searching' | 'bidding' | 'editing_pickup' | 'editing_destination';
+export type BookingStage = 'awaiting_pickup' | 'awaiting_destination' | 'awaiting_route_confirmation' | 'awaiting_price' | 'awaiting_payment' | 'awaiting_cancel_reason' | 'awaiting_withdrawal_amount' | 'awaiting_withdrawal_bank' | 'awaiting_withdrawal_account' | 'awaiting_withdrawal_confirmation' | 'searching' | 'bidding' | 'editing_pickup' | 'editing_destination' | 'group_awaiting_pickup' | 'group_awaiting_destination' | 'group_awaiting_confirm' | 'group_awaiting_face_photo';
 
 function bookingStageKey(userId: string): string {
   return `whatsapp:user:${userId}:booking_stage`;
@@ -559,4 +561,85 @@ export async function clearPendingAreaHint(
   userId: string,
 ): Promise<void> {
   await redis.del(areaHintKey(userId));
+}
+
+// ── Pending group ride (WhatsApp group-ride booking flow state) ───────────
+
+export interface PendingGroupRide {
+  pickupLat?: number;
+  pickupLng?: number;
+  pickupAddress?: string;
+  destLat?: number;
+  destLng?: number;
+  destAddress?: string;
+  plannedDistanceKm?: number;
+  plannedDurationSeconds?: number;
+  fareEstimateNgn?: number;
+  /** Set once the match request row exists and we're waiting on the selfie. */
+  matchRequestId?: string;
+  /** Rejected selfie attempts — the flow gives up after a few. */
+  faceAttempts?: number;
+}
+
+const PENDING_GROUP_TTL = 900; // 15 minutes — the selfie step takes a moment
+
+function pendingGroupKey(userId: string): string {
+  return `whatsapp:user:${userId}:pending_group`;
+}
+
+export async function storePendingGroupRide(
+  redis: RedisClient,
+  userId: string,
+  data: PendingGroupRide,
+): Promise<void> {
+  await redis.set(pendingGroupKey(userId), JSON.stringify(data), PENDING_GROUP_TTL);
+}
+
+export async function getPendingGroupRide(
+  redis: RedisClient,
+  userId: string,
+): Promise<PendingGroupRide | null> {
+  const raw = await redis.get(pendingGroupKey(userId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as PendingGroupRide;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearPendingGroupRide(
+  redis: RedisClient,
+  userId: string,
+): Promise<void> {
+  await redis.del(pendingGroupKey(userId));
+}
+
+// Marks a rider as having an active WhatsApp group-ride request, so group
+// events for them are delivered over WhatsApp instead of a websocket.
+
+function groupRequestRiderKey(userId: string): string {
+  return `whatsapp:group_request_rider:${userId}`;
+}
+
+export async function setGroupRequestRider(
+  redis: RedisClient,
+  userId: string,
+  matchRequestId: string,
+): Promise<void> {
+  await redis.set(groupRequestRiderKey(userId), matchRequestId, 86400);
+}
+
+export async function getGroupRequestRider(
+  redis: RedisClient,
+  userId: string,
+): Promise<string | null> {
+  return redis.get(groupRequestRiderKey(userId));
+}
+
+export async function clearGroupRequestRider(
+  redis: RedisClient,
+  userId: string,
+): Promise<void> {
+  await redis.del(groupRequestRiderKey(userId));
 }

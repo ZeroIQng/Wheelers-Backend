@@ -94,6 +94,10 @@ export const RideOfferSentEvent = BaseRideEvent.extend({
   ratePerKmNgn:          z.number(),
   plannedDistanceKm:     z.number().optional(),
   plannedDurationSeconds: z.number().int().optional(),
+  // Driver→pickup at the moment of matching — a seed for the driver app's
+  // live "to pickup" card (the app recomputes from its own GPS after that).
+  pickupDistanceKm:      z.number().optional(),
+  pickupEtaSeconds:      z.number().int().optional(),
   expiresAt:             z.string().datetime(),
   route:                 RouteGeometry.optional(),
   // Group rides ride the same offer pipeline as solo ones. Without these the
@@ -120,6 +124,9 @@ export const RideCounterOfferEvent = BaseRideEvent.extend({
   vehiclePlate:     z.string(),
   vehicleModel:     z.string(),
   etaSeconds:       z.number().int(),
+  // Driver→pickup distance behind etaSeconds, so riders see "2.3 km · 6 min
+  // away" instead of a bare minutes figure.
+  distanceKm:       z.number().optional(),
 });
 
 // Fired by api-gateway when rider picks a driver's offer via WebSocket.

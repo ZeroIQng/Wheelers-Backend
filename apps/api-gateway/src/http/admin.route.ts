@@ -4,6 +4,7 @@ import { isRecord, getString } from '../utils/object';
 import { readJsonBody, sendJson } from './utils';
 import { verifyAdminAuth } from './admin-auth.route';
 import type { DriverKycStorage } from '../storage/driver-kyc-storage';
+import { logActivity } from '../analytics/log-activity';
 import { sendEmail } from '../email/resend';
 import { buildDriverApprovedEmail } from '../email/templates';
 
@@ -234,6 +235,8 @@ export async function handleAdminApproveDriverRoute(
   // must never make the approval itself look like it failed.
   void notifyDriverApproved(driverId, deps.resendApiKey);
 
+  void logAdminDriverAction(driverId, 'admin_driver_approved', { admin: auth.adminName });
+
   sendJson(res, 200, { status: 'APPROVED' });
 }
 
@@ -275,5 +278,31 @@ export async function handleAdminRejectDriverRoute(
 
   // TODO: Send push notification to driver about rejection
 
+  void logAdminDriverAction(driverId, 'admin_driver_rejected', {
+    admin: auth.adminName,
+    reason,
+    rejectedFields,
+  });
+
   sendJson(res, 200, { status: 'REJECTED', reason, rejectedFields });
+}
+
+/**
+ * Admin moderation rows are logged against the DRIVER's user id — that's the
+ * account the action happened to. Resolving it costs one lookup, done
+ * fire-and-forget so moderation never waits on analytics.
+ */
+async function logAdminDriverAction(
+  driverId: string,
+  eventType: string,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const driver = await driverClient.findById(driverId);
+    if (driver?.userId) {
+      logActivity({ userId: driver.userId, eventType, metadata: { ...metadata, driverId } });
+    }
+  } catch {
+    // analytics only — never surface
+  }
 }

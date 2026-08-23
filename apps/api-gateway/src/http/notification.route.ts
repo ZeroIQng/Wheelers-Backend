@@ -3,6 +3,7 @@ import { complianceClient, userClient } from '@wheleers/db';
 import { authenticateHttpUser } from './authenticate';
 import { readJsonBody, sendJson } from './utils';
 import { getString, isRecord } from '../utils/object';
+import { logActivity } from '../analytics/log-activity';
 
 interface NotificationRouteDeps {
   jwtSecret: string;
@@ -97,6 +98,12 @@ export async function handleMarkNotificationsReadRoute(
       notificationIds.length > 0
         ? await complianceClient.markNotificationsRead(user.id, notificationIds)
         : await complianceClient.markAllNotificationsRead(user.id);
+
+    logActivity({
+      userId: user.id,
+      eventType: 'notifications_read',
+      metadata: { count: result.count },
+    });
 
     sendJson(res, 200, {
       updatedCount: result.count,

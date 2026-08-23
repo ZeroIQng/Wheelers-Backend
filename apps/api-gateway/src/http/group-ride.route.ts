@@ -7,7 +7,8 @@ import {
 import type {
   GoogleMapsRoutePlanner,
 } from '@wheleers/config';
-import type { GroupRideReadyForMatchEvent, GroupRideMatchCancelledEvent } from '@wheleers/kafka-schemas';
+import type { GroupRideMatchCancelledEvent } from '@wheleers/kafka-schemas';
+import { buildReadyForMatchEvent } from '../group-ride/ready-event';
 import { authenticateHttpUser } from './authenticate';
 import { runIdempotentJsonRequest } from './idempotency';
 import { readJsonBody, sendJson } from './utils';
@@ -235,38 +236,6 @@ async function buildMatchedRiders(
       destinationAddress: item.destAddress,
       status: item.status,
     }));
-}
-
-function buildReadyForMatchEvent(
-  request: NonNullable<Awaited<ReturnType<typeof groupRideClient.findMatchRequestById>>>,
-): GroupRideReadyForMatchEvent {
-  if (!request.faceVerification) {
-    throw new Error('Face verification record is required before matching.');
-  }
-
-  return {
-    eventType: 'GROUP_RIDE_READY_FOR_MATCH',
-    rideId: request.id,
-    riderId: request.userId,
-    faceVerificationId: request.faceVerification.id,
-    pickup: {
-      lat: request.pickupLat,
-      lng: request.pickupLng,
-      address: request.pickupAddress,
-    },
-    destination: {
-      lat: request.destLat,
-      lng: request.destLng,
-      address: request.destAddress,
-    },
-    stops: Array.isArray(request.stops) ? (request.stops as any) : [],
-    plannedDistanceKm: request.plannedDistanceKm ?? undefined,
-    plannedDurationSeconds: request.plannedDurationSeconds ?? undefined,
-    fareEstimateNgn: decimalToNumber(request.fareEstimateNgn) ?? undefined,
-    genderPreference: serializeGenderPreference(request.genderPreference),
-    paymentMethod: 'wallet_balance',
-    timestamp: new Date().toISOString(),
-  };
 }
 
 function buildCancelledEvent(

@@ -4,6 +4,7 @@ import type { RideEnv } from '@wheleers/config';
 import type { RideRequestedEvent } from '@wheleers/kafka-schemas';
 
 import type { OnlineDriver } from '../index';
+import { haversineKm } from '../utils/geo';
 
 export type MatchDriverResult =
   | { ok: true; drivers: OnlineDriver[] }
@@ -32,7 +33,7 @@ export async function matchDriver(params: {
     if (candidates.length > 0) {
       const drivers: OnlineDriver[] = candidates.map((d) => {
         const inMemory = onlineDrivers.get(d.id);
-        return inMemory ?? {
+        const base = inMemory ?? {
           driverId: d.id,
           userId: d.userId,
           lat: d.lat,
@@ -40,6 +41,7 @@ export async function matchDriver(params: {
           vehiclePlate: d.vehiclePlate ?? '',
           vehicleModel: d.vehicleModel ?? '',
         };
+        return { ...base, distanceKm: d.distanceKm };
       });
       return { ok: true, drivers };
     }
@@ -63,22 +65,8 @@ export async function matchDriver(params: {
     .filter(({ distanceKm }) => distanceKm <= radiusKm)
     .sort((a, b) => a.distanceKm - b.distanceKm)
     .slice(0, limit)
-    .map(({ driver }) => driver);
+    .map(({ driver, distanceKm }) => ({ ...driver, distanceKm }));
 
   if (drivers.length === 0) return { ok: false, reason: 'no_drivers_in_radius' };
   return { ok: true, drivers };
-}
-
-function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const toRad = (n: number) => (n * Math.PI) / 180;
-  const r = 6371;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return r * c;
 }

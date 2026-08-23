@@ -2,6 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import type { IncomingMessage, ServerResponse } from 'http';
 import {
   driverClient,
+  groupRideClient,
   walletClient,
   virtualAccountClient,
   withdrawalClient,
@@ -30,6 +31,12 @@ import { WhatsappBotService } from '../LLM/whatsapp-bot.service';
 import { GroqClient } from '../LLM/groq.client';
 import { parseRideIntent } from '../LLM/ride-intent-parser';
 import { geocodeAddress, reverseGeocode } from '../LLM/geocoding';
+import { verifySelfiePhoto } from '../LLM/face-check';
+import { downloadMetaMedia } from '../whatsapp-flows/meta-media';
+import { buildReadyForMatchEvent } from '../group-ride/ready-event';
+import { findGroupRideSuggestion } from '../group-ride/suggestion';
+import { logActivity } from '../analytics/log-activity';
+import type { GroupRideFaceStorage } from '../storage/group-ride-face-storage';
 import {
   storeWhatsappRide,
   setActiveRide,
@@ -56,6 +63,12 @@ import {
   storePendingRoute,
   getPendingRoute,
   clearPendingRoute,
+  storePendingGroupRide,
+  getPendingGroupRide,
+  clearPendingGroupRide,
+  setGroupRequestRider,
+  getGroupRequestRider,
+  clearGroupRequestRider,
   storePendingAccept,
   getPendingAccept,
   clearPendingAccept,
@@ -87,6 +100,7 @@ export interface MetaWhatsappRouteDeps {
   groqTimeoutMs: number;
   appBaseUrl?: string;
   driverKycStorage?: DriverKycStorage;
+  groupRideFaceStorage?: GroupRideFaceStorage;
 }
 
 /* ─── Meta Cloud API helpers ─── */
@@ -232,6 +246,9 @@ interface MetaMessageInfo {
   isLocation: boolean;
   locationLat?: number;
   locationLng?: number;
+  isImage?: boolean;
+  imageMediaId?: string;
+  imageMimeType?: string;
 }
 
 function extractMetaMessage(body: unknown): MetaMessageInfo | null {
@@ -291,6 +308,23 @@ function extractMetaMessage(body: unknown): MetaMessageInfo | null {
           profileName,
           messageBody: (text?.body as string | undefined)?.trim() ?? '',
           isLocation: false,
+        };
+      }
+
+      // Handle image messages — carried through for the group-ride selfie
+      // step; everywhere else the empty body keeps the old drop behavior.
+      if (msg.type === 'image') {
+        const image = msg.image as Record<string, unknown> | undefined;
+        const mediaId = typeof image?.id === 'string' ? image.id : undefined;
+        return {
+          messageId: wamid,
+          phone,
+          profileName,
+          messageBody: '',
+          isLocation: false,
+          isImage: true,
+          imageMediaId: mediaId,
+          imageMimeType: typeof image?.mime_type === 'string' ? image.mime_type : undefined,
         };
       }
 
@@ -462,6 +496,21 @@ async function planRouteSafe(
 
 const ROUTE_PLAN_FAILED_REPLY =
   'Could not find a driving route between those two points. 😕\n\nPlease double-check the addresses, or share a location pin 📍';
+
+/**
+ * Every normal booking is a potential group ride. Appended to the fare quote
+ * when open group requests share this corridor; empty string otherwise, so
+ * the suggestion never blocks or delays the normal flow's message.
+ */
+async function buildGroupSuggestionLine(
+  userId: string,
+  pickup: { lat: number; lng: number },
+  destination: { lat: number; lng: number },
+): Promise<string> {
+  const suggestion = await findGroupRideSuggestion(userId, pickup, destination);
+  if (!suggestion) return '';
+  return `\n\n💡 ${suggestion.count} rider${suggestion.count === 1 ? ' is' : 's are'} already heading your way. Reply *group* to share the ride and split the fare! 👥`;
+}
 
 function isCancelCommand(message: string): boolean {
   const m = message.trim().toLowerCase();
@@ -725,6 +774,446 @@ async function submitWhatsappWithdrawal(params: {
   }
 }
 
+/* ─── Group ride flow (plain chat — no Meta interactive flows) ─── */
+
+function isGroupCancelCommand(message: string): boolean {
+  const m = message.trim().toLowerCase();
+  return /\b(cancel|leave|stop|end)\b.*\bgroup\b/.test(m) || /\bgroup\b.*\b(cancel|leave|stop|end)\b/.test(m);
+}
+
+function isGroupStatusCommand(message: string): boolean {
+  const m = message.trim().toLowerCase();
+  return /\bgroup\b.*\bstatus\b/.test(m) || /\bstatus\b.*\bgroup\b/.test(m);
+}
+
+const GROUP_SELFIE_PROMPT = [
+  'Quick safety check 🤳',
+  '',
+  'Send a clear *selfie of your face* so other riders know who they are sharing with.',
+  '',
+  'Just your face, good lighting, no sunglasses. Reply *cancel group* to stop.',
+].join('\n');
+
+const MAX_SELFIE_ATTEMPTS = 3;
+
+type WhatsappUser = { id: string };
+
+async function replyAndLog(
+  deps: MetaWhatsappRouteDeps,
+  phone: string,
+  userMessage: string,
+  reply: string,
+): Promise<void> {
+  await appendWhatsappConversation(deps.redisClient, phone, [
+    { role: 'user', content: userMessage },
+    { role: 'assistant', content: reply },
+  ]);
+  await sendMetaReply(deps, phone, reply);
+}
+
+/** Entry: "group ride" intent. Pre-filled locations skip straight ahead. */
+async function startGroupRideFlow(
+  deps: MetaWhatsappRouteDeps,
+  user: WhatsappUser,
+  phone: string,
+  incomingMessage: string,
+  prefill?: {
+    pickup?: { lat: number; lng: number; address: string };
+    destination?: { lat: number; lng: number; address: string };
+  },
+): Promise<void> {
+  const pending = {
+    ...(prefill?.pickup
+      ? {
+          pickupLat: prefill.pickup.lat,
+          pickupLng: prefill.pickup.lng,
+          pickupAddress: prefill.pickup.address,
+        }
+      : {}),
+    ...(prefill?.destination
+      ? {
+          destLat: prefill.destination.lat,
+          destLng: prefill.destination.lng,
+          destAddress: prefill.destination.address,
+        }
+      : {}),
+  };
+  await storePendingGroupRide(deps.redisClient, user.id, pending);
+
+  if (pending.pickupLat !== undefined && pending.destLat !== undefined) {
+    await presentGroupQuote(deps, user, phone, incomingMessage);
+    return;
+  }
+
+  if (pending.pickupLat !== undefined) {
+    await setBookingStage(deps.redisClient, user.id, 'group_awaiting_destination');
+    await replyAndLog(deps, phone, incomingMessage,
+      `👥 *Group ride!* Riders heading the same way share one car and split the fare.\n\nPickup: *${pending.pickupAddress}*\n\nWhere are you headed? Type the destination or share a pin 📍`);
+    return;
+  }
+
+  await setBookingStage(deps.redisClient, user.id, 'group_awaiting_pickup');
+  await replyAndLog(deps, phone, incomingMessage,
+    `👥 *Group ride!* Riders heading the same way share one car and split the fare.\n\nWhere should we pick you up? Share a location pin 📍 or type the address.`);
+}
+
+/** Both locations known: plan the route, quote it, ask for one yes. */
+async function presentGroupQuote(
+  deps: MetaWhatsappRouteDeps,
+  user: WhatsappUser,
+  phone: string,
+  incomingMessage: string,
+): Promise<void> {
+  const pending = await getPendingGroupRide(deps.redisClient, user.id);
+  if (
+    !pending ||
+    pending.pickupLat === undefined || pending.pickupLng === undefined ||
+    pending.destLat === undefined || pending.destLng === undefined
+  ) {
+    await clearBookingStage(deps.redisClient, user.id);
+    await replyAndLog(deps, phone, incomingMessage,
+      'Session expired — type *group ride* to start again.');
+    return;
+  }
+
+  const pickup = { lat: pending.pickupLat, lng: pending.pickupLng, address: pending.pickupAddress ?? '' };
+  const destination = { lat: pending.destLat, lng: pending.destLng, address: pending.destAddress ?? '' };
+
+  const plannedRoute = await planRouteSafe(deps, pickup, destination);
+  if (!plannedRoute) {
+    await replyAndLog(deps, phone, incomingMessage, ROUTE_PLAN_FAILED_REPLY);
+    return;
+  }
+
+  await storePendingGroupRide(deps.redisClient, user.id, {
+    ...pending,
+    plannedDistanceKm: plannedRoute.distanceKm,
+    plannedDurationSeconds: plannedRoute.durationSeconds,
+    fareEstimateNgn: plannedRoute.suggestedFareNgn,
+  });
+  await setBookingStage(deps.redisClient, user.id, 'group_awaiting_confirm');
+
+  const durationMin = Math.ceil(plannedRoute.durationSeconds / 60);
+  await replyAndLog(deps, phone, incomingMessage, [
+    `👥 *Group ride*`,
+    ``,
+    `Pickup: *${pickup.address}*`,
+    `Destination: *${destination.address}*`,
+    `${plannedRoute.distanceKm.toFixed(1)} km · ~${durationMin} min`,
+    ``,
+    `Solo fare estimate: ₦${plannedRoute.suggestedFareNgn.toLocaleString()}`,
+    `You'll *split the fare* with riders matched along your route — paid from your Naira wallet.`,
+    ``,
+    `Reply *yes* to continue, or *cancel* to stop.`,
+  ].join('\n'));
+}
+
+/** Text messages while in one of the group stages. */
+async function handleGroupStageText(
+  deps: MetaWhatsappRouteDeps,
+  user: WhatsappUser,
+  phone: string,
+  incomingMessage: string,
+  stage: 'group_awaiting_pickup' | 'group_awaiting_destination' | 'group_awaiting_confirm' | 'group_awaiting_face_photo',
+): Promise<void> {
+  if (isCancelCommand(incomingMessage) || isGroupCancelCommand(incomingMessage)) {
+    await cancelGroupRide(deps, user, phone, incomingMessage);
+    return;
+  }
+
+  if (stage === 'group_awaiting_pickup' || stage === 'group_awaiting_destination') {
+    const typed = stripDirectionPrefix(incomingMessage);
+    const geo = await geocodeAddress(deps.googleMapsApiKey, typed);
+    if (!geo) {
+      await replyAndLog(deps, phone, incomingMessage,
+        `Could not find "${typed}" on the map.\n\nPlease type a more specific address or share a location pin 📍`);
+      return;
+    }
+    await applyGroupLocation(deps, user, phone, incomingMessage, stage, {
+      lat: geo.lat,
+      lng: geo.lng,
+      address: geo.formattedAddress,
+    });
+    return;
+  }
+
+  if (stage === 'group_awaiting_confirm') {
+    if (/^(yes|yeah|yea|yep|ok|okay|confirm|y)\b/i.test(incomingMessage.trim())) {
+      await createGroupMatchRequest(deps, user, phone, incomingMessage);
+    } else {
+      await replyAndLog(deps, phone, incomingMessage,
+        'Reply *yes* to continue with the group ride, or *cancel* to stop.');
+    }
+    return;
+  }
+
+  // group_awaiting_face_photo — they typed instead of sending a photo
+  await replyAndLog(deps, phone, incomingMessage, GROUP_SELFIE_PROMPT);
+}
+
+/** Location pins while in a group location stage. */
+async function applyGroupLocation(
+  deps: MetaWhatsappRouteDeps,
+  user: WhatsappUser,
+  phone: string,
+  incomingMessage: string,
+  stage: 'group_awaiting_pickup' | 'group_awaiting_destination',
+  point: { lat: number; lng: number; address: string },
+): Promise<void> {
+  const pending = (await getPendingGroupRide(deps.redisClient, user.id)) ?? {};
+
+  if (stage === 'group_awaiting_pickup') {
+    await storePendingGroupRide(deps.redisClient, user.id, {
+      ...pending,
+      pickupLat: point.lat,
+      pickupLng: point.lng,
+      pickupAddress: point.address,
+    });
+    if (pending.destLat !== undefined) {
+      await presentGroupQuote(deps, user, phone, incomingMessage);
+      return;
+    }
+    await setBookingStage(deps.redisClient, user.id, 'group_awaiting_destination');
+    await replyAndLog(deps, phone, incomingMessage,
+      `📍 Pickup: *${point.address}*\n\nWhere are you headed? Type the destination or share a pin 📍`);
+    return;
+  }
+
+  await storePendingGroupRide(deps.redisClient, user.id, {
+    ...pending,
+    destLat: point.lat,
+    destLng: point.lng,
+    destAddress: point.address,
+  });
+  await presentGroupQuote(deps, user, phone, incomingMessage);
+}
+
+/** "yes" on the quote: create the match request, then ask for the selfie. */
+async function createGroupMatchRequest(
+  deps: MetaWhatsappRouteDeps,
+  user: WhatsappUser,
+  phone: string,
+  incomingMessage: string,
+): Promise<void> {
+  const pending = await getPendingGroupRide(deps.redisClient, user.id);
+  if (
+    !pending ||
+    pending.pickupLat === undefined || pending.pickupLng === undefined ||
+    pending.destLat === undefined || pending.destLng === undefined
+  ) {
+    await clearBookingStage(deps.redisClient, user.id);
+    await replyAndLog(deps, phone, incomingMessage,
+      'Session expired — type *group ride* to start again.');
+    return;
+  }
+
+  try {
+    const request = await groupRideClient.createMatchRequest({
+      userId: user.id,
+      pickupLat: pending.pickupLat,
+      pickupLng: pending.pickupLng,
+      pickupAddress: pending.pickupAddress ?? '',
+      destLat: pending.destLat,
+      destLng: pending.destLng,
+      destAddress: pending.destAddress ?? '',
+      plannedDistanceKm: pending.plannedDistanceKm,
+      plannedDurationSeconds: pending.plannedDurationSeconds,
+      fareEstimateNgn: pending.fareEstimateNgn,
+    });
+
+    await storePendingGroupRide(deps.redisClient, user.id, {
+      ...pending,
+      matchRequestId: request.id,
+      faceAttempts: 0,
+    });
+    await setGroupRequestRider(deps.redisClient, user.id, request.id);
+    await setBookingStage(deps.redisClient, user.id, 'group_awaiting_face_photo');
+    await replyAndLog(deps, phone, incomingMessage, GROUP_SELFIE_PROMPT);
+  } catch (error) {
+    console.error('[whatsapp][group-ride] createMatchRequest failed', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await replyAndLog(deps, phone, incomingMessage,
+      'Could not start your group ride right now. Please try again in a moment.');
+  }
+}
+
+/** The selfie arrives: guardrail-check it, store it, mark ready for matching. */
+async function handleGroupSelfie(
+  deps: MetaWhatsappRouteDeps,
+  user: WhatsappUser,
+  phone: string,
+  mediaId: string | undefined,
+): Promise<void> {
+  const pending = await getPendingGroupRide(deps.redisClient, user.id);
+  if (!pending?.matchRequestId) {
+    await clearBookingStage(deps.redisClient, user.id);
+    await replyAndLog(deps, phone, '[Photo]',
+      'Session expired — type *group ride* to start again.');
+    return;
+  }
+
+  if (!mediaId || !deps.metaAccessToken || !deps.groupRideFaceStorage) {
+    console.warn('[whatsapp][group-ride] selfie received but media pipeline unavailable', {
+      hasMediaId: Boolean(mediaId),
+      hasToken: Boolean(deps.metaAccessToken),
+      hasStorage: Boolean(deps.groupRideFaceStorage),
+    });
+    await replyAndLog(deps, phone, '[Photo]',
+      'Could not read that photo. Please try sending it again.');
+    return;
+  }
+
+  let media;
+  try {
+    media = await downloadMetaMedia(deps.metaAccessToken, mediaId);
+  } catch (error) {
+    console.warn('[whatsapp][group-ride] media download failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await replyAndLog(deps, phone, '[Photo]',
+      'Could not read that photo. Please send a clear JPEG or PNG selfie (under 5 MB).');
+    return;
+  }
+
+  // Guardrail: a real human face, not a pet, meme, or screenshot.
+  const groq = new GroqClient({
+    apiKey: deps.groqApiKey,
+    model: deps.groqModel,
+    timeoutMs: deps.groqTimeoutMs,
+  });
+  const verdict = await verifySelfiePhoto(groq, media.buffer, media.mimeType);
+  if (!verdict.accepted) {
+    const attempts = (pending.faceAttempts ?? 0) + 1;
+    if (attempts >= MAX_SELFIE_ATTEMPTS) {
+      await cancelGroupRide(deps, user, phone, '[Photo]');
+      return;
+    }
+    await storePendingGroupRide(deps.redisClient, user.id, { ...pending, faceAttempts: attempts });
+    await replyAndLog(deps, phone, '[Photo]',
+      `That doesn't look like a clear selfie of you 🤳\n\nPlease send a real photo of *your face* — no pets, cartoons, or screenshots. (${MAX_SELFIE_ATTEMPTS - attempts} tr${MAX_SELFIE_ATTEMPTS - attempts === 1 ? 'y' : 'ies'} left)`);
+    return;
+  }
+
+  try {
+    const stored = await deps.groupRideFaceStorage.uploadBuffer({
+      matchRequestId: pending.matchRequestId,
+      userId: user.id,
+      imageBuffer: media.buffer,
+      mimeType: media.mimeType,
+    });
+
+    await groupRideClient.upsertFaceVerificationUpload({
+      matchRequestId: pending.matchRequestId,
+      userId: user.id,
+      bucket: stored.bucket,
+      objectKey: stored.objectKey,
+      mimeType: stored.mimeType,
+      capturedAt: stored.capturedAt,
+    });
+
+    const completed = await groupRideClient.completeFaceVerificationAndMarkReady({
+      matchRequestId: pending.matchRequestId,
+      sizeBytes: stored.sizeBytes,
+      capturedAt: stored.capturedAt,
+    });
+
+    await deps.publisher.publishGroupRideEvent(buildReadyForMatchEvent(completed.request));
+
+    await clearPendingGroupRide(deps.redisClient, user.id);
+    await clearBookingStage(deps.redisClient, user.id);
+
+    await replyAndLog(deps, phone, '[Selfie]', [
+      `✅ *You're in the matching pool!*`,
+      ``,
+      `We're looking for riders heading your way. You'll get a message here the moment your group is formed.`,
+      ``,
+      `Reply *group status* to check, or *cancel group* to leave the pool.`,
+    ].join('\n'));
+  } catch (error) {
+    console.error('[whatsapp][group-ride] face upload failed', {
+      userId: user.id,
+      matchRequestId: pending.matchRequestId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await replyAndLog(deps, phone, '[Photo]',
+      'Something went wrong saving your photo. Please send it again.');
+  }
+}
+
+async function cancelGroupRide(
+  deps: MetaWhatsappRouteDeps,
+  user: WhatsappUser,
+  phone: string,
+  incomingMessage: string,
+): Promise<void> {
+  const pending = await getPendingGroupRide(deps.redisClient, user.id);
+  const matchRequestId = pending?.matchRequestId ?? (await getGroupRequestRider(deps.redisClient, user.id));
+
+  if (matchRequestId) {
+    try {
+      await groupRideClient.cancelMatchRequestForUser(matchRequestId, user.id, 'rider_cancelled');
+      await deps.publisher.publishGroupRideEvent({
+        eventType: 'GROUP_RIDE_MATCH_CANCELLED',
+        rideId: matchRequestId,
+        riderId: user.id,
+        reason: 'rider_cancelled',
+        timestamp: new Date().toISOString(),
+      });
+    } catch {
+      // Already terminal (grouped/expired) — nothing to release.
+    }
+  }
+
+  await clearPendingGroupRide(deps.redisClient, user.id);
+  await clearGroupRequestRider(deps.redisClient, user.id);
+  await clearBookingStage(deps.redisClient, user.id);
+  await replyAndLog(deps, phone, incomingMessage,
+    'Group ride cancelled. Type *group ride* whenever you want to start another, or book a normal ride any time. 🚗');
+}
+
+async function sendGroupStatus(
+  deps: MetaWhatsappRouteDeps,
+  user: WhatsappUser,
+  phone: string,
+  incomingMessage: string,
+): Promise<void> {
+  const pending = await getPendingGroupRide(deps.redisClient, user.id);
+  const matchRequestId = pending?.matchRequestId ?? (await getGroupRequestRider(deps.redisClient, user.id));
+
+  if (!matchRequestId) {
+    await replyAndLog(deps, phone, incomingMessage,
+      'No group ride in progress. Type *group ride* to start one! 👥');
+    return;
+  }
+
+  const request = await groupRideClient.findMatchRequestByIdForUser(matchRequestId, user.id).catch(() => null);
+  if (!request) {
+    await clearGroupRequestRider(deps.redisClient, user.id);
+    await replyAndLog(deps, phone, incomingMessage,
+      'No group ride in progress. Type *group ride* to start one! 👥');
+    return;
+  }
+
+  const statusLine: Record<string, string> = {
+    PENDING_FACE_UPLOAD: 'Waiting for your selfie 🤳 — send a clear photo of your face.',
+    READY_FOR_MATCH: 'In the matching pool — looking for riders heading your way. 👀',
+    MATCHING: 'Matching now — almost there! 👀',
+    GROUPED: 'Group found! 🎉 Getting your route ready.',
+    BOOKED: 'Group booked — finding your driver now. 🚗',
+    EXPIRED: 'That request expired. Type *group ride* to start a new one.',
+    CANCELLED: 'That request was cancelled. Type *group ride* to start a new one.',
+  };
+
+  await replyAndLog(deps, phone, incomingMessage, [
+    `👥 *Group ride status*`,
+    ``,
+    `Route: ${request.pickupAddress} → ${request.destAddress}`,
+    statusLine[request.status] ?? `Status: ${request.status}`,
+  ].join('\n'));
+}
+
 /* ─── Main POST webhook handler ─── */
 
 export async function handleMetaWhatsappWebhookRoute(
@@ -781,6 +1270,21 @@ export async function handleMetaWhatsappWebhookRoute(
     const activeRideId = await getActiveRide(deps.redisClient, user.id);
     const bookingStage = await getBookingStage(deps.redisClient, user.id);
 
+    // Durable per-user record of every WhatsApp interaction — the Redis
+    // conversation store caps at 10 messages and expires in 7 days.
+    logActivity({
+      userId: user.id,
+      eventType: 'whatsapp_message_in',
+      source: 'whatsapp',
+      metadata: {
+        isLocation,
+        isImage: msgInfo.isImage ?? false,
+        stage: bookingStage,
+        hasActiveRide: Boolean(activeRideId),
+        preview: incomingMessage.slice(0, 160),
+      },
+    });
+
     // ── Cancellation reason — collect this before clearing the booking ──
     if (bookingStage === 'awaiting_cancel_reason') {
       const reason = parseCancellationReason(incomingMessage);
@@ -823,6 +1327,51 @@ export async function handleMetaWhatsappWebhookRoute(
         { role: 'assistant', content: reply },
       ]);
       await sendMetaReply(deps, phone, reply);
+      return;
+    }
+
+    // ── Group ride: selfie images and stage dispatch ─────────────────────
+    if (msgInfo.isImage) {
+      if (bookingStage === 'group_awaiting_face_photo') {
+        await handleGroupSelfie(deps, user, phone, msgInfo.imageMediaId);
+      } else {
+        await sendMetaReply(deps, phone,
+          'Photos are only used for group-ride selfie verification right now. Type *group ride* to start one! 👥');
+      }
+      return;
+    }
+
+    if (!isLocation && isGroupStatusCommand(incomingMessage)) {
+      await sendGroupStatus(deps, user, phone, incomingMessage);
+      return;
+    }
+
+    if (!isLocation && isGroupCancelCommand(incomingMessage)) {
+      await cancelGroupRide(deps, user, phone, incomingMessage);
+      return;
+    }
+
+    // A bare "group ride" typed mid-booking must start the group flow — the
+    // stage handlers below would otherwise geocode it as an address. Longer
+    // phrasings ("group ride from Yaba to Lekki") fall through to the intent
+    // parser, which extracts the locations as prefills.
+    if (
+      !isLocation &&
+      !activeRideId &&
+      /^(?:i\s+(?:wanna|want\s+to)\s+)?(?:book\s+(?:a\s+)?)?(?:group|shared)\s*ride[\s!.]*$/i.test(incomingMessage.trim())
+    ) {
+      await startGroupRideFlow(deps, user, phone, incomingMessage);
+      return;
+    }
+
+    if (
+      !isLocation &&
+      (bookingStage === 'group_awaiting_pickup' ||
+        bookingStage === 'group_awaiting_destination' ||
+        bookingStage === 'group_awaiting_confirm' ||
+        bookingStage === 'group_awaiting_face_photo')
+    ) {
+      await handleGroupStageText(deps, user, phone, incomingMessage, bookingStage);
       return;
     }
 
@@ -1588,6 +2137,17 @@ export async function handleMetaWhatsappWebhookRoute(
       const reverseGeo = await reverseGeocode(deps.googleMapsApiKey, locationLat, locationLng);
       const address = reverseGeo?.formattedAddress ?? `${locationLat.toFixed(4)}, ${locationLng.toFixed(4)}`;
 
+      // ── Group ride pickup/destination pins ──
+      if (bookingStage === 'group_awaiting_pickup' || bookingStage === 'group_awaiting_destination') {
+        await applyGroupLocation(
+          deps, user, phone,
+          `[Shared location: ${address}]`,
+          bookingStage,
+          { lat: locationLat, lng: locationLng, address },
+        );
+        return;
+      }
+
       // ── Editing pickup/destination via location pin ──
       if (bookingStage === 'editing_pickup' || bookingStage === 'editing_destination') {
         const pendingRoute = await getPendingRoute(deps.redisClient, user.id);
@@ -1744,6 +2304,7 @@ export async function handleMetaWhatsappWebhookRoute(
       });
       await setBookingStage(deps.redisClient, user.id, 'awaiting_price');
 
+      const groupSuggestion = await buildGroupSuggestionLine(user.id, pickup, destination);
       const reply = [
         `Pickup: *${pickup.address}*`,
         ``,
@@ -1755,7 +2316,7 @@ export async function handleMetaWhatsappWebhookRoute(
         ``,
         `Negotiate your price and we'll find you a driver!`,
         `Send your offer (e.g. *${suggestedFare.toLocaleString()}* or *${Math.round(suggestedFare * 0.85).toLocaleString()}*)`,
-      ].join('\n');
+      ].join('\n') + groupSuggestion;
 
       await appendWhatsappConversation(deps.redisClient, phone, [
         { role: 'user', content: `[Shared destination location: ${address}]` },
@@ -1931,6 +2492,7 @@ export async function handleMetaWhatsappWebhookRoute(
       });
       await setBookingStage(deps.redisClient, user.id, 'awaiting_price');
 
+      const groupSuggestion = await buildGroupSuggestionLine(user.id, pickup, destination);
       const reply = [
         `Pickup: *${pickup.address}*`,
         ``,
@@ -1942,7 +2504,7 @@ export async function handleMetaWhatsappWebhookRoute(
         ``,
         `Negotiate your price and we'll find you a driver!`,
         `Send your offer (e.g. *${suggestedFare.toLocaleString()}* or *${Math.round(suggestedFare * 0.85).toLocaleString()}*)`,
-      ].join('\n');
+      ].join('\n') + groupSuggestion;
 
       await appendWhatsappConversation(deps.redisClient, phone, [
         { role: 'user', content: incomingMessage },
@@ -2200,6 +2762,24 @@ export async function handleMetaWhatsappWebhookRoute(
     if (bookingStage === 'awaiting_price' && !isLocation) {
       const pendingRoute = await getPendingRoute(deps.redisClient, user.id);
       if (pendingRoute) {
+        // ── "group" — switch this quote into the group-ride flow ──
+        if (/^group(\s*ride)?$/i.test(incomingMessage.trim())) {
+          await clearPendingRoute(deps.redisClient, user.id);
+          await startGroupRideFlow(deps, user, phone, incomingMessage, {
+            pickup: {
+              lat: pendingRoute.pickupLat,
+              lng: pendingRoute.pickupLng,
+              address: pendingRoute.pickupAddress,
+            },
+            destination: {
+              lat: pendingRoute.destLat,
+              lng: pendingRoute.destLng,
+              address: pendingRoute.destAddress,
+            },
+          });
+          return;
+        }
+
         // ── Direct edit commands: "edit pickup" / "edit destination" ──
         if (isEditPickupCommand(incomingMessage) || isEditDestinationCommand(incomingMessage)) {
           const isPickup = isEditPickupCommand(incomingMessage);
@@ -2576,6 +3156,25 @@ export async function handleMetaWhatsappWebhookRoute(
       return;
     }
 
+    if (rideIntent?.intent === 'group_ride_request') {
+      const pickupGeo = rideIntent.pickup?.specific && rideIntent.pickup.address.trim()
+        ? await geocodeAddress(deps.googleMapsApiKey, rideIntent.pickup.address)
+        : null;
+      const destGeo = rideIntent.destination?.specific && rideIntent.destination.address.trim()
+        ? await geocodeAddress(deps.googleMapsApiKey, rideIntent.destination.address)
+        : null;
+
+      await startGroupRideFlow(deps, user, phone, incomingMessage, {
+        ...(pickupGeo
+          ? { pickup: { lat: pickupGeo.lat, lng: pickupGeo.lng, address: pickupGeo.formattedAddress } }
+          : {}),
+        ...(destGeo
+          ? { destination: { lat: destGeo.lat, lng: destGeo.lng, address: destGeo.formattedAddress } }
+          : {}),
+      });
+      return;
+    }
+
     if (rideIntent?.intent === 'ride_request') {
       const hasPickup = rideIntent.pickup?.specific && rideIntent.pickup.address.trim();
       const hasDestination = rideIntent.destination?.specific && rideIntent.destination.address.trim();
@@ -2696,6 +3295,7 @@ export async function handleMetaWhatsappWebhookRoute(
 
         await setBookingStage(deps.redisClient, user.id, 'awaiting_price');
 
+        const groupSuggestion = await buildGroupSuggestionLine(user.id, pickup, destination);
         const reply = [
           `Pickup: *${pickup.address}*`,
           ``,
@@ -2707,7 +3307,7 @@ export async function handleMetaWhatsappWebhookRoute(
           ``,
           `Negotiate your price and we'll find you a driver!`,
           `Send your offer (e.g. *${suggestedFare.toLocaleString()}* or *${Math.round(suggestedFare * 0.85).toLocaleString()}*)`,
-        ].join('\n');
+        ].join('\n') + groupSuggestion;
 
         await appendWhatsappConversation(deps.redisClient, phone, [
           { role: 'user', content: incomingMessage },

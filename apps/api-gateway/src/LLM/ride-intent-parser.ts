@@ -8,7 +8,7 @@ export interface RideLocation {
 }
 
 export interface RideIntent {
-  intent: 'ride_request' | 'ride_status' | 'cancel_ride' | 'edit_pickup' | 'edit_destination' | 'other';
+  intent: 'ride_request' | 'group_ride_request' | 'ride_status' | 'cancel_ride' | 'edit_pickup' | 'edit_destination' | 'other';
   pickup: RideLocation | null;
   destination: RideLocation | null;
   offerNgn: number | null;
@@ -18,7 +18,7 @@ export interface RideIntent {
 const RIDE_INTENT_SYSTEM_PROMPT = `
 You extract ride request details from WhatsApp messages.
 Return ONLY a JSON object with these fields:
-- "intent": "ride_request" | "ride_status" | "cancel_ride" | "edit_pickup" | "edit_destination" | "other"
+- "intent": "ride_request" | "group_ride_request" | "ride_status" | "cancel_ride" | "edit_pickup" | "edit_destination" | "other"
 - "pickup": { "address": string, "area": string, "specific": boolean } | null
 - "destination": { "address": string, "area": string, "specific": boolean } | null
 - "offerNgn": number | null
@@ -31,7 +31,9 @@ Return ONLY a JSON object with these fields:
 - Examples of NOT SPECIFIC (false): "Lekki", "VI", "Ikeja", "San Francisco", "downtown", "Abuja"
 
 Rules:
-- If the message is about booking a ride, going somewhere, or requesting a trip → "ride_request"
+- If the user wants a GROUP ride / shared ride / to share a ride and split the fare with other riders → "group_ride_request"
+  (e.g. "group ride", "shared ride", "I wanna book a group ride", "share a ride"). Fill pickup/destination like ride_request if mentioned.
+- If the message is about booking a normal ride, going somewhere, or requesting a trip → "ride_request"
 - If the user wants to CHANGE/EDIT/UPDATE only the pickup location → "edit_pickup"
   Set "pickup" to the NEW pickup location. Set "destination" to null (do NOT fill destination from history).
 - If the user wants to CHANGE/EDIT/UPDATE only the destination location → "edit_destination"
@@ -66,6 +68,12 @@ Examples:
 "Edit the destination to Shoprite Lekki" →
 {"intent":"edit_destination","pickup":null,"destination":{"address":"Shoprite, Lekki, Lagos","area":"Lekki","specific":true},"offerNgn":null,"paymentMethod":null}
 
+"I wanna book a group ride" →
+{"intent":"group_ride_request","pickup":null,"destination":null,"offerNgn":null,"paymentMethod":null}
+
+"Group ride from Yaba to Lekki" →
+{"intent":"group_ride_request","pickup":{"address":"Yaba, Lagos","area":"Yaba","specific":false},"destination":{"address":"Lekki, Lagos","area":"Lekki","specific":false},"offerNgn":null,"paymentMethod":null}
+
 "Cancel my ride" →
 {"intent":"cancel_ride","pickup":null,"destination":null,"offerNgn":null,"paymentMethod":null}
 
@@ -76,6 +84,9 @@ Examples:
 /** Regex fallback for critical intents when Groq is unavailable. */
 function fallbackRideIntent(message: string): RideIntent | null {
   const lower = message.toLowerCase().trim();
+  if (/\b(group|shared?)\s*ride\b/.test(lower)) {
+    return { intent: 'group_ride_request', pickup: null, destination: null, offerNgn: null, paymentMethod: null };
+  }
   if (/\b(cancel\s*(my\s*)?ride|stop\s*(my\s*)?ride)\b/.test(lower)) {
     return { intent: 'cancel_ride', pickup: null, destination: null, offerNgn: null, paymentMethod: null };
   }
@@ -109,7 +120,7 @@ export async function parseRideIntent(
     if (!result) return null;
 
     const intent = result as unknown as RideIntent;
-    if (!intent.intent || !['ride_request', 'ride_status', 'cancel_ride', 'edit_pickup', 'edit_destination', 'other'].includes(intent.intent)) {
+    if (!intent.intent || !['ride_request', 'group_ride_request', 'ride_status', 'cancel_ride', 'edit_pickup', 'edit_destination', 'other'].includes(intent.intent)) {
       return null;
     }
 

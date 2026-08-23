@@ -80,6 +80,7 @@ module.exports = {
     app("payment-service", "run start:payment-service"),
     app("wallet-service", "run start:wallet-service"),
     app("notification-worker", "run start:notification-worker"),
+    app("analytics-worker", "run start:analytics-worker"),
     app("whatsapp-gateway", "run start:whatsapp-gateway", {
       WHATSAPP_GATEWAY_PORT: mergedEnv.WHATSAPP_GATEWAY_PORT || "3010",
       WHATSAPP_SESSION_PATH:
