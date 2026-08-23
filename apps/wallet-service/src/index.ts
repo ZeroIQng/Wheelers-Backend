@@ -2,7 +2,7 @@ import { loadWorkspaceEnv, validateSharedEnv } from '@wheleers/config';
 import { walletClient } from '@wheleers/db';
 import { createConsumer, createProducer } from '@wheleers/kafka-client';
 import { PouchLiquifiaClient } from '@wheleers/pouch-client';
-import { createCashSettlement } from './handlers/cash-settlement';
+import { createCashEscrow } from './handlers/cash-settlement';
 import { TOPICS } from '@wheleers/kafka-schemas';
 
 import { createWalletEventsProducer } from './producers/wallet-events.producer';
@@ -44,10 +44,13 @@ async function bootstrap(): Promise<void> {
         apiKey: process.env['POUCH_LIQUIFIA_API_KEY'],
       })
     : null;
-  const settleRideCash = createCashSettlement(pouchClient);
+  const cashEscrow = createCashEscrow(
+    pouchClient,
+    process.env['POUCH_TREASURY_VIRTUAL_ACCOUNT_ID'] ?? null,
+  );
 
   const rideEventsConsumer = createRideEventsConsumer({
-    settleRideCash,
+    cashEscrow,
     walletRepository: walletClient,
     walletEventsProducer,
     serviceId: SERVICE_ID,

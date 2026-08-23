@@ -9,19 +9,14 @@ export function createRideEventsConsumer(params: {
   walletRepository: WalletRepository;
   walletEventsProducer: WalletEventsProducer;
   serviceId?: string;
-  /** Moves the driver's cut as real cash (rider VA → driver VA) after settle. */
-  settleRideCash?: (params: {
-    rideId: string;
-    riderId: string;
-    driverUserId: string;
-    driverPayoutNgn: number;
-  }) => Promise<void>;
+  /** Real-money escrow around the ride lifecycle (see cash-settlement.ts). */
+  cashEscrow?: import('../handlers/cash-settlement').CashEscrow;
 }) {
   const {
     walletRepository,
     walletEventsProducer,
     serviceId = 'wallet-service',
-    settleRideCash,
+    cashEscrow,
   } = params;
 
   return {
@@ -86,6 +81,16 @@ export function createRideEventsConsumer(params: {
             rideId: event.rideId,
             reason: 'ride_fare_hold',
           }, { key: event.rideId });
+
+          // Ledger held — now move the REAL cash into escrow so a mid-ride
+          // rider withdrawal can never drain the money backing this trip.
+          if (cashEscrow) {
+            await cashEscrow.escrowRideFunds({
+              rideId: event.rideId,
+              riderId: event.riderId,
+              totalNgn: fees.totalNgn,
+            });
+          }
         } catch (error) {
           // The ride is already matched at this point — it will run with no
           // escrow behind it, and settlement at completion will find no hold.
@@ -203,11 +208,11 @@ export function createRideEventsConsumer(params: {
             driverBalanceAfterNgn: Number(result.driverWallet.balanceNgn),
           });
 
-          // Ledger settled — now move the driver's cut as REAL cash from the
-          // rider's Pouch account into the driver's own, so their withdrawal
-          // draws from money that actually exists. Never throws.
-          if (settleRideCash) {
-            await settleRideCash({
+          // Ledger settled — release the driver's cut from escrow (or the
+          // rider's VA in direct mode) into the driver's own account. The
+          // platform fee stays in the treasury. Never throws.
+          if (cashEscrow) {
+            await cashEscrow.releaseToDriver({
               rideId: event.rideId,
               riderId: event.riderId,
               driverUserId: event.driverUserId,
@@ -283,6 +288,15 @@ export function createRideEventsConsumer(params: {
             rideId: event.rideId,
             reason: 'ride_cancelled',
           }, { key: event.rideId });
+
+          // Return the escrowed cash to the rider's account.
+          if (cashEscrow) {
+            await cashEscrow.refundToRider({
+              rideId: event.rideId,
+              riderId: holdResult.wallet.userId,
+              amountNgn: holdResult.holdAmountNgn,
+            });
+          }
         } catch (error) {
           console.error(`[${serviceId}][escrow] CRITICAL: cancel release FAILED — rider funds still locked`, {
             rideId: event.rideId,
