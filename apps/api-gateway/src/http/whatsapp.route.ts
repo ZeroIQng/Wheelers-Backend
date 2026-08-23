@@ -1424,6 +1424,20 @@ export async function handleMetaWhatsappWebhookRoute(
       },
     });
 
+    // First contact ever: everyone sees the short terms once, with the full
+    // version a tap away. Sent before any other reply so it can't be missed.
+    if (user.created) {
+      await sendMetaReply(deps, phone, [
+        `📄 *Welcome to Wheelers! Quick terms before we ride:*`,
+        ``,
+        `1. Fares are agreed between you and your driver before pickup — you pay what you accepted, nothing hidden.`,
+        `2. Your location and trip details are used only to match, route, and keep your rides safe.`,
+        `3. Group rides need a one-time selfie so every rider in the car is verified.`,
+        ``,
+        `Read the full terms: https://wheelersng.com/`,
+      ].join('\n')).catch(() => {});
+    }
+
     // Store phone lookup for Kafka consumer notifications
     await setPhoneLookup(deps.redisClient, user.id, phone).catch(() => {});
 

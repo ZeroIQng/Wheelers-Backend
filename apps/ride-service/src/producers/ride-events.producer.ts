@@ -10,6 +10,7 @@ import {
   type RideCompletedEvent,
   type RideDriverAssignedEvent,
   type RideDriverRejectedEvent,
+  type RideOfferAcceptedEvent,
   type RideOfferSentEvent,
   type RideRouteUpdatedEvent,
   type RideRequestedEvent,
@@ -39,6 +40,7 @@ export type RideEventsProducer = {
   rideRouteUpdated(event: RideRouteUpdatedEvent): Promise<void>;
   rideBidTimeout(event: RideBidTimeoutEvent): Promise<void>;
   groupRideDriverAssigned(event: GroupRideDriverAssignedEvent): Promise<void>;
+  rideOfferAccepted(event: RideOfferAcceptedEvent): Promise<void>;
   broadcastRideOffer(params: {
     drivers: OnlineDriver[];
     rideRequested: RideRequestedEvent;
@@ -89,6 +91,10 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
 
     async groupRideDriverAssigned(event) {
       await producer.send(TOPICS.GROUP_RIDE_EVENTS, event as any, { key: event.groupId });
+    },
+
+    async rideOfferAccepted(event) {
+      await producer.send(TOPICS.RIDE_EVENTS, event as any, { key: event.rideId });
     },
 
     async broadcastRideOffer({ drivers, rideRequested, expiresAt, group }) {
