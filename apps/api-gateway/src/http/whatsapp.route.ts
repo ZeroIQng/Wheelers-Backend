@@ -140,6 +140,42 @@ function normalizeMetaPhone(value: string | undefined): string | null {
   return withPlus;
 }
 
+/**
+ * Mark the rider's message as read (blue ticks) and show the "typing…"
+ * indicator while we work. WhatsApp can't stream text, but the indicator
+ * holds until our reply arrives (or ~25s), so the bot reads as answering
+ * rather than silent. Fire-and-forget — a failure here must never delay
+ * the actual reply.
+ */
+function sendTypingIndicator(
+  deps: MetaWhatsappRouteDeps,
+  incomingMessageId: string | undefined,
+): void {
+  if (!deps.metaAccessToken || !deps.metaPhoneNumberId || !incomingMessageId) return;
+
+  const endpoint = `https://graph.facebook.com/v21.0/${deps.metaPhoneNumberId}/messages`;
+  void fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${deps.metaAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: incomingMessageId,
+      typing_indicator: { type: 'text' },
+    }),
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        const payload = await response.text();
+        console.warn('[whatsapp] typing indicator failed', { status: response.status, payload: payload.slice(0, 200) });
+      }
+    })
+    .catch(() => {});
+}
+
 async function sendMetaReply(
   deps: MetaWhatsappRouteDeps,
   to: string,
@@ -1253,6 +1289,9 @@ export async function handleMetaWhatsappWebhookRoute(
     }
 
     const { phone, profileName, messageBody: incomingMessage, isLocation, locationLat, locationLng } = msgInfo;
+
+    // Blue-tick the message and show "typing…" while we think.
+    sendTypingIndicator(deps, msgInfo.messageId);
 
     const user = await onboardWhatsappUser({
       phone,
