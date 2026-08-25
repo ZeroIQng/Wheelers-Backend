@@ -84,14 +84,34 @@ export const rideClient = {
       },
     }),
 
-  findActiveByRider: (riderId: string) =>
+  // A ride still in REQUESTED/MATCHING long after the bid window is dead —
+  // nobody accepted and the timeout should have cancelled it. Don't let a
+  // stale one block a rider from booking again while the sweeper catches up.
+  findActiveByRider: (riderId: string, unmatchedMaxAgeMs = 15 * 60 * 1000) =>
     prisma.ride.findFirst({
       where: {
         riderId,
-        status: {
-          in: ['REQUESTED', 'MATCHING', 'DRIVER_ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'],
-        },
+        OR: [
+          {
+            status: { in: ['REQUESTED', 'MATCHING'] },
+            createdAt: { gte: new Date(Date.now() - unmatchedMaxAgeMs) },
+          },
+          { status: { in: ['DRIVER_ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'] } },
+        ],
       },
+      orderBy: { createdAt: 'desc' },
+    }),
+
+  /** Unmatched rides older than `cutoff`, oldest first — the sweeper's input. */
+  findStaleUnmatched: (cutoff: Date, limit = 200) =>
+    prisma.ride.findMany({
+      where: {
+        status: { in: ['REQUESTED', 'MATCHING'] },
+        createdAt: { lt: cutoff },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+      select: { id: true, riderId: true, status: true, createdAt: true },
     }),
 
   findActiveByDriver: (driverId: string) =>
@@ -226,12 +246,29 @@ export const rideClient = {
 
   cancel: (rideId: string, data: {
     cancelReason?: string;
+    cancelStage?: 'BEFORE_MATCH' | 'AFTER_MATCH' | 'DRIVER_EN_ROUTE' | 'ACTIVE_TRIP';
   }) =>
     prisma.ride.update({
       where: { id: rideId },
       data: {
         ...data,
         status:      'CANCELLED',
+        cancelledAt: new Date(),
+      },
+    }),
+
+  /**
+   * Cancel only if the ride is still unmatched. Returns the number of rows
+   * changed (0 when a driver was assigned in the meantime or it was already
+   * closed) so a bid timeout can never clobber a live trip.
+   */
+  cancelIfUnmatched: (rideId: string, cancelReason: string) =>
+    prisma.ride.updateMany({
+      where: { id: rideId, status: { in: ['REQUESTED', 'MATCHING'] } },
+      data: {
+        status: 'CANCELLED',
+        cancelStage: 'BEFORE_MATCH',
+        cancelReason,
         cancelledAt: new Date(),
       },
     }),

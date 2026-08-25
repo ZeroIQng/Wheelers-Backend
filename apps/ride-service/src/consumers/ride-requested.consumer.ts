@@ -112,6 +112,25 @@ export function createRideRequestedConsumer(params: {
         // Map entry per abandoned ride, for the life of the process. Dropping
         // it is safe now: a late accept rebuilds what it needs from the DB.
         clearPendingMatch(event.rideId);
+        state.routeByRideId.delete(event.rideId);
+
+        // Persist it. Rides used to stay MATCHING in the DB forever after a
+        // timeout, so every unmatched request ever made counted as "active"
+        // and blocked the rider's next booking. Guarded: a driver who was
+        // assigned in the meantime keeps the trip.
+        await rideClient
+          .cancelIfUnmatched(event.rideId, 'No driver accepted in time')
+          .then((result) => {
+            if (result.count > 0) {
+              console.info('[ride-service] unmatched ride expired', { rideId: event.rideId });
+            }
+          })
+          .catch((err) => {
+            console.warn('[ride-service] could not persist bid timeout', {
+              rideId: event.rideId,
+              error: (err as any)?.message ?? err,
+            });
+          });
         return;
       }
     },

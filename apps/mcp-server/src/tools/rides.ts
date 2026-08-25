@@ -17,6 +17,15 @@ import {
 
 const ACTIVE_DB_STATUSES = new Set(['REQUESTED', 'MATCHING', 'DRIVER_ASSIGNED', 'DRIVER_EN_ROUTE', 'ARRIVED', 'IN_PROGRESS']);
 
+/** Bidding lasts ~3 minutes on the ride-service; a session still "bidding" well past that never got its timeout event. */
+const STALE_BIDDING_MS = 15 * 60 * 1000;
+
+function sessionIsLive(state: RideState | null): boolean {
+  if (!state || !LIVE_PHASES.has(state.phase)) return false;
+  if (state.phase === 'bidding' && Date.now() - new Date(state.createdAt).getTime() > STALE_BIDDING_MS) return false;
+  return true;
+}
+
 interface RideDetail {
   id: string;
   status: string;
@@ -158,7 +167,7 @@ export function registerRideTools(server: McpServer, ctx: ToolContext): void {
         if (existing) {
           const state = await ctx.rides.getState(existing);
           const detail = await loadRideDetail(ctx, existing);
-          const stillLive = (state && LIVE_PHASES.has(state.phase)) || (detail && ACTIVE_DB_STATUSES.has(detail.status));
+          const stillLive = sessionIsLive(state) || (detail !== null && ACTIVE_DB_STATUSES.has(detail.status));
           if (stillLive) {
             return fail('There is already an active ride for this user. Check it with get_ride_status, or cancel it first with cancel_ride.', {
               rideId: existing,
@@ -230,7 +239,7 @@ export function registerRideTools(server: McpServer, ctx: ToolContext): void {
         const [detail, state] = await Promise.all([loadRideDetail(ctx, rideId), ctx.rides.getState(rideId)]);
         if (!detail && !state) return fail('Ride not found for this user.', { rideId });
 
-        const isLive = (state && LIVE_PHASES.has(state.phase)) || (detail !== null && ACTIVE_DB_STATUSES.has(detail.status));
+        const isLive = sessionIsLive(state) || (detail !== null && ACTIVE_DB_STATUSES.has(detail.status));
         let listening = ctx.rides.isListening(ctx.userId);
         if (isLive && !listening) {
           listening = await ctx.rides.ensureListening(ctx.userId, ctx.gatewayToken);

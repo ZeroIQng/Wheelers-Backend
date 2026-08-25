@@ -11,6 +11,7 @@ import { createGpsUpdateConsumer } from './consumers/gps-update.consumer';
 import { createGroupRideDispatchConsumer } from './consumers/group-ride-dispatch.consumer';
 
 import { startGpsMonitor } from './handlers/gps-monitor.handler';
+import { startStaleRideSweep } from './handlers/stale-rides.handler';
 import { startScheduledRideDispatcher } from './handlers/scheduled-rides.handler';
 import { createTripLifecycleHandler } from './handlers/trip-lifecycle.handler';
 import type { RideRequestedEvent } from '@wheleers/kafka-schemas';
@@ -261,6 +262,8 @@ async function bootstrap(): Promise<void> {
     rideEventsProducer,
   });
 
+  const staleRideSweep = startStaleRideSweep({ rideEventsProducer });
+
 
    const dispatcher = startScheduledRideDispatcher({
    rideEnv,
@@ -269,6 +272,7 @@ async function bootstrap(): Promise<void> {
   });
 
   onShutdown(async () => {
+    staleRideSweep.stop();
     await dispatcher.shutdown();
     await consumer.disconnect();
     await producer.disconnect();

@@ -296,6 +296,16 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_BID_TIMEOUT') {
+    // Same money cleanup as a cancellation: the fare hold and any reserved
+    // referral cashback must go back to the rider now that nobody accepted.
+    await walletClient.cancelRideHold(event.rideId).catch(() => {});
+    await referralClient.releaseRideCashback(event.rideId).catch((error) => {
+      console.warn('[gateway] referral cashback release after bid timeout failed', {
+        rideId: event.rideId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+
     const waRider = await isWhatsappRider(deps.redisClient, event.riderId);
     if (waRider && deps.whatsappNotifier) {
       const phone = await lookupPhoneByUserId(deps.redisClient, event.riderId);
