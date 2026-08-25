@@ -12,6 +12,7 @@ import {
   buildOtpCode,
   hashOtp,
   normalizePhoneNumber,
+  OtpDeliveryError,
   sendPhoneOtpMessage,
   timingSafeStringEquals,
   type PhoneRouteDeps,
@@ -147,6 +148,16 @@ export async function handlePhoneLoginSendOtpRoute(
         phone,
         error: error instanceof Error ? error.message : String(error),
       });
+      if (error instanceof OtpDeliveryError && error.code === 'OTP_WINDOW_CLOSED') {
+        // Meta only delivers free-form messages within 24h of the rider's
+        // last message to us. Tell the client so it can offer the fix.
+        sendJson(res, 409, {
+          error: 'WhatsApp only lets us message you after you message Wheelers first. Send us any message on WhatsApp, then request the code again.',
+          code: 'OTP_WINDOW_CLOSED',
+          whatsappNumber: error.whatsappNumber ?? null,
+        });
+        return;
+      }
       sendJson(res, 502, {
         error: `We could not deliver the code: ${error instanceof Error ? error.message : 'unknown error'}`,
         code: 'OTP_DELIVERY_FAILED',

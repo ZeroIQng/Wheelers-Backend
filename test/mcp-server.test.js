@@ -80,6 +80,7 @@ async function startFakeGateway() {
 
     if (req.method === 'POST' && url.pathname === '/auth/phone/login/send-otp') {
       const body = await readJson(req);
+      if (body.phone === '+2348099999999') return send(409, { error: 'WhatsApp only lets us message you after you message Wheelers first.', code: 'OTP_WINDOW_CLOSED', whatsappNumber: '+2348141979106' });
       if (body.phone !== '+2348012345678') return send(400, { error: 'phone must be a valid E.164 number, for example +2348012345678' });
       otpSends.push(body.phone);
       return send(200, { sent: true, channel: 'whatsapp', phone: body.phone, expiresInSeconds: 300 });
@@ -282,6 +283,13 @@ test('mcp-server: OAuth 2.1 + MCP + ride session end to end', async (t) => {
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(params),
   });
+  // Rider outside Meta's 24h window: page offers the "say hi on WhatsApp" step with a wa.me link.
+  const closed = await form('/oauth/login/phone', { sid, phone: '0809 999 9999' });
+  assert.equal(closed.status, 200);
+  const closedHtml = await closed.text();
+  assert.match(closedHtml, /https:\/\/wa\.me\/2348141979106\?text=/);
+  assert.match(closedHtml, /Send me a code/);
+
   const sent = await form('/oauth/login/phone', { sid, phone: '0801 234 5678' });
   assert.equal(sent.status, 200);
   const codePage = await sent.text();

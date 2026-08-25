@@ -103,19 +103,56 @@ export function hasOtpChannel(deps: PhoneRouteDeps): boolean {
 const OTP_NOT_CONFIGURED =
   'Phone code delivery is not configured. Set META_ACCESS_TOKEN and META_PHONE_NUMBER_ID (WhatsApp Cloud API).';
 
-function describeMetaError(status: number, payload: string): string {
+export class OtpDeliveryError extends Error {
+  constructor(
+    message: string,
+    readonly code: 'OTP_WINDOW_CLOSED' | 'OTP_DELIVERY_FAILED',
+    readonly whatsappNumber?: string,
+  ) {
+    super(message);
+    this.name = 'OtpDeliveryError';
+  }
+}
+
+function parseMetaError(status: number, payload: string): { message: string; windowClosed: boolean } {
   try {
     const parsed = JSON.parse(payload) as {
       error?: { message?: string; code?: number; error_data?: { details?: string } };
     };
     const code = parsed.error?.code;
     const details = parsed.error?.error_data?.details ?? parsed.error?.message ?? payload;
+    // 131047: re-engagement (24h window closed); 131026: undeliverable for the
+    // same family of reasons. Without an approved authentication template the
+    // rider has to message us first.
     if (code === 131047 || code === 131026) {
-      return `WhatsApp refused the message (${code}: ${details}). Free-form texts only reach riders who messaged the bot in the last 24h — configure an approved authentication template (META_OTP_TEMPLATE_NAME).`;
+      return { message: `WhatsApp will not deliver a message to this number yet (${code}: ${details}).`, windowClosed: true };
     }
-    return `WhatsApp send failed (${status}${code ? `, code ${code}` : ''}): ${details}`;
+    return { message: `WhatsApp send failed (${status}${code ? `, code ${code}` : ''}): ${details}`, windowClosed: false };
   } catch {
-    return `WhatsApp send failed (${status}): ${payload}`;
+    return { message: `WhatsApp send failed (${status}): ${payload}`, windowClosed: false };
+  }
+}
+
+let cachedBusinessNumber: string | null = null;
+
+/** Our own WhatsApp number in E.164, for "message us first" links. */
+export async function getWhatsappBusinessNumber(
+  deps: PhoneRouteDeps & { metaAccessToken: string; metaPhoneNumberId: string },
+): Promise<string | undefined> {
+  if (cachedBusinessNumber) return cachedBusinessNumber;
+  try {
+    const response = await fetch(
+      `https://graph.facebook.com/v21.0/${deps.metaPhoneNumberId}?fields=display_phone_number`,
+      { headers: { authorization: `Bearer ${deps.metaAccessToken}` } },
+    );
+    if (!response.ok) return undefined;
+    const data = (await response.json()) as { display_phone_number?: string };
+    const digits = data.display_phone_number?.replace(/[^\d]/g, '');
+    if (!digits) return undefined;
+    cachedBusinessNumber = `+${digits}`;
+    return cachedBusinessNumber;
+  } catch {
+    return undefined;
   }
 }
 
@@ -170,7 +207,11 @@ export async function sendPhoneOtpMessage(
   });
 
   if (!response.ok) {
-    throw new Error(describeMetaError(response.status, await response.text()));
+    const parsed = parseMetaError(response.status, await response.text());
+    if (parsed.windowClosed) {
+      throw new OtpDeliveryError(parsed.message, 'OTP_WINDOW_CLOSED', await getWhatsappBusinessNumber(deps));
+    }
+    throw new OtpDeliveryError(parsed.message, 'OTP_DELIVERY_FAILED');
   }
 
   return 'whatsapp';

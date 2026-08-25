@@ -52,11 +52,21 @@ route then issues the standard 30-day gateway JWT. Codes are hashed in Redis,
 expire after `WHATSAPP_OTP_TTL_SECONDS`, allow 5 attempts, and at most 5 delivered sends
 per number per 10 minutes (failed deliveries don't count). Delivery goes over
 the **Meta WhatsApp Cloud API** with the bot's own credentials
-(`META_ACCESS_TOKEN` + `META_PHONE_NUMBER_ID`). Meta only delivers free-form
-text to riders who messaged the bot in the last 24 h; for everyone else set
-`META_OTP_TEMPLATE_NAME` to an approved *Authentication* template
-(Meta Business → WhatsApp Manager → Message templates → category
-Authentication, "copy code" button) and the code is sent through it.
+(`META_ACCESS_TOKEN` + `META_PHONE_NUMBER_ID`).
+
+Meta only delivers free-form text to riders who messaged the business number
+in the last 24 h. When it refuses (error 131047), the gateway answers
+`409 OTP_WINDOW_CLOSED` with our WhatsApp number, and the login page shows a
+one-tap **"Open WhatsApp & say hi to Wheelers"** (`wa.me` link) step followed
+by "Send me a code" — no template needed, works for every rider. Riders who
+chatted recently never see that step.
+
+The proper long-term fix is an approved *Authentication* template
+(`META_OTP_TEMPLATE_NAME` — the send code already supports it), but Meta
+currently refuses to create that category on this WhatsApp Business Account
+(error subcode 2388185 — account-level gate; UTILITY templates carrying a code
+are auto-rejected as `INCORRECT_CATEGORY`). `scripts/meta-otp-template.mjs
+status|create` registers it the moment Meta allows it.
 
 Under the hood: `/authorize` → login page → gateway issues the rider's gateway
 JWT → we mint a one-time auth code bound to it → Claude exchanges it for
@@ -178,9 +188,9 @@ accept → matched → cancel, refresh-token rotation, raw-JWT bearer.
 
 ## Known limits / next steps
 
-* Without `META_OTP_TEMPLATE_NAME`, sign-in codes only reach riders who
-  messaged the bot within the last 24 h (Meta's free-form window). Create the
-  authentication template to lift that.
+* Riders outside Meta's 24 h window must tap "say hi to Wheelers" once before
+  the code can be sent (until Meta allows an Authentication template on the
+  account — see above).
 * Driver **go-online / accept / GPS** stay in the driver app (they need a live
   location stream).
 * Group-ride **face verification selfie** must be taken in the app.

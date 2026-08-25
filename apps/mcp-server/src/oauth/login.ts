@@ -38,6 +38,10 @@ function maskPhone(phone: string): string {
   return phone.length > 6 ? `${phone.slice(0, 4)}•••${phone.slice(-3)}` : phone;
 }
 
+function waLink(number: string, text: string): string {
+  return `https://wa.me/${number.replace(/[^\d]/g, '')}?text=${encodeURIComponent(text)}`;
+}
+
 function renderPage(input: {
   sid: string;
   clientName: string | null;
@@ -45,6 +49,8 @@ function renderPage(input: {
   error?: string;
   notice?: string;
   values?: Record<string, string>;
+  /** Set when WhatsApp refused delivery until the rider messages us first. */
+  windowClosed?: { whatsappNumber: string | null };
 }): string {
   const client = escapeHtml(input.clientName ?? 'An AI assistant');
   const v = (key: string) => escapeHtml(input.values?.[key] ?? '');
@@ -52,11 +58,22 @@ function renderPage(input: {
   const notice = input.notice ? `<div class="notice">${escapeHtml(input.notice)}</div>` : '';
   const sid = escapeHtml(input.sid);
 
+  const sayHi = input.windowClosed
+    ? `<div class="steps">
+        <p><strong>One quick step first.</strong> WhatsApp only lets Wheelers message you after you've messaged us.</p>
+        ${input.windowClosed.whatsappNumber
+          ? `<a class="btn" href="${waLink(input.windowClosed.whatsappNumber, 'Hi Wheelers, send my sign-in code')}" target="_blank" rel="noopener">1. Open WhatsApp &amp; say hi to Wheelers</a>`
+          : `<p>1. Open WhatsApp and send any message to the Wheelers number.</p>`}
+        <p>2. Come back here and tap <em>Send me a code</em> again.</p>
+      </div>`
+    : '';
+
   const phone = `
+    ${sayHi}
     <form method="post" action="/oauth/login/phone">
       <input type="hidden" name="sid" value="${sid}">
-      <label>WhatsApp phone number<input name="phone" type="tel" inputmode="tel" value="${v('phone')}" placeholder="+234 801 234 5678" autocomplete="tel" required autofocus></label>
-      <button type="submit">Send me a code on WhatsApp</button>
+      <label>WhatsApp phone number<input name="phone" type="tel" inputmode="tel" value="${v('phone')}" placeholder="+234 801 234 5678" autocomplete="tel" required ${input.windowClosed ? '' : 'autofocus'}></label>
+      <button type="submit">${input.windowClosed ? '2. Send me a code on WhatsApp' : 'Send me a code on WhatsApp'}</button>
     </form>
     <p class="switch">Same number you use with the Wheelers WhatsApp bot or app — it's one account everywhere.</p>
     <p class="switch"><a href="/oauth/login?sid=${sid}&mode=signin">Use email &amp; password instead</a></p>`;
@@ -120,6 +137,9 @@ function renderPage(input: {
   .error { background: #3a1d1d; border: 1px solid #7a2e2e; color: #ffb4b4; padding: 10px 12px; border-radius: 8px; font-size: 14px; margin-bottom: 14px; }
   .notice { background: #1d2f22; border: 1px solid #2e6a3e; color: #b8f0c4; padding: 10px 12px; border-radius: 8px; font-size: 14px; margin-bottom: 14px; }
   .switch { font-size: 13px; color: #9aa3b2; text-align: center; margin: 16px 0 0; }
+  .steps { background: #1b2230; border: 1px solid #2c3a52; border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; font-size: 14px; }
+  .steps p { margin: 6px 0; }
+  a.btn { display: block; text-align: center; padding: 11px; margin: 10px 0; border-radius: 8px; background: #25d366; color: #0b1a10; font-weight: 600; text-decoration: none; }
   a { color: #f5b400; }
   .scope { font-size: 12px; color: #7f8797; margin-top: 18px; line-height: 1.5; }
 </style>
@@ -195,6 +215,19 @@ export function createLoginRouter(deps: LoginRouterDeps): Router {
         }),
       );
     } catch (error) {
+      if (error instanceof GatewayError && error.code === 'OTP_WINDOW_CLOSED') {
+        const body = error.body as { whatsappNumber?: string | null } | null;
+        res.status(200).type('html').send(
+          renderPage({
+            sid,
+            clientName: session.clientName,
+            mode: 'phone',
+            values: { phone },
+            windowClosed: { whatsappNumber: body?.whatsappNumber ?? null },
+          }),
+        );
+        return;
+      }
       const described = describeGatewayError(error, 'Could not send the code.');
       res.status(described.status).type('html').send(
         renderPage({ sid, clientName: session.clientName, mode: 'phone', error: described.message, values: { phone: rawPhone } }),
