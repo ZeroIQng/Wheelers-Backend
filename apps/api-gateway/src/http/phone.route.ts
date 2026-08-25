@@ -14,11 +14,13 @@ const PHONE_OTP_TTL_SECONDS = 300;
 export interface PhoneRouteDeps {
   jwtSecret: string;
   redisClient: RedisClient;
-  whatsappGatewayUrl?: string;
-  whatsappGatewayToken?: string;
-  twilioAccountSid?: string;
-  twilioAuthToken?: string;
-  twilioFromNumber?: string;
+  // Meta WhatsApp Cloud API — the same credentials the bot replies with.
+  metaAccessToken?: string;
+  metaPhoneNumberId?: string;
+  // Approved AUTHENTICATION template. Without it a plain text is sent, which
+  // Meta only delivers inside the 24h window after the rider last messaged.
+  metaOtpTemplateName?: string;
+  metaOtpTemplateLanguage?: string;
   phoneOtpTtlSeconds?: number;
 }
 
@@ -87,109 +89,91 @@ export function timingSafeStringEquals(left: string, right: string): boolean {
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-async function sendTwilioSms(params: {
-  accountSid: string;
-  authToken: string;
-  fromNumber: string;
-  toNumber: string;
-  body: string;
-}): Promise<void> {
-  const endpoint = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(params.accountSid)}/Messages.json`;
-  const authHeader = Buffer.from(`${params.accountSid}:${params.authToken}`, 'utf8').toString('base64');
-  const form = new URLSearchParams({
-    To: params.toNumber,
-    From: params.fromNumber,
-    Body: params.body,
-  });
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      authorization: `Basic ${authHeader}`,
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    body: form.toString(),
-  });
-
-  if (response.ok) {
-    return;
-  }
-
-  const payload = await response.text();
-  throw new Error(`Twilio SMS send failed (${response.status}): ${payload}`);
-}
-
-async function sendWhatsappTextMessage(params: {
-  gatewayUrl: string;
-  gatewayToken: string;
-  toNumber: string;
-  body: string;
-}): Promise<void> {
-  const endpoint = new URL('/messages/text', params.gatewayUrl).toString();
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${params.gatewayToken}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      phone: params.toNumber,
-      body: params.body,
-    }),
-  });
-
-  if (response.ok) {
-    return;
-  }
-
-  const payload = await response.text();
-  throw new Error(`WhatsApp gateway send failed (${response.status}): ${payload}`);
-}
-
-function hasConfiguredWhatsappGateway(deps: PhoneRouteDeps): deps is PhoneRouteDeps & {
-  whatsappGatewayUrl: string;
-  whatsappGatewayToken: string;
+function hasConfiguredMeta(deps: PhoneRouteDeps): deps is PhoneRouteDeps & {
+  metaAccessToken: string;
+  metaPhoneNumberId: string;
 } {
-  return Boolean(deps.whatsappGatewayUrl && deps.whatsappGatewayToken);
+  return Boolean(deps.metaAccessToken && deps.metaPhoneNumberId);
 }
 
-function hasConfiguredTwilio(deps: PhoneRouteDeps): deps is PhoneRouteDeps & {
-  twilioAccountSid: string;
-  twilioAuthToken: string;
-  twilioFromNumber: string;
-} {
-  return Boolean(deps.twilioAccountSid && deps.twilioAuthToken && deps.twilioFromNumber);
+export function hasOtpChannel(deps: PhoneRouteDeps): boolean {
+  return hasConfiguredMeta(deps);
 }
 
+const OTP_NOT_CONFIGURED =
+  'Phone code delivery is not configured. Set META_ACCESS_TOKEN and META_PHONE_NUMBER_ID (WhatsApp Cloud API).';
+
+function describeMetaError(status: number, payload: string): string {
+  try {
+    const parsed = JSON.parse(payload) as {
+      error?: { message?: string; code?: number; error_data?: { details?: string } };
+    };
+    const code = parsed.error?.code;
+    const details = parsed.error?.error_data?.details ?? parsed.error?.message ?? payload;
+    if (code === 131047 || code === 131026) {
+      return `WhatsApp refused the message (${code}: ${details}). Free-form texts only reach riders who messaged the bot in the last 24h — configure an approved authentication template (META_OTP_TEMPLATE_NAME).`;
+    }
+    return `WhatsApp send failed (${status}${code ? `, code ${code}` : ''}): ${details}`;
+  } catch {
+    return `WhatsApp send failed (${status}): ${payload}`;
+  }
+}
+
+/**
+ * Deliver a code over the Meta WhatsApp Cloud API. With an approved
+ * AUTHENTICATION template the code goes in the body and on the copy-code
+ * button (Meta's required shape); otherwise a plain text message.
+ */
 export async function sendPhoneOtpMessage(
   deps: PhoneRouteDeps,
   phone: string,
   body: string,
-): Promise<'whatsapp' | 'sms'> {
-  if (hasConfiguredWhatsappGateway(deps)) {
-    await sendWhatsappTextMessage({
-      gatewayUrl: deps.whatsappGatewayUrl,
-      gatewayToken: deps.whatsappGatewayToken,
-      toNumber: phone,
-      body,
-    });
-    return 'whatsapp';
+  code: string,
+): Promise<'whatsapp'> {
+  if (!hasConfiguredMeta(deps)) {
+    throw new Error(OTP_NOT_CONFIGURED);
   }
 
-  if (hasConfiguredTwilio(deps)) {
-    await sendTwilioSms({
-      accountSid: deps.twilioAccountSid,
-      authToken: deps.twilioAuthToken,
-      fromNumber: deps.twilioFromNumber,
-      toNumber: phone,
-      body,
-    });
-    return 'sms';
+  const endpoint = `https://graph.facebook.com/v21.0/${deps.metaPhoneNumberId}/messages`;
+  const recipient = phone.replace(/^\+/, '');
+
+  const message = deps.metaOtpTemplateName
+    ? {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: recipient,
+        type: 'template',
+        template: {
+          name: deps.metaOtpTemplateName,
+          language: { code: deps.metaOtpTemplateLanguage ?? 'en_US' },
+          components: [
+            { type: 'body', parameters: [{ type: 'text', text: code }] },
+            { type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: code }] },
+          ],
+        },
+      }
+    : {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: recipient,
+        type: 'text',
+        text: { body },
+      };
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${deps.metaAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(message),
+  });
+
+  if (!response.ok) {
+    throw new Error(describeMetaError(response.status, await response.text()));
   }
 
-  throw new Error(
-    'Phone OTP delivery is not configured. Set WHATSAPP_GATEWAY_URL and WHATSAPP_GATEWAY_TOKEN, or restore the legacy Twilio credentials.',
-  );
+  return 'whatsapp';
 }
 
 async function readStoredPhoneOtp(
@@ -235,27 +219,8 @@ export async function handleSendPhoneOtpRoute(
       return;
     }
 
-    const hasWhatsappGateway =
-      Boolean(deps.whatsappGatewayUrl) && Boolean(deps.whatsappGatewayToken);
-    const hasTwilio =
-      Boolean(deps.twilioAccountSid) &&
-      Boolean(deps.twilioAuthToken) &&
-      Boolean(deps.twilioFromNumber);
-
-    if (
-      (Boolean(deps.whatsappGatewayUrl) && !deps.whatsappGatewayToken) ||
-      (!deps.whatsappGatewayUrl && Boolean(deps.whatsappGatewayToken))
-    ) {
-      sendJson(res, 500, {
-        error: 'WhatsApp gateway config is incomplete. Set both WHATSAPP_GATEWAY_URL and WHATSAPP_GATEWAY_TOKEN.',
-      });
-      return;
-    }
-
-    if (!hasWhatsappGateway && !hasTwilio) {
-      sendJson(res, 500, {
-        error: 'Phone OTP delivery is not configured. Set WHATSAPP_GATEWAY_URL and WHATSAPP_GATEWAY_TOKEN.',
-      });
+    if (!hasOtpChannel(deps)) {
+      sendJson(res, 500, { error: OTP_NOT_CONFIGURED });
       return;
     }
 
@@ -277,7 +242,7 @@ export async function handleSendPhoneOtpRoute(
     );
 
     try {
-      const channel = await sendPhoneOtpMessage(deps, phone, messageBody);
+      const channel = await sendPhoneOtpMessage(deps, phone, messageBody, code);
       sendJson(res, 200, {
         sent: true,
         channel,

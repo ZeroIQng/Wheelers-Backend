@@ -31,6 +31,10 @@ const GatewayEnvSchema = z.object({
   META_PHONE_NUMBER_ID: z.string().min(1).optional(),
   META_APP_SECRET: z.string().min(1).optional(),
   META_WEBHOOK_VERIFY_TOKEN: z.string().min(1).optional(),
+  // Approved WhatsApp AUTHENTICATION template for sign-in codes (Meta only
+  // delivers free-form text within 24h of the rider's last message).
+  META_OTP_TEMPLATE_NAME: z.string().optional().transform(v => v?.trim() || undefined),
+  META_OTP_TEMPLATE_LANGUAGE: z.string().min(2).default('en_US'),
   // Pouch Liquifia Fiat Aggregator
   POUCH_LIQUIFIA_API_KEY: z.string().min(1),
   POUCH_LIQUIFIA_BASE_URL: z.string().url().default('https://fiat-api.pouchfinance.xyz/api/v1'),

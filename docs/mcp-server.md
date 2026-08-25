@@ -49,9 +49,14 @@ the bot has been using; (2) an app account that verified that number;
 (3) otherwise create the WhatsApp identity via the same `onboardWhatsappUser()`
 a first WhatsApp message would (wallet, Pouch VA, USER_CREATED event). The
 route then issues the standard 30-day gateway JWT. Codes are hashed in Redis,
-expire after `WHATSAPP_OTP_TTL_SECONDS`, allow 5 attempts, and at most 3 sends
-per number per 10 minutes. Delivery uses the same WhatsApp gateway (Twilio SMS
-fallback) as the existing phone-verification route.
+expire after `WHATSAPP_OTP_TTL_SECONDS`, allow 5 attempts, and at most 5 delivered sends
+per number per 10 minutes (failed deliveries don't count). Delivery goes over
+the **Meta WhatsApp Cloud API** with the bot's own credentials
+(`META_ACCESS_TOKEN` + `META_PHONE_NUMBER_ID`). Meta only delivers free-form
+text to riders who messaged the bot in the last 24 h; for everyone else set
+`META_OTP_TEMPLATE_NAME` to an approved *Authentication* template
+(Meta Business → WhatsApp Manager → Message templates → category
+Authentication, "copy code" button) and the code is sent through it.
 
 Under the hood: `/authorize` → login page → gateway issues the rider's gateway
 JWT → we mint a one-time auth code bound to it → Claude exchanges it for
@@ -173,8 +178,9 @@ accept → matched → cancel, refresh-token rotation, raw-JWT bearer.
 
 ## Known limits / next steps
 
-* Phone sign-in needs the WhatsApp gateway (or Twilio) configured on the
-  api-gateway box — the same requirement as the existing OTP route.
+* Without `META_OTP_TEMPLATE_NAME`, sign-in codes only reach riders who
+  messaged the bot within the last 24 h (Meta's free-form window). Create the
+  authentication template to lift that.
 * Driver **go-online / accept / GPS** stay in the driver app (they need a live
   location stream).
 * Group-ride **face verification selfie** must be taken in the app.

@@ -706,11 +706,10 @@ async function bootstrap(): Promise<void> {
       const phoneDeps = {
         jwtSecret: gatewayEnv.JWT_SECRET,
         redisClient: redisCommandClient,
-        whatsappGatewayUrl: gatewayEnv.WHATSAPP_GATEWAY_URL,
-        whatsappGatewayToken: gatewayEnv.WHATSAPP_GATEWAY_TOKEN,
-        twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
-        twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
-        twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
+        metaAccessToken: gatewayEnv.META_ACCESS_TOKEN,
+        metaPhoneNumberId: gatewayEnv.META_PHONE_NUMBER_ID,
+        metaOtpTemplateName: gatewayEnv.META_OTP_TEMPLATE_NAME,
+        metaOtpTemplateLanguage: gatewayEnv.META_OTP_TEMPLATE_LANGUAGE,
         phoneOtpTtlSeconds: gatewayEnv.WHATSAPP_OTP_TTL_SECONDS,
       };
       if (url.pathname === "/auth/phone/login/send-otp") {
@@ -737,11 +736,10 @@ async function bootstrap(): Promise<void> {
       await handleSendPhoneOtpRoute(req, res, {
         jwtSecret: gatewayEnv.JWT_SECRET,
         redisClient: redisCommandClient,
-        whatsappGatewayUrl: gatewayEnv.WHATSAPP_GATEWAY_URL,
-        whatsappGatewayToken: gatewayEnv.WHATSAPP_GATEWAY_TOKEN,
-        twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
-        twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
-        twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
+        metaAccessToken: gatewayEnv.META_ACCESS_TOKEN,
+        metaPhoneNumberId: gatewayEnv.META_PHONE_NUMBER_ID,
+        metaOtpTemplateName: gatewayEnv.META_OTP_TEMPLATE_NAME,
+        metaOtpTemplateLanguage: gatewayEnv.META_OTP_TEMPLATE_LANGUAGE,
         phoneOtpTtlSeconds: gatewayEnv.WHATSAPP_OTP_TTL_SECONDS,
       });
 
@@ -799,11 +797,10 @@ async function bootstrap(): Promise<void> {
       await handleVerifyPhoneOtpRoute(req, res, {
         jwtSecret: gatewayEnv.JWT_SECRET,
         redisClient: redisCommandClient,
-        whatsappGatewayUrl: gatewayEnv.WHATSAPP_GATEWAY_URL,
-        whatsappGatewayToken: gatewayEnv.WHATSAPP_GATEWAY_TOKEN,
-        twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
-        twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
-        twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
+        metaAccessToken: gatewayEnv.META_ACCESS_TOKEN,
+        metaPhoneNumberId: gatewayEnv.META_PHONE_NUMBER_ID,
+        metaOtpTemplateName: gatewayEnv.META_OTP_TEMPLATE_NAME,
+        metaOtpTemplateLanguage: gatewayEnv.META_OTP_TEMPLATE_LANGUAGE,
         phoneOtpTtlSeconds: gatewayEnv.WHATSAPP_OTP_TTL_SECONDS,
       });
 

@@ -30,7 +30,7 @@ import { readJsonBody, sendJson } from './utils';
 const LOGIN_OTP_KEY_PREFIX = 'auth:phone-login:otp:';
 const LOGIN_SEND_COUNT_PREFIX = 'auth:phone-login:sends:';
 const LOGIN_OTP_TTL_SECONDS = 300;
-const MAX_SENDS_PER_WINDOW = 3;
+const MAX_SENDS_PER_WINDOW = 5;
 const SEND_WINDOW_SECONDS = 600;
 const MAX_VERIFY_ATTEMPTS = 5;
 
@@ -119,7 +119,7 @@ export async function handlePhoneLoginSendOtpRoute(
     }
     if (sends > MAX_SENDS_PER_WINDOW) {
       sendJson(res, 429, {
-        error: `Too many codes requested for this number. Try again in ${Math.ceil(SEND_WINDOW_SECONDS / 60)} minutes.`,
+        error: `Too many codes requested for this number. Wait up to ${Math.ceil(SEND_WINDOW_SECONDS / 60)} minutes and check WhatsApp for the last code sent.`,
         code: 'OTP_RATE_LIMITED',
       });
       return;
@@ -135,17 +135,20 @@ export async function handlePhoneLoginSendOtpRoute(
 
     const messageBody = `Your Wheelers sign-in code is ${code}. It expires in ${Math.max(1, Math.floor(ttlSeconds / 60))} minute(s). If you did not request this, ignore this message.`;
 
-    let channel: 'whatsapp' | 'sms';
+    let channel: 'whatsapp';
     try {
-      channel = await sendPhoneOtpMessage(deps, phone, messageBody);
+      channel = await sendPhoneOtpMessage(deps, phone, messageBody, code);
     } catch (error) {
+      // A code that never left the building must not eat the rider's quota —
+      // otherwise a broken sender locks them out for the whole window.
       await deps.redisClient.del(otpKey(phone)).catch(() => {});
+      await deps.redisClient.send('DECR', sendCountKey(phone)).catch(() => {});
       console.error('[phone-login] OTP delivery failed', {
         phone,
         error: error instanceof Error ? error.message : String(error),
       });
       sendJson(res, 502, {
-        error: 'We could not deliver the code right now. Please try again shortly.',
+        error: `We could not deliver the code: ${error instanceof Error ? error.message : 'unknown error'}`,
         code: 'OTP_DELIVERY_FAILED',
       });
       return;
