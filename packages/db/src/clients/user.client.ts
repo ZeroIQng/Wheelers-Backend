@@ -36,6 +36,14 @@ export const userClient = {
       include: { wallet: true },
     }),
 
+  // Phone is not unique in the schema (an app account can verify the same
+  // number a WhatsApp account was created with), so callers decide precedence.
+  findByPhone: (phone: string) =>
+    prisma.user.findFirst({
+      where: { phone },
+      orderBy: { createdAt: 'asc' },
+    }),
+
   // ── Writes ─────────────────────────────────────────────────────────────────
 
   create: (data: {

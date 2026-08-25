@@ -52,6 +52,8 @@ import {
   handleListScheduledRidesRoute,
   handleRideEstimateRoute,
   handleRiderRideHistoryRoute,
+  handleGetRideRoute,
+  handleActiveRideRoute,
 } from "./http/ride.route";
 import {
   handleGetDriverStatsRoute,
@@ -108,6 +110,10 @@ import {
   handleSendPhoneOtpRoute,
   handleVerifyPhoneOtpRoute,
 } from "./http/phone.route";
+import {
+  handlePhoneLoginSendOtpRoute,
+  handlePhoneLoginVerifyOtpRoute,
+} from "./http/phone-login.route";
 import { handleMetaWhatsappWebhookRoute, handleMetaWhatsappVerify } from "./http/whatsapp.route";
 import {
   handleApplyReferralCodeRoute,
@@ -691,6 +697,37 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
+    // Passwordless sign-in by phone (WhatsApp riders' identity) — unauthenticated.
+    if (url.pathname === "/auth/phone/login/send-otp" || url.pathname === "/auth/phone/login/verify-otp") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+      const phoneDeps = {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+        redisClient: redisCommandClient,
+        whatsappGatewayUrl: gatewayEnv.WHATSAPP_GATEWAY_URL,
+        whatsappGatewayToken: gatewayEnv.WHATSAPP_GATEWAY_TOKEN,
+        twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
+        twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
+        twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
+        phoneOtpTtlSeconds: gatewayEnv.WHATSAPP_OTP_TTL_SECONDS,
+      };
+      if (url.pathname === "/auth/phone/login/send-otp") {
+        await handlePhoneLoginSendOtpRoute(req, res, phoneDeps);
+      } else {
+        await handlePhoneLoginVerifyOtpRoute(req, res, {
+          ...phoneDeps,
+          onboarding: {
+            jwtSecret: gatewayEnv.JWT_SECRET,
+            publisher,
+            pouchLiquifiaClient,
+          },
+        });
+      }
+      return;
+    }
+
     if (url.pathname === "/auth/phone/send-otp") {
       if (req.method !== "POST") {
         sendMethodNotAllowed(res);
@@ -1068,6 +1105,31 @@ async function bootstrap(): Promise<void> {
         await handler(req, res, { rideId: chatMatch[1] });
         return;
       }
+    }
+
+    if (url.pathname === "/rides/active") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+      await handleActiveRideRoute(req, res, { jwtSecret: gatewayEnv.JWT_SECRET });
+      return;
+    }
+
+    // GET /rides/:rideId — single ride detail (after the fixed /rides/* paths)
+    const rideDetailMatch = url.pathname.match(/^\/rides\/([^/]+)$/);
+    if (rideDetailMatch && !["estimate", "history", "active"].includes(rideDetailMatch[1])) {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+      await handleGetRideRoute(
+        req,
+        res,
+        { jwtSecret: gatewayEnv.JWT_SECRET },
+        decodeURIComponent(rideDetailMatch[1]),
+      );
+      return;
     }
 
     if (url.pathname === "/rides/estimate") {

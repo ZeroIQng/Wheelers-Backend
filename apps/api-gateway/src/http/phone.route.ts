@@ -11,7 +11,7 @@ const PHONE_OTP_KEY_PREFIX = 'auth:phone-otp:';
 const PHONE_OTP_LENGTH = 6;
 const PHONE_OTP_TTL_SECONDS = 300;
 
-interface PhoneRouteDeps {
+export interface PhoneRouteDeps {
   jwtSecret: string;
   redisClient: RedisClient;
   whatsappGatewayUrl?: string;
@@ -54,7 +54,7 @@ async function authenticateHttpUser(
   return await userClient.findById(localToken.sub);
 }
 
-function normalizePhoneNumber(value: string): string {
+export function normalizePhoneNumber(value: string): string {
   const trimmed = value.trim();
   if (!/^\+[1-9]\d{7,14}$/.test(trimmed)) {
     throw new Error('phone must be a valid E.164 number, for example +2348012345678');
@@ -63,11 +63,11 @@ function normalizePhoneNumber(value: string): string {
   return trimmed;
 }
 
-function hashOtp(code: string): string {
+export function hashOtp(code: string): string {
   return createHash('sha256').update(code).digest('hex');
 }
 
-function buildOtpCode(): string {
+export function buildOtpCode(): string {
   const max = 10 ** PHONE_OTP_LENGTH;
   return String(randomInt(0, max)).padStart(PHONE_OTP_LENGTH, '0');
 }
@@ -76,7 +76,7 @@ function buildOtpRedisKey(userId: string): string {
   return `${PHONE_OTP_KEY_PREFIX}${userId}`;
 }
 
-function timingSafeStringEquals(left: string, right: string): boolean {
+export function timingSafeStringEquals(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left, 'utf8');
   const rightBuffer = Buffer.from(right, 'utf8');
 
@@ -161,7 +161,7 @@ function hasConfiguredTwilio(deps: PhoneRouteDeps): deps is PhoneRouteDeps & {
   return Boolean(deps.twilioAccountSid && deps.twilioAuthToken && deps.twilioFromNumber);
 }
 
-async function sendPhoneOtpMessage(
+export async function sendPhoneOtpMessage(
   deps: PhoneRouteDeps,
   phone: string,
   body: string,

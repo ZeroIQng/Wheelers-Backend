@@ -59,6 +59,7 @@ wheleers/
 │   ├── wallet-service/       # USDT balances, DeFi staking, smart accounts
 │   ├── notification-worker/  # Expo push + in-app notifications
 │   ├── whatsapp-gateway/     # Stateful WhatsApp Web sender for OTP delivery
+│   ├── mcp-server/           # Remote MCP server (OAuth 2.1) — see docs/mcp-server.md
 │   ├── compliance-worker/    # On-chain logs, recordings, disputes, KYC review
 │   └── defi-scheduler/       # Idle fund detection cron, yield harvesting
 │

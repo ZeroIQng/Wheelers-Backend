@@ -7,6 +7,7 @@ export { validatePaymentEnv }      from './env/payment.env';
 export { validateNotificationEnv } from './env/notification.env';
 export { validateGroupRideEnv }    from './env/group-ride.env';
 export { validateWhatsappEnv }     from './env/whatsapp.env';
+export { validateMcpEnv }          from './env/mcp.env';
 
 // Env types
 export type { SharedEnv }       from './env/shared.env';
@@ -16,6 +17,7 @@ export type { PaymentEnv }      from './env/payment.env';
 export type { NotificationEnv } from './env/notification.env';
 export type { GroupRideEnv }    from './env/group-ride.env';
 export type { WhatsappEnv }     from './env/whatsapp.env';
+export type { McpEnv }          from './env/mcp.env';
 
 // Constants
 export { FEES }                        from './constants/fees';

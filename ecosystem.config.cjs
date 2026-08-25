@@ -81,6 +81,12 @@ module.exports = {
     app("wallet-service", "run start:wallet-service"),
     app("notification-worker", "run start:notification-worker"),
     app("analytics-worker", "run start:analytics-worker"),
+    app("mcp-server", "run start:mcp-server", {
+      MCP_PORT: mergedEnv.MCP_PORT || "3020",
+      MCP_GATEWAY_BASE_URL:
+        mergedEnv.MCP_GATEWAY_BASE_URL ||
+        `http://127.0.0.1:${mergedEnv.PORT || "3000"}`,
+    }),
     app("whatsapp-gateway", "run start:whatsapp-gateway", {
       WHATSAPP_GATEWAY_PORT: mergedEnv.WHATSAPP_GATEWAY_PORT || "3010",
       WHATSAPP_SESSION_PATH:

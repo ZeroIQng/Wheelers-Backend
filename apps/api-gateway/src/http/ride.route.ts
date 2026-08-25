@@ -7,7 +7,7 @@ import {
 } from "@wheleers/db";
 import { GoogleMapsRoutePlanner } from "@wheleers/config";
 import { Queue } from "bullmq";
-import { authenticateHttpUser } from "./authenticate";
+import { authenticateHttpUser, HttpAuthError } from "./authenticate";
 import { runIdempotentJsonRequest } from "./idempotency";
 import { readJsonBody, sendJson } from "./utils";
 import { getBoolean, getNumber, getRecord, getString, isRecord } from "../utils/object";
@@ -487,5 +487,114 @@ export async function handleCancelScheduledRideRoute(
           ? error.message
           : "Could not cancel scheduled ride",
     });
+  }
+}
+
+// ── Ride detail (used by the MCP server and any client that needs a single
+// ride by id; ride lifecycle itself stays on the WebSocket) ─────────────────
+
+type RideWithDriver = Awaited<ReturnType<typeof rideClient.findWithDriver>>;
+
+function serializeRideDetail(ride: RideWithDriver) {
+  return {
+    id: ride.id,
+    status: ride.status,
+    riderId: ride.riderId,
+    driverId: ride.driverId ?? null,
+    paymentMethod: ride.paymentMethod,
+    pickup: { lat: ride.pickupLat, lng: ride.pickupLng, address: ride.pickupAddress },
+    destination: { lat: ride.destLat, lng: ride.destLng, address: ride.destAddress },
+    stops: ride.routeStops.map((stop) => ({
+      order: stop.stopOrder,
+      type: stop.type,
+      status: stop.status,
+      lat: stop.lat,
+      lng: stop.lng,
+      address: stop.address,
+      completedAt: stop.completedAt?.toISOString() ?? null,
+    })),
+    fareEstimateNgn: decimalToNumber(ride.fareEstimateNgn),
+    riderOfferNgn: decimalToNumber(ride.riderOfferNgn),
+    agreedFareNgn: decimalToNumber(ride.agreedFareNgn),
+    fareFinalNgn: decimalToNumber(ride.fareFinalNgn),
+    platformFeeNgn: decimalToNumber(ride.platformFeeNgn),
+    penaltyNgn: decimalToNumber(ride.penaltyNgn),
+    distanceKm: ride.distanceKm ?? null,
+    durationSeconds: ride.durationSeconds ?? null,
+    cancelStage: ride.cancelStage ?? null,
+    cancelReason: ride.cancelReason ?? null,
+    matchedAt: ride.matchedAt?.toISOString() ?? null,
+    arrivedAt: ride.arrivedAt?.toISOString() ?? null,
+    startedAt: ride.startedAt?.toISOString() ?? null,
+    completedAt: ride.completedAt?.toISOString() ?? null,
+    cancelledAt: ride.cancelledAt?.toISOString() ?? null,
+    createdAt: ride.createdAt.toISOString(),
+    updatedAt: ride.updatedAt.toISOString(),
+    driver: ride.driver
+      ? {
+          id: ride.driver.id,
+          userId: ride.driver.userId,
+          name: ride.driver.user.name ?? null,
+          phone: ride.driver.user.phone ?? null,
+          rating: ride.driver.rating,
+          status: ride.driver.status,
+          vehicleMake: ride.driver.vehicleMake ?? null,
+          vehicleModel: ride.driver.vehicleModel ?? null,
+          vehiclePlate: ride.driver.vehiclePlate ?? null,
+          vehicleYear: ride.driver.vehicleYear ?? null,
+        }
+      : null,
+  };
+}
+
+function sendRideRouteError(res: ServerResponse, error: unknown, fallback: string): void {
+  if (error instanceof HttpAuthError) {
+    sendJson(res, 401, { error: error.message });
+    return;
+  }
+  sendJson(res, 500, { error: error instanceof Error ? error.message : fallback });
+}
+
+/** GET /rides/:rideId — rider or assigned driver only. */
+export async function handleGetRideRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: RideHistoryRouteDeps,
+  rideId: string,
+): Promise<void> {
+  try {
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
+    const ride = await rideClient.findWithDriver(rideId).catch(() => null);
+    if (!ride) {
+      sendJson(res, 404, { error: "Ride not found." });
+      return;
+    }
+    if (ride.riderId !== user.id && ride.driver?.userId !== user.id) {
+      sendJson(res, 403, { error: "You are not a participant in this ride." });
+      return;
+    }
+    sendJson(res, 200, { ride: serializeRideDetail(ride) });
+  } catch (error) {
+    sendRideRouteError(res, error, "Could not load ride");
+  }
+}
+
+/** GET /rides/active — the rider's current in-flight ride, or null. */
+export async function handleActiveRideRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: RideHistoryRouteDeps,
+): Promise<void> {
+  try {
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
+    const active = await rideClient.findActiveByRider(user.id);
+    if (!active) {
+      sendJson(res, 200, { ride: null });
+      return;
+    }
+    const ride = await rideClient.findWithDriver(active.id);
+    sendJson(res, 200, { ride: serializeRideDetail(ride) });
+  } catch (error) {
+    sendRideRouteError(res, error, "Could not load active ride");
   }
 }
