@@ -9,6 +9,8 @@ import type {
 } from '@wheleers/config';
 import type { GroupRideMatchCancelledEvent } from '@wheleers/kafka-schemas';
 import { buildReadyForMatchEvent } from '../group-ride/ready-event';
+import { GroqClient } from '../LLM/groq.client';
+import { verifySelfiePhoto } from '../LLM/face-check';
 import { authenticateHttpUser } from './authenticate';
 import { runIdempotentJsonRequest } from './idempotency';
 import { readJsonBody, sendJson } from './utils';
@@ -23,6 +25,9 @@ interface GroupRideRouteDeps {
   publisher: GatewayPublisher;
   redisClient: RedisClient;
   faceStorage?: GroupRideFaceStorage;
+  groqApiKey?: string;
+  groqModel: string;
+  groqTimeoutMs: number;
 }
 
 type LatLngAddress = {
@@ -30,6 +35,9 @@ type LatLngAddress = {
   lng: number;
   address: string;
 };
+
+/** ~8 MB of base64, comfortably above any phone selfie. */
+const MAX_FACE_CHECK_BASE64_LENGTH = 8_000_000;
 
 const ALLOWED_FACE_MIME_TYPES = new Set([
   'image/jpeg',
@@ -406,6 +414,70 @@ export async function handleGetGroupRideMatchRequestRoute(
   }
 }
 
+/**
+ * Check a selfie without storing it.
+ *
+ * The app captures the selfie before the match request exists, and a rider who
+ * pointed the camera at their cat should hear about it while the camera is
+ * still open — not three screens later. This is a preview of the same verdict
+ * the upload-complete route enforces, so it is advisory: passing here is not
+ * what lets a rider through, the stored-object check still is.
+ */
+export async function handleGroupRideFaceCheckRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: GroupRideRouteDeps,
+): Promise<void> {
+  try {
+    await authenticateHttpUser(req, deps.jwtSecret);
+
+    const rawBody = await readJsonBody(req);
+    if (!isRecord(rawBody)) {
+      sendJson(res, 400, { error: 'Body must be a JSON object' });
+      return;
+    }
+
+    const mimeType = getString(rawBody, 'mimeType')?.toLowerCase() ?? 'image/jpeg';
+    if (!ALLOWED_FACE_MIME_TYPES.has(mimeType)) {
+      sendJson(res, 400, { error: 'mimeType must be a supported image type.' });
+      return;
+    }
+
+    const imageBase64 = getString(rawBody, 'imageBase64');
+    if (!imageBase64) {
+      sendJson(res, 400, { error: 'imageBase64 is required.' });
+      return;
+    }
+
+    if (imageBase64.length > MAX_FACE_CHECK_BASE64_LENGTH) {
+      sendJson(res, 413, { error: 'That photo is too large to check.' });
+      return;
+    }
+
+    const buffer = Buffer.from(imageBase64, 'base64');
+    if (buffer.length === 0) {
+      sendJson(res, 400, { error: 'imageBase64 was not valid base64 image data.' });
+      return;
+    }
+
+    const groq = new GroqClient({
+      apiKey: deps.groqApiKey,
+      model: deps.groqModel,
+      timeoutMs: deps.groqTimeoutMs,
+    });
+    const verdict = await verifySelfiePhoto(groq, buffer, mimeType);
+
+    sendJson(res, 200, {
+      accepted: verdict.accepted,
+      reason: verdict.reason,
+    });
+  } catch (error) {
+    sendJson(res, 400, {
+      error: error instanceof Error ? error.message : 'Could not check that photo',
+    });
+  }
+}
+
 export async function handleCreateGroupRideFaceUploadUrlRoute(
   req: IncomingMessage,
   res: ServerResponse,
@@ -524,6 +596,43 @@ export async function handleCompleteGroupRideFaceUploadRoute(
       bucket: request.faceVerification.bucket,
       objectKey: request.faceVerification.objectKey,
     });
+
+    // Look at the photo. Confirming the bytes exist says nothing about whether
+    // they show a person — the same guardrail the WhatsApp flow applies has to
+    // apply here, or the app is the way around it.
+    const groq = new GroqClient({
+      apiKey: deps.groqApiKey,
+      model: deps.groqModel,
+      timeoutMs: deps.groqTimeoutMs,
+    });
+    const download = await storage.download({
+      bucket: request.faceVerification.bucket,
+      objectKey: request.faceVerification.objectKey,
+    });
+    const verdict = await verifySelfiePhoto(
+      groq,
+      download.buffer,
+      storedObject.mimeType === 'application/octet-stream'
+        ? download.mimeType
+        : storedObject.mimeType,
+    );
+
+    if (!verdict.accepted) {
+      await groupRideClient.markFaceVerificationFailed({
+        matchRequestId: request.id,
+        reason: verdict.reason || 'Selfie did not show a clear human face.',
+      });
+
+      // 422, not 400: the request was well-formed, the photo was not usable.
+      // The rider can retake it against the same match request.
+      sendJson(res, 422, {
+        error:
+          "That doesn't look like a clear photo of your face. Retake it with your face fully visible — no pets, screenshots, or photos of a screen.",
+        reason: verdict.reason,
+        retryable: true,
+      });
+      return;
+    }
 
     const completed = await groupRideClient.completeFaceVerificationAndMarkReady({
       matchRequestId: request.id,

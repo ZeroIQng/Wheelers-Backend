@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   CopyObjectCommand,
+  GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -156,6 +157,38 @@ export class GroupRideFaceStorage {
       sizeBytes: typeof result.ContentLength === 'number' ? result.ContentLength : undefined,
       etag: result.ETag?.replaceAll('"', ''),
       capturedAt: result.LastModified,
+    };
+  }
+
+  /**
+   * Pull a stored selfie back into memory so the vision model can look at it.
+   * A presigned PUT means the bytes never passed through this process on the
+   * way in, so verification has to fetch them back out.
+   */
+  async download(params: {
+    bucket: string;
+    objectKey: string;
+  }): Promise<{ buffer: Buffer; mimeType: string }> {
+    const result = await this.s3.send(
+      new GetObjectCommand({
+        Bucket: params.bucket,
+        Key: params.objectKey,
+      }),
+    );
+
+    const body = result.Body;
+    if (!body) {
+      throw new Error('Uploaded face image was empty.');
+    }
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of body as AsyncIterable<Uint8Array>) {
+      chunks.push(Buffer.from(chunk));
+    }
+
+    return {
+      buffer: Buffer.concat(chunks),
+      mimeType: result.ContentType ?? 'image/jpeg',
     };
   }
 

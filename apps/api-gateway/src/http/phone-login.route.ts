@@ -11,10 +11,12 @@ import { getString, isRecord } from '../utils/object';
 import {
   buildOtpCode,
   hashOtp,
+  isProviderManagedOtp,
   normalizePhoneNumber,
   OtpDeliveryError,
   sendPhoneOtpMessage,
   timingSafeStringEquals,
+  verifyProviderManagedOtp,
   type PhoneRouteDeps,
 } from './phone.route';
 import { readJsonBody, sendJson } from './utils';
@@ -136,7 +138,7 @@ export async function handlePhoneLoginSendOtpRoute(
 
     const messageBody = `Your Wheelers sign-in code is ${code}. It expires in ${Math.max(1, Math.floor(ttlSeconds / 60))} minute(s). If you did not request this, ignore this message.`;
 
-    let channel: 'whatsapp';
+    let channel: 'whatsapp' | 'sms';
     try {
       channel = await sendPhoneOtpMessage(deps, phone, messageBody, code);
     } catch (error) {
@@ -207,7 +209,11 @@ export async function handlePhoneLoginVerifyOtpRoute(
       return;
     }
 
-    if (!timingSafeStringEquals(hashOtp(code), stored.codeHash)) {
+    const codeIsGood = isProviderManagedOtp(phone)
+      ? await verifyProviderManagedOtp(deps, phone, code)
+      : timingSafeStringEquals(hashOtp(code), stored.codeHash);
+
+    if (!codeIsGood) {
       const attempts = stored.attempts + 1;
       if (attempts >= MAX_VERIFY_ATTEMPTS) {
         await deps.redisClient.del(otpKey(phone));

@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { GoogleMapsRoutePlanner, validateRiderOffer, calculateSuggestedFare } from '@wheleers/config';
+import { GoogleMapsRoutePlanner, RIDE, validateRiderOffer, calculateSuggestedFare } from '@wheleers/config';
 import { chatClient, driverClient, groupRideClient, referralClient, rideClient } from '@wheleers/db';
 import {
   ChatMessageSentEvent,
@@ -326,6 +326,10 @@ export async function handleRideMessage(
         suggestedFareNgn,
         minOfferNgn,
         ratePerKmNgn,
+        // When bidding closes. Sent as an absolute instant so the rider's
+        // countdown is right even if they leave the screen and come back —
+        // a client-side timer started at mount would quietly reset.
+        bidsCloseAt: new Date(Date.now() + RIDE.BID_TIMEOUT_SECONDS * 1000).toISOString(),
         fareEstimateNgn: event.fareEstimateNgn,
         fareBeforeCashbackNgn: event.fareBeforeCashbackNgn,
         referralCashbackAppliedNgn,
@@ -395,11 +399,15 @@ export async function handleRideMessage(
   }
 
   if (type === 'ride:rider_counter_offer') {
+    // driverId is optional by design: with one, the rider is haggling with a
+    // single driver; without one, they have moved their own price and every
+    // candidate driver should see the new number. The schema has always
+    // allowed both — this handler used to reject the second form.
     const event = RideRiderCounterOfferEvent.parse({
       eventType: 'RIDE_RIDER_COUNTER_OFFER',
       rideId: requireString(payload, 'rideId'),
       riderId: auth.userId,
-      driverId: requireString(payload, 'driverId'),
+      driverId: getString(payload, 'driverId'),
       counterOfferNgn: requireNumber(payload, 'counterOfferNgn'),
       timestamp,
     });

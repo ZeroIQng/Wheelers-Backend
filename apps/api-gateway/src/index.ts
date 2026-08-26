@@ -86,6 +86,7 @@ import {
 import {
   handleCancelGroupRideMatchRequestRoute,
   handleCompleteGroupRideFaceUploadRoute,
+  handleGroupRideFaceCheckRoute,
   handleCreateGroupRideFaceUploadUrlRoute,
   handleCreateGroupRideMatchRequestRoute,
   handleGetGroupRideMatchRequestRoute,
@@ -106,6 +107,42 @@ import {
   handleWalletDepositInfoRoute,
 } from "./http/wallet.route";
 import { PouchLiquifiaClient } from "@wheleers/pouch-client";
+import {
+  handleListInterstateRoutesRoute,
+  handleInterstateCitiesRoute,
+  handleInterstateQuoteRoute,
+  handleInterstateDeparturesRoute,
+  handleCreateInterstateBookingRoute,
+  handleCreateInterstateCharterRoute,
+  handleListInterstateBookingsRoute,
+  handleGetInterstateBookingRoute,
+  handleCancelInterstateBookingRoute,
+  handleListClaimableDeparturesRoute,
+  handleListDriverDeparturesRoute,
+  handleClaimDepartureRoute,
+  handleStartDepartureRoute,
+  handleCompleteDepartureRoute,
+  handleDepartureManifestRoute,
+} from "./http/interstate.route";
+import {
+  handleRaiseSafetyAlertRoute,
+  handleActiveSafetyAlertRoute,
+  handleListSafetyAlertsRoute,
+  handleCancelSafetyAlertRoute,
+} from "./http/safety.route";
+import {
+  handleAdminListUsersRoute,
+  handleAdminGetUserRoute,
+  handleAdminOverviewRoute,
+  handleAdminTimeseriesRoute,
+  handleAdminCancellationsRoute,
+  handleAdminGroupRideMetricsRoute,
+  handleAdminListRidesRoute,
+  handleAdminListAlertsRoute,
+  handleAdminAlertCountRoute,
+  handleAdminAcknowledgeAlertRoute,
+  handleAdminResolveAlertRoute,
+} from "./http/admin-metrics.route";
 import {
   handleSendPhoneOtpRoute,
   handleVerifyPhoneOtpRoute,
@@ -408,6 +445,10 @@ async function bootstrap(): Promise<void> {
     publisher,
     redisClient: redisCommandClient,
     faceStorage: groupRideFaceStorage,
+    // The app's selfie goes through the same vision check as the WhatsApp one.
+    groqApiKey: gatewayEnv.GROQ_API_KEY,
+    groqModel: gatewayEnv.GROQ_MODEL,
+    groqTimeoutMs: gatewayEnv.GROQ_TIMEOUT_MS,
   };
 
   const walletDeps = {
@@ -710,6 +751,12 @@ async function bootstrap(): Promise<void> {
         metaPhoneNumberId: gatewayEnv.META_PHONE_NUMBER_ID,
         metaOtpTemplateName: gatewayEnv.META_OTP_TEMPLATE_NAME,
         metaOtpTemplateLanguage: gatewayEnv.META_OTP_TEMPLATE_LANGUAGE,
+        twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
+        twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
+        twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
+        twilioWhatsappNumber: gatewayEnv.TWILIO_WHATSAPP_NUMBER,
+        twilioVerifyServiceSid: gatewayEnv.TWILIO_VERIFY_SERVICE_SID,
+        otpChannelOrder: gatewayEnv.OTP_CHANNEL_ORDER,
         phoneOtpTtlSeconds: gatewayEnv.WHATSAPP_OTP_TTL_SECONDS,
       };
       if (url.pathname === "/auth/phone/login/send-otp") {
@@ -740,6 +787,12 @@ async function bootstrap(): Promise<void> {
         metaPhoneNumberId: gatewayEnv.META_PHONE_NUMBER_ID,
         metaOtpTemplateName: gatewayEnv.META_OTP_TEMPLATE_NAME,
         metaOtpTemplateLanguage: gatewayEnv.META_OTP_TEMPLATE_LANGUAGE,
+        twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
+        twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
+        twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
+        twilioWhatsappNumber: gatewayEnv.TWILIO_WHATSAPP_NUMBER,
+        twilioVerifyServiceSid: gatewayEnv.TWILIO_VERIFY_SERVICE_SID,
+        otpChannelOrder: gatewayEnv.OTP_CHANNEL_ORDER,
         phoneOtpTtlSeconds: gatewayEnv.WHATSAPP_OTP_TTL_SECONDS,
       });
 
@@ -801,6 +854,12 @@ async function bootstrap(): Promise<void> {
         metaPhoneNumberId: gatewayEnv.META_PHONE_NUMBER_ID,
         metaOtpTemplateName: gatewayEnv.META_OTP_TEMPLATE_NAME,
         metaOtpTemplateLanguage: gatewayEnv.META_OTP_TEMPLATE_LANGUAGE,
+        twilioAccountSid: gatewayEnv.TWILIO_ACCOUNT_SID,
+        twilioAuthToken: gatewayEnv.TWILIO_AUTH_TOKEN,
+        twilioFromNumber: gatewayEnv.TWILIO_FROM_NUMBER,
+        twilioWhatsappNumber: gatewayEnv.TWILIO_WHATSAPP_NUMBER,
+        twilioVerifyServiceSid: gatewayEnv.TWILIO_VERIFY_SERVICE_SID,
+        otpChannelOrder: gatewayEnv.OTP_CHANNEL_ORDER,
         phoneOtpTtlSeconds: gatewayEnv.WHATSAPP_OTP_TTL_SECONDS,
       });
 
@@ -1003,6 +1062,328 @@ async function bootstrap(): Promise<void> {
           jwtSecret: gatewayEnv.JWT_SECRET,
           kycStorage: driverKycStorage,
         }, driverDetailMatch[1]!);
+        return;
+      }
+    }
+
+    // ── Interstate travel ──────────────────────────────────────────────────
+    if (url.pathname.startsWith("/safety/alerts")) {
+      const safetyDeps = { jwtSecret: gatewayEnv.JWT_SECRET, publisher };
+
+      if (url.pathname === "/safety/alerts/active") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleActiveSafetyAlertRoute(req, res, safetyDeps, url);
+        return;
+      }
+
+      const cancelAlertMatch = url.pathname.match(
+        /^\/safety\/alerts\/([^/]+)\/cancel$/,
+      );
+      if (cancelAlertMatch) {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleCancelSafetyAlertRoute(
+          req,
+          res,
+          safetyDeps,
+          decodeURIComponent(cancelAlertMatch[1]),
+        );
+        return;
+      }
+
+      if (url.pathname === "/safety/alerts") {
+        if (req.method === "POST") {
+          await handleRaiseSafetyAlertRoute(req, res, safetyDeps);
+          return;
+        }
+        if (req.method === "GET") {
+          await handleListSafetyAlertsRoute(req, res, safetyDeps);
+          return;
+        }
+        sendMethodNotAllowed(res);
+        return;
+      }
+    }
+
+    if (url.pathname.startsWith("/interstate")) {
+      const interstateDeps = { jwtSecret: gatewayEnv.JWT_SECRET };
+
+      if (url.pathname === "/interstate/driver/available") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleListClaimableDeparturesRoute(req, res, interstateDeps, url);
+        return;
+      }
+
+      if (url.pathname === "/interstate/driver/trips") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleListDriverDeparturesRoute(req, res, interstateDeps, url);
+        return;
+      }
+
+      const claimMatch = url.pathname.match(
+        /^\/interstate\/driver\/departures\/([^/]+)\/claim$/,
+      );
+      if (claimMatch) {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleClaimDepartureRoute(
+          req,
+          res,
+          interstateDeps,
+          decodeURIComponent(claimMatch[1]),
+        );
+        return;
+      }
+
+      const startMatch = url.pathname.match(
+        /^\/interstate\/driver\/departures\/([^/]+)\/start$/,
+      );
+      if (startMatch) {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleStartDepartureRoute(
+          req,
+          res,
+          interstateDeps,
+          decodeURIComponent(startMatch[1]),
+        );
+        return;
+      }
+
+      const completeMatch = url.pathname.match(
+        /^\/interstate\/driver\/departures\/([^/]+)\/complete$/,
+      );
+      if (completeMatch) {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleCompleteDepartureRoute(
+          req,
+          res,
+          interstateDeps,
+          decodeURIComponent(completeMatch[1]),
+        );
+        return;
+      }
+
+      const manifestMatch = url.pathname.match(
+        /^\/interstate\/driver\/departures\/([^/]+)\/manifest$/,
+      );
+      if (manifestMatch) {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleDepartureManifestRoute(
+          req,
+          res,
+          interstateDeps,
+          decodeURIComponent(manifestMatch[1]),
+        );
+        return;
+      }
+
+      if (url.pathname === "/interstate/routes") {
+        if (req.method !== "GET") { sendMethodNotAllowed(res); return; }
+        await handleListInterstateRoutesRoute(req, res, interstateDeps, url);
+        return;
+      }
+
+      if (url.pathname === "/interstate/cities") {
+        if (req.method !== "GET") { sendMethodNotAllowed(res); return; }
+        await handleInterstateCitiesRoute(req, res, interstateDeps, url);
+        return;
+      }
+
+      if (url.pathname === "/interstate/quote") {
+        if (req.method !== "POST") { sendMethodNotAllowed(res); return; }
+        await handleInterstateQuoteRoute(req, res, interstateDeps);
+        return;
+      }
+
+      if (url.pathname === "/interstate/departures") {
+        if (req.method !== "GET") { sendMethodNotAllowed(res); return; }
+        await handleInterstateDeparturesRoute(req, res, interstateDeps, url);
+        return;
+      }
+
+      if (url.pathname === "/interstate/charters") {
+        if (req.method !== "POST") { sendMethodNotAllowed(res); return; }
+        await handleCreateInterstateCharterRoute(req, res, interstateDeps);
+        return;
+      }
+
+      if (url.pathname === "/interstate/bookings") {
+        if (req.method === "POST") {
+          await handleCreateInterstateBookingRoute(req, res, interstateDeps);
+          return;
+        }
+        if (req.method === "GET") {
+          await handleListInterstateBookingsRoute(req, res, interstateDeps, url);
+          return;
+        }
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      const cancelMatch = url.pathname.match(/^\/interstate\/bookings\/([^/]+)\/cancel$/);
+      if (cancelMatch) {
+        if (req.method !== "POST") { sendMethodNotAllowed(res); return; }
+        await handleCancelInterstateBookingRoute(req, res, interstateDeps, decodeURIComponent(cancelMatch[1]));
+        return;
+      }
+
+      const bookingMatch = url.pathname.match(/^\/interstate\/bookings\/([^/]+)$/);
+      if (bookingMatch) {
+        if (req.method !== "GET") { sendMethodNotAllowed(res); return; }
+        await handleGetInterstateBookingRoute(req, res, interstateDeps, decodeURIComponent(bookingMatch[1]));
+        return;
+      }
+    }
+
+    // ── Admin panel: directory + metrics ───────────────────────────────────
+    // adminDeps is rebuilt per request so a rotated ADMIN_API_KEY takes effect
+    // without a restart, matching the other admin routes.
+    {
+      const adminDeps = {
+        adminApiKey: process.env.ADMIN_API_KEY ?? '',
+        jwtSecret: gatewayEnv.JWT_SECRET,
+      };
+
+      if (url.pathname === "/admin/users") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleAdminListUsersRoute(req, res, adminDeps, url);
+        return;
+      }
+
+      const adminUserMatch = url.pathname.match(/^\/admin\/users\/([^/]+)$/);
+      if (adminUserMatch) {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleAdminGetUserRoute(
+          req,
+          res,
+          adminDeps,
+          decodeURIComponent(adminUserMatch[1]),
+        );
+        return;
+      }
+
+      if (url.pathname === "/admin/rides") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleAdminListRidesRoute(req, res, adminDeps, url);
+        return;
+      }
+
+      if (url.pathname === "/admin/metrics/overview") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleAdminOverviewRoute(req, res, adminDeps);
+        return;
+      }
+
+      if (url.pathname === "/admin/metrics/timeseries") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleAdminTimeseriesRoute(req, res, adminDeps, url);
+        return;
+      }
+
+      if (url.pathname === "/admin/metrics/group-rides") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleAdminGroupRideMetricsRoute(req, res, adminDeps);
+        return;
+      }
+
+      if (url.pathname === "/admin/alerts") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleAdminListAlertsRoute(req, res, adminDeps, url);
+        return;
+      }
+
+      if (url.pathname === "/admin/alerts/count") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleAdminAlertCountRoute(req, res, adminDeps);
+        return;
+      }
+
+      const ackAlertMatch = url.pathname.match(
+        /^\/admin\/alerts\/([^/]+)\/acknowledge$/,
+      );
+      if (ackAlertMatch) {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleAdminAcknowledgeAlertRoute(
+          req,
+          res,
+          adminDeps,
+          decodeURIComponent(ackAlertMatch[1]),
+        );
+        return;
+      }
+
+      const resolveAlertMatch = url.pathname.match(
+        /^\/admin\/alerts\/([^/]+)\/resolve$/,
+      );
+      if (resolveAlertMatch) {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleAdminResolveAlertRoute(
+          req,
+          res,
+          adminDeps,
+          decodeURIComponent(resolveAlertMatch[1]),
+        );
+        return;
+      }
+
+      if (url.pathname === "/admin/metrics/cancellations") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleAdminCancellationsRoute(req, res, adminDeps);
         return;
       }
     }
@@ -1213,6 +1594,16 @@ async function bootstrap(): Promise<void> {
       }
 
       sendMethodNotAllowed(res);
+      return;
+    }
+
+    if (url.pathname === "/group-rides/face-check") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleGroupRideFaceCheckRoute(req, res, groupRideDeps);
       return;
     }
 

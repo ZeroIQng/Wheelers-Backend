@@ -18,6 +18,17 @@ export { riderKycClient }       from './clients/rider-kyc.client';
 export { adminClient }          from './clients/admin.client';
 export { analyticsClient }      from './clients/analytics.client';
 export { activityClient }       from './clients/activity.client';
+export { adminMetricsClient }   from './clients/admin-metrics.client';
+export { interstateClient, InterstateError, refundFractionFor } from './clients/interstate.client';
+export type { BookingMode, QuoteResult } from './clients/interstate.client';
+export { safetyAlertClient, LIVE_ALERT_STATUSES } from './clients/safety-alert.client';
+export type {
+  SafetyAlertRole,
+  SafetyAlertKind,
+  SafetyAlertStatus,
+  SafetyAlertWithPeople,
+} from './clients/safety-alert.client';
+export type { AdminUserListRow } from './clients/admin-metrics.client';
 export type { ActivityEventInput } from './clients/activity.client';
 
 // Re-export Prisma types so services don't need to install @prisma/client directly

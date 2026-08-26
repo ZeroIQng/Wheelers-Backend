@@ -202,11 +202,47 @@ async function verifyGoogleToken(idToken: string, clientId: string): Promise<{ s
   };
 }
 
+
+/**
+ * Test seam for Google/Apple token verification.
+ *
+ * Verifying a real id_token needs Apple's and Google's live JWKS, which a test
+ * cannot and should not reach. Tests substitute a verifier here so the branch
+ * under test is our own find-or-create logic, not someone else's crypto.
+ * Always null in production.
+ */
+type TokenVerifier = (idToken: string) => Promise<{ sub: string; email?: string; name?: string }>;
+let testTokenVerifier: TokenVerifier | null = null;
+
+export function __setTokenVerifierForTests(verifier: TokenVerifier | null): void {
+  testTokenVerifier = verifier;
+}
+
 // ------------------------------------------------------------------
 // Shared: find-or-create user + driver record
 // ------------------------------------------------------------------
 
-async function findOrCreateDriverUser(
+/** Apps send "rider"/"driver"; anything unrecognised signs up as a rider. */
+function parseSocialRole(value: string | undefined): UserRole {
+  switch ((value ?? '').trim().toUpperCase()) {
+    case 'DRIVER':
+      return UserRole.DRIVER;
+    case 'BOTH':
+      return UserRole.BOTH;
+    default:
+      return UserRole.RIDER;
+  }
+}
+
+/**
+ * Google and Apple sign-in for both sides of the marketplace.
+ *
+ * This used to hardcode `role: DRIVER` and always create a Driver record, so a
+ * rider signing up with Google silently became a driver. The role is a
+ * parameter now and defaults to RIDER — the rider app is the bigger audience,
+ * and a driver has to go through KYC anyway.
+ */
+async function findOrCreateSocialUser(
   provider: 'apple' | 'google',
   sub: string,
   email?: string,
@@ -214,6 +250,7 @@ async function findOrCreateDriverUser(
   jwtSecret?: string,
   pouchLiquifiaClient?: PouchLiquifiaClient,
   resendApiKey?: string,
+  role: UserRole = UserRole.RIDER,
 ): Promise<{ accessToken: string; user: Record<string, unknown>; userId: string; isNewUser: boolean }> {
   const privyDid = `${provider}:${sub}`;
 
@@ -226,19 +263,20 @@ async function findOrCreateDriverUser(
     userId = existing.id;
     userRecord = existing;
   } else {
-    // Create user with DRIVER role
     const created = await userClient.create({
       privyDid,
       email: email ?? undefined,
-      role: UserRole.DRIVER,
+      role,
       name: name ?? undefined,
     });
     userId = created.id;
     userRecord = created;
     isNewUser = true;
 
-    // Create Driver record
-    await driverClient.create(userId);
+    // Only drivers get a Driver record; a rider does not need one.
+    if (role === UserRole.DRIVER || role === UserRole.BOTH) {
+      await driverClient.create(userId);
+    }
 
     // Create fiat wallet
     await walletClient.create(userId).catch((error) => {
@@ -249,7 +287,7 @@ async function findOrCreateDriverUser(
     });
 
     // Send welcome email to new drivers
-    if (email && resendApiKey) {
+    if (email && resendApiKey && (role === UserRole.DRIVER || role === UserRole.BOTH)) {
       const welcome = buildWelcomeDriverEmail(name);
       void sendEmail({ to: email, ...welcome }, resendApiKey).catch((err) => {
         console.warn('[social-auth] welcome email failed (non-blocking)', {
@@ -313,6 +351,7 @@ export async function handleAppleAuthRoute(
 
     const idToken = getString(rawBody, 'idToken');
     const clientName = getString(rawBody, 'name'); // Apple sends name from client on first auth
+    const role = parseSocialRole(getString(rawBody, 'role'));
 
     if (!idToken) {
       sendJson(res, 400, { error: 'idToken is required' });
@@ -324,8 +363,10 @@ export async function handleAppleAuthRoute(
       return;
     }
 
-    const verified = await verifyAppleToken(idToken, deps.appleBundleId);
-    const result = await findOrCreateDriverUser(
+    const verified = testTokenVerifier
+      ? await testTokenVerifier(idToken)
+      : await verifyAppleToken(idToken, deps.appleBundleId);
+    const result = await findOrCreateSocialUser(
       'apple',
       verified.sub,
       verified.email,
@@ -333,6 +374,7 @@ export async function handleAppleAuthRoute(
       deps.jwtSecret,
       deps.pouchLiquifiaClient,
       deps.resendApiKey,
+      role,
     );
 
     logActivity({
@@ -369,6 +411,7 @@ export async function handleGoogleAuthRoute(
     }
 
     const idToken = getString(rawBody, 'idToken');
+    const role = parseSocialRole(getString(rawBody, 'role'));
 
     if (!idToken) {
       sendJson(res, 400, { error: 'idToken is required' });
@@ -380,8 +423,10 @@ export async function handleGoogleAuthRoute(
       return;
     }
 
-    const verified = await verifyGoogleToken(idToken, deps.googleClientId);
-    const result = await findOrCreateDriverUser(
+    const verified = testTokenVerifier
+      ? await testTokenVerifier(idToken)
+      : await verifyGoogleToken(idToken, deps.googleClientId);
+    const result = await findOrCreateSocialUser(
       'google',
       verified.sub,
       verified.email,
@@ -389,6 +434,7 @@ export async function handleGoogleAuthRoute(
       deps.jwtSecret,
       deps.pouchLiquifiaClient,
       deps.resendApiKey,
+      role,
     );
 
     logActivity({

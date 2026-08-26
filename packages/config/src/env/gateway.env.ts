@@ -19,6 +19,11 @@ const GatewayEnvSchema = z.object({
   GROQ_TIMEOUT_MS:    z.coerce.number().int().positive().default(6000),
   APP_BASE_URL:       z.string().url().optional(),
   TWILIO_WHATSAPP_NUMBER: z.string().min(1).optional(),
+  // Twilio Verify issues and checks the code itself — no template approval on
+  // either side, which is the wall Meta's AUTHENTICATION category puts up.
+  TWILIO_VERIFY_SERVICE_SID: z.string().optional().transform(v => v?.trim() || undefined),
+  // Cheapest reachable channel first. Unknown or unconfigured names are skipped.
+  OTP_CHANNEL_ORDER: z.string().optional().transform(v => v?.trim() || undefined),
   TWILIO_KYC_CONTENT_SID: z.string().min(1).optional(),
   // WhatsApp Flows
   WHATSAPP_FLOW_PRIVATE_KEY: z.string().min(1).optional(),

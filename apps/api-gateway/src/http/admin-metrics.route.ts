@@ -1,0 +1,362 @@
+import type { IncomingMessage, ServerResponse } from 'http';
+import { activityClient, adminMetricsClient, safetyAlertClient } from '@wheleers/db';
+import type { SafetyAlertWithPeople } from '@wheleers/db';
+import { verifyAdminAuth } from './admin-auth.route';
+import { readJsonBody, sendJson } from './utils';
+import { isRecord } from '../utils/object';
+
+/**
+ * The admin panel's data layer: a real user directory, per-user drill-down,
+ * and platform metrics drawn from the transaction ledger.
+ *
+ * These replace the old top-10 leaderboards, which could not answer the two
+ * questions an operator actually asks — "who are my users?" and "where did the
+ * money go?".
+ */
+
+interface MetricsDeps {
+  adminApiKey: string;
+  jwtSecret: string;
+}
+
+async function requireAdmin(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MetricsDeps,
+): Promise<boolean> {
+  const auth = await verifyAdminAuth(req, deps);
+  if (!auth) {
+    sendJson(res, 401, { error: 'Unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+function intParam(url: URL, key: string, fallback: number): number {
+  const raw = Number.parseInt(url.searchParams.get(key) ?? '', 10);
+  return Number.isFinite(raw) && raw >= 0 ? raw : fallback;
+}
+
+function fail(res: ServerResponse, error: unknown, message: string): void {
+  console.error(`[admin-metrics] ${message}`, {
+    error: error instanceof Error ? error.message : String(error),
+  });
+  sendJson(res, 500, {
+    error: error instanceof Error ? error.message : message,
+  });
+}
+
+/** GET /admin/users?role=&q=&limit=&offset=&sort= */
+export async function handleAdminListUsersRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MetricsDeps,
+  url: URL,
+): Promise<void> {
+  if (!(await requireAdmin(req, res, deps))) return;
+
+  const roleParam = url.searchParams.get('role');
+  const sortParam = url.searchParams.get('sort');
+  const role = roleParam === 'rider' || roleParam === 'driver' ? roleParam : 'all';
+  const sort =
+    sortParam === 'rides' || sortParam === 'spend' || sortParam === 'name'
+      ? sortParam
+      : 'recent';
+
+  try {
+    const result = await adminMetricsClient.listUsers({
+      role,
+      sort,
+      q: url.searchParams.get('q') ?? undefined,
+      limit: intParam(url, 'limit', 25),
+      offset: intParam(url, 'offset', 0),
+    });
+    sendJson(res, 200, result);
+  } catch (error) {
+    fail(res, error, 'could not list users');
+  }
+}
+
+/** GET /admin/users/:userId — profile, wallet, rides, money and recent activity. */
+export async function handleAdminGetUserRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MetricsDeps,
+  userId: string,
+): Promise<void> {
+  if (!(await requireAdmin(req, res, deps))) return;
+
+  try {
+    const detail = await adminMetricsClient.getUserDetail(userId);
+    if (!detail) {
+      sendJson(res, 404, { error: 'User not found' });
+      return;
+    }
+
+    // Activity lives beside the profile now, instead of behind a page that
+    // demanded you paste a uuid before it would show anything.
+    const activity = await activityClient
+      .listByUser(userId, { limit: 40 })
+      .catch(() => ({ items: [], nextCursor: null }));
+
+    sendJson(res, 200, {
+      ...detail,
+      activity: {
+        items: activity.items.map((row) => ({
+          id: row.id,
+          eventType: row.eventType,
+          source: row.source,
+          rideId: row.rideId,
+          metadata: row.metadata,
+          occurredAt: row.occurredAt.toISOString(),
+        })),
+        nextCursor: activity.nextCursor,
+      },
+    });
+  } catch (error) {
+    fail(res, error, 'could not load user');
+  }
+}
+
+/** GET /admin/metrics/overview — every headline number in one payload. */
+export async function handleAdminOverviewRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MetricsDeps,
+): Promise<void> {
+  if (!(await requireAdmin(req, res, deps))) return;
+
+  try {
+    sendJson(res, 200, await adminMetricsClient.overview());
+  } catch (error) {
+    fail(res, error, 'could not load overview');
+  }
+}
+
+/** GET /admin/metrics/timeseries?days=30 */
+export async function handleAdminTimeseriesRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MetricsDeps,
+  url: URL,
+): Promise<void> {
+  if (!(await requireAdmin(req, res, deps))) return;
+
+  try {
+    const days = intParam(url, 'days', 30);
+    sendJson(res, 200, { days, points: await adminMetricsClient.timeseries(days) });
+  } catch (error) {
+    fail(res, error, 'could not load timeseries');
+  }
+}
+
+/** GET /admin/metrics/cancellations — why requests fail. */
+export async function handleAdminCancellationsRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MetricsDeps,
+): Promise<void> {
+  if (!(await requireAdmin(req, res, deps))) return;
+
+  try {
+    sendJson(res, 200, { reasons: await adminMetricsClient.cancellationBreakdown() });
+  } catch (error) {
+    fail(res, error, 'could not load cancellations');
+  }
+}
+
+/** GET /admin/metrics/group-rides — the group-ride funnel and its drop-offs. */
+export async function handleAdminGroupRideMetricsRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MetricsDeps,
+): Promise<void> {
+  if (!(await requireAdmin(req, res, deps))) return;
+
+  try {
+    sendJson(res, 200, await adminMetricsClient.groupRideMetrics());
+  } catch (error) {
+    fail(res, error, 'could not load group ride metrics');
+  }
+}
+
+/** GET /admin/rides?status=&q=&limit=&offset= */
+export async function handleAdminListRidesRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MetricsDeps,
+  url: URL,
+): Promise<void> {
+  if (!(await requireAdmin(req, res, deps))) return;
+
+  try {
+    const result = await adminMetricsClient.listRides({
+      status: url.searchParams.get('status') ?? undefined,
+      q: url.searchParams.get('q') ?? undefined,
+      limit: intParam(url, 'limit', 25),
+      offset: intParam(url, 'offset', 0),
+    });
+    sendJson(res, 200, result);
+  } catch (error) {
+    fail(res, error, 'could not list rides');
+  }
+}
+
+/* ── Safety alerts ─────────────────────────────────────────────────────────
+ *
+ * The operator's view of the emergency button. Deliberately its own section:
+ * every other route in this file answers "how is the business doing", and this
+ * one answers "is someone in trouble right now".
+ */
+
+function serializeAdminAlert(alert: SafetyAlertWithPeople) {
+  return {
+    id: alert.id,
+    status: alert.status,
+    kind: alert.kind,
+    raisedByRole: alert.raisedByRole,
+    rideId: alert.rideId,
+    interstateDepartureId: alert.interstateDepartureId,
+    counterpartUserId: alert.counterpartUserId,
+    lat: alert.lat,
+    lng: alert.lng,
+    address: alert.address,
+    note: alert.note,
+    handledBy: alert.handledBy,
+    resolution: alert.resolution,
+    createdAt: alert.createdAt.toISOString(),
+    acknowledgedAt: alert.acknowledgedAt?.toISOString() ?? null,
+    resolvedAt: alert.resolvedAt?.toISOString() ?? null,
+    cancelledAt: alert.cancelledAt?.toISOString() ?? null,
+    user: {
+      id: alert.user.id,
+      name: alert.user.name,
+      username: alert.user.username,
+      phone: alert.user.phone,
+      email: alert.user.email,
+      photoUrl: alert.user.photoUrl,
+      role: alert.user.role,
+    },
+  };
+}
+
+/** GET /admin/alerts?status=LIVE|OPEN|ACKNOWLEDGED|RESOLVED|CANCELLED|ALL */
+export async function handleAdminListAlertsRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MetricsDeps,
+  url: URL,
+): Promise<void> {
+  if (!(await requireAdmin(req, res, deps))) return;
+
+  try {
+    const status = (url.searchParams.get('status') ?? 'LIVE').toUpperCase();
+    const [items, counts] = await Promise.all([
+      safetyAlertClient.list({
+        status: status as Parameters<typeof safetyAlertClient.list>[0]['status'],
+        limit: intParam(url, 'limit', 50),
+        cursor: url.searchParams.get('cursor') ?? undefined,
+      }),
+      safetyAlertClient.counts(),
+    ]);
+
+    sendJson(res, 200, { items: items.map(serializeAdminAlert), counts });
+  } catch (error) {
+    fail(res, error, 'could not load safety alerts');
+  }
+}
+
+/**
+ * GET /admin/alerts/count — just the badge number.
+ *
+ * Split from the list because the nav polls this on every page, and shipping a
+ * full alert list (with phone numbers) to render a red dot would be both slow
+ * and needlessly leaky.
+ */
+export async function handleAdminAlertCountRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MetricsDeps,
+): Promise<void> {
+  if (!(await requireAdmin(req, res, deps))) return;
+
+  try {
+    sendJson(res, 200, await safetyAlertClient.counts());
+  } catch (error) {
+    fail(res, error, 'could not count safety alerts');
+  }
+}
+
+/** POST /admin/alerts/:id/acknowledge */
+export async function handleAdminAcknowledgeAlertRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MetricsDeps,
+  alertId: string,
+): Promise<void> {
+  const auth = await verifyAdminAuth(req, deps);
+  if (!auth) {
+    sendJson(res, 401, { error: 'Unauthorized' });
+    return;
+  }
+
+  try {
+    const alert = await safetyAlertClient.acknowledge({
+      id: alertId,
+      handledBy: auth.adminName,
+    });
+
+    if (!alert) {
+      sendJson(res, 409, { error: 'This alert is no longer open.' });
+      return;
+    }
+
+    sendJson(res, 200, { alert: serializeAdminAlert(alert) });
+  } catch (error) {
+    fail(res, error, 'could not acknowledge alert');
+  }
+}
+
+/** POST /admin/alerts/:id/resolve */
+export async function handleAdminResolveAlertRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MetricsDeps,
+  alertId: string,
+): Promise<void> {
+  const auth = await verifyAdminAuth(req, deps);
+  if (!auth) {
+    sendJson(res, 401, { error: 'Unauthorized' });
+    return;
+  }
+
+  try {
+    const rawBody = await readJsonBody(req).catch(() => ({}));
+    const resolution =
+      isRecord(rawBody) && typeof rawBody['resolution'] === 'string'
+        ? rawBody['resolution'].trim()
+        : '';
+
+    if (!resolution) {
+      // Closing an emergency without saying what happened destroys the only
+      // record of how it was handled.
+      sendJson(res, 400, { error: 'Say what happened before resolving this alert.' });
+      return;
+    }
+
+    const alert = await safetyAlertClient.resolve({
+      id: alertId,
+      handledBy: auth.adminName,
+      resolution,
+    });
+
+    if (!alert) {
+      sendJson(res, 409, { error: 'This alert has already been closed.' });
+      return;
+    }
+
+    sendJson(res, 200, { alert: serializeAdminAlert(alert) });
+  } catch (error) {
+    fail(res, error, 'could not resolve alert');
+  }
+}

@@ -6,6 +6,13 @@ import { verifyLocalAccessToken } from '../auth/local';
 import { getString, isRecord } from '../utils/object';
 import { readJsonBody, sendJson } from './utils';
 import { logActivity } from '../analytics/log-activity';
+import {
+  checkTwilioVerify,
+  deliverOtp,
+  isOtpConfigured,
+  OtpDeliveryFailed,
+  type OtpChannelConfig,
+} from '../otp/channels';
 
 const PHONE_OTP_KEY_PREFIX = 'auth:phone-otp:';
 const PHONE_OTP_LENGTH = 6;
@@ -21,6 +28,12 @@ export interface PhoneRouteDeps {
   // Meta only delivers inside the 24h window after the rider last messaged.
   metaOtpTemplateName?: string;
   metaOtpTemplateLanguage?: string;
+  twilioAccountSid?: string;
+  twilioAuthToken?: string;
+  twilioFromNumber?: string;
+  twilioWhatsappNumber?: string;
+  twilioVerifyServiceSid?: string;
+  otpChannelOrder?: string;
   phoneOtpTtlSeconds?: number;
 }
 
@@ -89,19 +102,29 @@ export function timingSafeStringEquals(left: string, right: string): boolean {
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function hasConfiguredMeta(deps: PhoneRouteDeps): deps is PhoneRouteDeps & {
-  metaAccessToken: string;
-  metaPhoneNumberId: string;
-} {
-  return Boolean(deps.metaAccessToken && deps.metaPhoneNumberId);
+
+/** Everything the delivery chain needs, pulled off the route deps. */
+export function otpConfigFrom(deps: PhoneRouteDeps): OtpChannelConfig {
+  return {
+    metaAccessToken: deps.metaAccessToken,
+    metaPhoneNumberId: deps.metaPhoneNumberId,
+    metaOtpTemplateName: deps.metaOtpTemplateName,
+    metaOtpTemplateLanguage: deps.metaOtpTemplateLanguage,
+    twilioAccountSid: deps.twilioAccountSid,
+    twilioAuthToken: deps.twilioAuthToken,
+    twilioFromNumber: deps.twilioFromNumber,
+    twilioWhatsappNumber: deps.twilioWhatsappNumber,
+    twilioVerifyServiceSid: deps.twilioVerifyServiceSid,
+    channelOrder: deps.otpChannelOrder,
+  };
 }
 
 export function hasOtpChannel(deps: PhoneRouteDeps): boolean {
-  return hasConfiguredMeta(deps);
+  return isOtpConfigured(otpConfigFrom(deps));
 }
 
 const OTP_NOT_CONFIGURED =
-  'Phone code delivery is not configured. Set META_ACCESS_TOKEN and META_PHONE_NUMBER_ID (WhatsApp Cloud API).';
+  'Phone code delivery is not configured. Set META_ACCESS_TOKEN + META_PHONE_NUMBER_ID, or TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN.';
 
 export class OtpDeliveryError extends Error {
   constructor(
@@ -114,32 +137,14 @@ export class OtpDeliveryError extends Error {
   }
 }
 
-function parseMetaError(status: number, payload: string): { message: string; windowClosed: boolean } {
-  try {
-    const parsed = JSON.parse(payload) as {
-      error?: { message?: string; code?: number; error_data?: { details?: string } };
-    };
-    const code = parsed.error?.code;
-    const details = parsed.error?.error_data?.details ?? parsed.error?.message ?? payload;
-    // 131047: re-engagement (24h window closed); 131026: undeliverable for the
-    // same family of reasons. Without an approved authentication template the
-    // rider has to message us first.
-    if (code === 131047 || code === 131026) {
-      return { message: `WhatsApp will not deliver a message to this number yet (${code}: ${details}).`, windowClosed: true };
-    }
-    return { message: `WhatsApp send failed (${status}${code ? `, code ${code}` : ''}): ${details}`, windowClosed: false };
-  } catch {
-    return { message: `WhatsApp send failed (${status}): ${payload}`, windowClosed: false };
-  }
-}
-
 let cachedBusinessNumber: string | null = null;
 
 /** Our own WhatsApp number in E.164, for "message us first" links. */
 export async function getWhatsappBusinessNumber(
-  deps: PhoneRouteDeps & { metaAccessToken: string; metaPhoneNumberId: string },
+  deps: PhoneRouteDeps,
 ): Promise<string | undefined> {
   if (cachedBusinessNumber) return cachedBusinessNumber;
+  if (!deps.metaAccessToken || !deps.metaPhoneNumberId) return undefined;
   try {
     const response = await fetch(
       `https://graph.facebook.com/v21.0/${deps.metaPhoneNumberId}?fields=display_phone_number`,
@@ -157,64 +162,60 @@ export async function getWhatsappBusinessNumber(
 }
 
 /**
- * Deliver a code over the Meta WhatsApp Cloud API. With an approved
- * AUTHENTICATION template the code goes in the body and on the copy-code
- * button (Meta's required shape); otherwise a plain text message.
+ * Deliver a code over the best available channel. Returns which one worked so
+ * the caller can tell the rider where to look ("check WhatsApp" vs "check SMS").
  */
 export async function sendPhoneOtpMessage(
   deps: PhoneRouteDeps,
   phone: string,
   body: string,
   code: string,
-): Promise<'whatsapp'> {
-  if (!hasConfiguredMeta(deps)) {
+): Promise<'whatsapp' | 'sms'> {
+  if (!hasOtpChannel(deps)) {
     throw new Error(OTP_NOT_CONFIGURED);
   }
 
-  const endpoint = `https://graph.facebook.com/v21.0/${deps.metaPhoneNumberId}/messages`;
-  const recipient = phone.replace(/^\+/, '');
-
-  const message = deps.metaOtpTemplateName
-    ? {
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: recipient,
-        type: 'template',
-        template: {
-          name: deps.metaOtpTemplateName,
-          language: { code: deps.metaOtpTemplateLanguage ?? 'en_US' },
-          components: [
-            { type: 'body', parameters: [{ type: 'text', text: code }] },
-            { type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: code }] },
-          ],
-        },
-      }
-    : {
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: recipient,
-        type: 'text',
-        text: { body },
-      };
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${deps.metaAccessToken}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(message),
-  });
-
-  if (!response.ok) {
-    const parsed = parseMetaError(response.status, await response.text());
-    if (parsed.windowClosed) {
-      throw new OtpDeliveryError(parsed.message, 'OTP_WINDOW_CLOSED', await getWhatsappBusinessNumber(deps));
+  try {
+    const result = await deliverOtp(otpConfigFrom(deps), {
+      phone,
+      code,
+      body,
+      log: (message, meta) => console.warn(message, meta ?? {}),
+    });
+    // Twilio Verify owns the code; remember that so verification asks Twilio
+    // instead of comparing against a hash we never generated.
+    lastDeliveryWasProviderManaged.set(phone, result.providerManaged);
+    return result.medium;
+  } catch (error) {
+    if (error instanceof OtpDeliveryFailed) {
+      throw new OtpDeliveryError(
+        error.message,
+        error.allWindowClosed ? 'OTP_WINDOW_CLOSED' : 'OTP_DELIVERY_FAILED',
+        error.allWindowClosed ? await getWhatsappBusinessNumber(deps) : undefined,
+      );
     }
-    throw new OtpDeliveryError(parsed.message, 'OTP_DELIVERY_FAILED');
+    throw error;
   }
+}
 
-  return 'whatsapp';
+/**
+ * Which phones currently hold a Twilio-Verify-issued code. In-memory is enough:
+ * a gateway restart simply falls back to the hash check, which fails closed.
+ */
+const lastDeliveryWasProviderManaged = new Map<string, boolean>();
+
+export function isProviderManagedOtp(phone: string): boolean {
+  return lastDeliveryWasProviderManaged.get(phone) === true;
+}
+
+export async function verifyProviderManagedOtp(
+  deps: PhoneRouteDeps,
+  phone: string,
+  code: string,
+): Promise<boolean> {
+  const ok = await checkTwilioVerify(otpConfigFrom(deps), phone, code);
+  if (ok) lastDeliveryWasProviderManaged.delete(phone);
+  return ok;
 }
 
 async function readStoredPhoneOtp(
@@ -326,8 +327,15 @@ export async function handleVerifyPhoneOtpRoute(
       return;
     }
 
-    const providedHash = hashOtp(code);
-    if (!timingSafeStringEquals(providedHash, stored.codeHash)) {
+    // Twilio Verify generates the code, so only Twilio can confirm it. Every
+    // other channel used a code we hashed ourselves.
+    if (isProviderManagedOtp(stored.phone)) {
+      const approved = await verifyProviderManagedOtp(deps, stored.phone, code);
+      if (!approved) {
+        sendJson(res, 400, { error: 'Invalid verification code' });
+        return;
+      }
+    } else if (!timingSafeStringEquals(hashOtp(code), stored.codeHash)) {
       sendJson(res, 400, { error: 'Invalid verification code' });
       return;
     }
