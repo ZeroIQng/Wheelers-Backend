@@ -105,6 +105,24 @@ function verifyRsaSignature(signedPart: string, signature: Buffer, jwk: JwkKey):
 
 const APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys';
 
+/**
+ * Split the configured bundle id(s).
+ *
+ * Wheelers ships two iOS apps from one backend — `com.timmy133.wheelers` for
+ * riders and `com.timmy133.wheelers.driver` for drivers — and Apple stamps the
+ * app's own bundle id into the token's `aud`. A single configured value can
+ * therefore only ever verify one of the two; the other gets "Invalid Apple
+ * token audience" and Sign in with Apple looks broken in that app.
+ *
+ * `APPLE_BUNDLE_ID` accepts a comma-separated list for exactly this reason.
+ */
+function allowedAppleAudiences(configured: string): string[] {
+  return configured
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
 async function verifyAppleToken(idToken: string, bundleId: string): Promise<{ sub: string; email?: string; name?: string }> {
   const { header, payload, signedPart, signature } = decodeJwt(idToken);
 
@@ -117,10 +135,15 @@ async function verifyAppleToken(idToken: string, bundleId: string): Promise<{ su
     throw new Error('Invalid Apple token issuer');
   }
 
-  // Verify audience
+  // Verify audience against every bundle we ship.
   const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-  if (!aud.includes(bundleId)) {
-    throw new Error('Invalid Apple token audience');
+  const allowed = allowedAppleAudiences(bundleId);
+  if (!aud.some((entry) => allowed.includes(String(entry)))) {
+    // Name both sides: "invalid audience" with neither value in it is the kind
+    // of error that costs an afternoon.
+    throw new Error(
+      `Apple token audience ${aud.join(', ')} is not one of the configured bundle ids (${allowed.join(', ')}). Add it to APPLE_BUNDLE_ID.`,
+    );
   }
 
   // Verify expiry
@@ -169,10 +192,23 @@ async function verifyGoogleToken(idToken: string, clientId: string): Promise<{ s
     throw new Error('Invalid Google token issuer');
   }
 
-  // Verify audience
+  // Verify audience against every client we ship.
+  //
+  // Google stamps the *web* client id into the token when the app configures
+  // one, but rider and driver can be registered as separate OAuth clients — and
+  // a native iOS client issues its own id instead. A single configured value
+  // therefore locks out whichever app is not it, exactly as the Apple bundle id
+  // used to. `GOOGLE_CLIENT_ID` accepts a comma-separated list.
   const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-  if (!aud.includes(clientId)) {
-    throw new Error('Invalid Google token audience');
+  const allowed = clientId
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  if (!aud.some((entry) => allowed.includes(String(entry)))) {
+    throw new Error(
+      `Google token audience ${aud.join(', ')} is not one of the configured client ids (${allowed.join(', ')}). Add it to GOOGLE_CLIENT_ID.`,
+    );
   }
 
   // Verify expiry
@@ -359,7 +395,12 @@ export async function handleAppleAuthRoute(
     }
 
     if (!deps.appleBundleId) {
-      sendJson(res, 500, { error: 'Apple auth not configured' });
+      console.error(
+        '[social-auth] APPLE_BUNDLE_ID is not set — Sign in with Apple cannot verify any token.',
+      );
+      sendJson(res, 500, {
+        error: 'Signing in with Apple is unavailable right now. Please use Google or email.',
+      });
       return;
     }
 
@@ -419,6 +460,9 @@ export async function handleGoogleAuthRoute(
     }
 
     if (!deps.googleClientId) {
+      console.error(
+        '[social-auth] GOOGLE_CLIENT_ID is not set — Sign in with Google cannot verify any token.',
+      );
       sendJson(res, 500, { error: 'Google auth not configured' });
       return;
     }
