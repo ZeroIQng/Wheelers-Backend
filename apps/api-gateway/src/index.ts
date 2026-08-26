@@ -123,6 +123,9 @@ import {
   handleStartDepartureRoute,
   handleCompleteDepartureRoute,
   handleDepartureManifestRoute,
+  handleListInterstateOffersRoute,
+  handleAcceptInterstateOfferRoute,
+  handleDeclineInterstateOfferRoute,
 } from "./http/interstate.route";
 import {
   handleRaiseSafetyAlertRoute,
@@ -1111,7 +1114,10 @@ async function bootstrap(): Promise<void> {
     }
 
     if (url.pathname.startsWith("/interstate")) {
-      const interstateDeps = { jwtSecret: gatewayEnv.JWT_SECRET };
+      const interstateDeps = {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+        redisClient: redisCommandClient,
+      };
 
       if (url.pathname === "/interstate/driver/available") {
         if (req.method !== "GET") {
@@ -1128,6 +1134,49 @@ async function bootstrap(): Promise<void> {
           return;
         }
         await handleListDriverDeparturesRoute(req, res, interstateDeps, url);
+        return;
+      }
+
+      if (url.pathname === "/interstate/driver/offers") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleListInterstateOffersRoute(req, res, interstateDeps, url);
+        return;
+      }
+
+      const acceptOfferMatch = url.pathname.match(
+        /^\/interstate\/driver\/offers\/([^/]+)\/accept$/,
+      );
+      if (acceptOfferMatch) {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleAcceptInterstateOfferRoute(
+          req,
+          res,
+          interstateDeps,
+          decodeURIComponent(acceptOfferMatch[1]),
+        );
+        return;
+      }
+
+      const declineOfferMatch = url.pathname.match(
+        /^\/interstate\/driver\/offers\/([^/]+)\/decline$/,
+      );
+      if (declineOfferMatch) {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleDeclineInterstateOfferRoute(
+          req,
+          res,
+          interstateDeps,
+          decodeURIComponent(declineOfferMatch[1]),
+        );
         return;
       }
 

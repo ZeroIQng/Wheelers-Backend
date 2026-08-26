@@ -904,6 +904,14 @@ model InterstateBooking {
   userId         String
   mode           InterstateBookingMode   @default(SHARED)
   seats          Int                     @default(1)
+  /// What the rider offered to pay. Equal to `amountNgn` on a booking taken at
+  /// the posted price; lower on one still waiting for a driver to accept it.
+  offeredNgn     Decimal?                @db.Decimal(18, 2)
+  /// The posted price at the time of the offer, so an operator can see how far
+  /// below list a rider bid without re-deriving it from a since-changed route.
+  listPriceNgn   Decimal?                @db.Decimal(18, 2)
+  declineReason  String?
+  acceptedAt     DateTime?
   amountNgn      Decimal                 @db.Decimal(18, 2)
   refundedNgn    Decimal?                @db.Decimal(18, 2)
   status         InterstateBookingStatus @default(CONFIRMED)
@@ -948,6 +956,11 @@ enum InterstateDepartureStatus {
 }
 
 enum InterstateBookingStatus {
+  /// The rider bid below the posted price. No seats are held and no money has
+  /// moved — a driver has to accept it first.
+  PENDING_OFFER
+  /// A driver looked at the bid and passed on it.
+  OFFER_DECLINED
   CONFIRMED
   CANCELLED
   REFUNDED

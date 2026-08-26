@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
+import { minimumOfferNgn } from './interstate-pricing';
 
 /**
  * Interstate travel — Lagos → Ibadan, Abuja → Kaduna, and the rest.
@@ -24,6 +25,10 @@ const SELLABLE_STATUSES = ['SCHEDULED', 'FILLING'] as const;
 
 /** How long before departure the doors close. */
 const BOOKING_CUTOFF_MINUTES = 30;
+
+// The offer floor lives in its own import-free module so the rider app's copy
+// of the same rule can be tested against it directly.
+export { minimumOfferNgn, isBidBelowFare } from './interstate-pricing';
 
 export class InterstateError extends Error {
   constructor(
@@ -231,6 +236,12 @@ export const interstateClient = {
     departureId: string;
     userId: string;
     seats: number;
+    /**
+     * What the rider is willing to pay in total. At or above the posted price
+     * this books immediately; below it, the booking is held as an offer for a
+     * driver to accept, and no seat is taken and no money moves until they do.
+     */
+    offeredNgn?: number;
     passengerName?: string;
     passengerPhone?: string;
     pickupNote?: string;
@@ -289,7 +300,11 @@ export const interstateClient = {
         throw new InterstateError('Those seats were just taken. Try another departure.', 'SEATS_TAKEN');
       }
 
-      const amountNgn = money(departure.seatPriceNgn) * seats;
+      const listPriceNgn = money(departure.seatPriceNgn) * seats;
+      const amountNgn =
+        params.offeredNgn === undefined
+          ? listPriceNgn
+          : Math.round(params.offeredNgn);
       const reference = bookingReference();
 
       await params.chargeWallet(amountNgn, reference, tx);
@@ -301,6 +316,9 @@ export const interstateClient = {
           mode: 'SHARED',
           seats,
           amountNgn,
+          offeredNgn: amountNgn,
+          listPriceNgn,
+          acceptedAt: new Date(),
           status: 'CONFIRMED',
           passengerName: params.passengerName ?? null,
           passengerPhone: params.passengerPhone ?? null,
@@ -318,6 +336,259 @@ export const interstateClient = {
       });
 
       return { booking, departure, route: departure.route, seatsRemaining: departure.totalSeats - nowBooked };
+    });
+  },
+
+  /* ── bidding ──────────────────────────────────────────────────────────
+   *
+   * A rider who does not want to pay the posted price can name their own. That
+   * bid holds nothing: no seat is taken off the market and no money leaves the
+   * wallet until a driver looks at the number and says yes. The alternative —
+   * reserving a seat against a lowball offer — lets one rider block a seat
+   * somebody else would have paid list price for.
+   */
+
+  /** Place a bid below the posted price. Returns a booking awaiting a driver. */
+  offerForSeats: async (params: {
+    departureId: string;
+    userId: string;
+    seats: number;
+    offeredNgn: number;
+    passengerName?: string;
+    passengerPhone?: string;
+    pickupNote?: string;
+  }) => {
+    const seats = Math.max(1, Math.floor(params.seats));
+    const departure = await prisma.interstateDeparture.findUnique({
+      where: { id: params.departureId },
+      include: { route: true },
+    });
+
+    if (!departure) {
+      throw new InterstateError('That departure does not exist.', 'DEPARTURE_NOT_FOUND');
+    }
+    if (departure.bookingMode === 'CHARTER') {
+      throw new InterstateError(
+        'That departure is a private charter and is not sold by the seat.',
+        'DEPARTURE_IS_CHARTER',
+      );
+    }
+    if (!SELLABLE_STATUSES.includes(departure.status as (typeof SELLABLE_STATUSES)[number])) {
+      throw new InterstateError(
+        'This trip is no longer taking bookings.',
+        'DEPARTURE_CLOSED',
+      );
+    }
+    if (departure.departureAt.getTime() - Date.now() < BOOKING_CUTOFF_MINUTES * 60_000) {
+      throw new InterstateError(
+        `Offers close ${BOOKING_CUTOFF_MINUTES} minutes before departure.`,
+        'DEPARTURE_TOO_SOON',
+      );
+    }
+
+    const listPriceNgn = money(departure.seatPriceNgn) * seats;
+    const floor = minimumOfferNgn(listPriceNgn);
+    const offeredNgn = Math.round(params.offeredNgn);
+
+    if (offeredNgn < floor) {
+      throw new InterstateError(
+        `The lowest offer on this trip is ₦${floor.toLocaleString('en-NG')}.`,
+        'OFFER_TOO_LOW',
+        { minimumOfferNgn: floor, listPriceNgn },
+      );
+    }
+
+    // Seats are not held, but an offer for more seats than exist can never be
+    // accepted, so it is refused now rather than sitting in a driver's queue.
+    if (departure.totalSeats - departure.seatsBooked < seats) {
+      throw new InterstateError(
+        'There are not enough seats left on this trip to offer for.',
+        'NOT_ENOUGH_SEATS',
+        { seatsAvailable: departure.totalSeats - departure.seatsBooked },
+      );
+    }
+
+    // One live bid per rider per departure: re-bidding replaces the old number
+    // rather than stacking offers a driver has to read through.
+    const existing = await prisma.interstateBooking.findFirst({
+      where: {
+        departureId: departure.id,
+        userId: params.userId,
+        status: 'PENDING_OFFER',
+      },
+    });
+
+    if (existing) {
+      const booking = await prisma.interstateBooking.update({
+        where: { id: existing.id },
+        data: {
+          seats,
+          offeredNgn,
+          listPriceNgn,
+          amountNgn: offeredNgn,
+          passengerName: params.passengerName ?? existing.passengerName,
+          passengerPhone: params.passengerPhone ?? existing.passengerPhone,
+          pickupNote: params.pickupNote ?? existing.pickupNote,
+        },
+      });
+      return { booking, departure, route: departure.route, replaced: true };
+    }
+
+    const booking = await prisma.interstateBooking.create({
+      data: {
+        departureId: departure.id,
+        userId: params.userId,
+        mode: 'SHARED',
+        seats,
+        amountNgn: offeredNgn,
+        offeredNgn,
+        listPriceNgn,
+        status: 'PENDING_OFFER',
+        passengerName: params.passengerName ?? null,
+        passengerPhone: params.passengerPhone ?? null,
+        pickupNote: params.pickupNote ?? null,
+        reference: bookingReference(),
+      },
+    });
+
+    return { booking, departure, route: departure.route, replaced: false };
+  },
+
+  /** Every bid waiting on a decision for departures a driver could run. */
+  listPendingOffers: (options: { departureId?: string; limit?: number } = {}) =>
+    prisma.interstateBooking.findMany({
+      where: {
+        status: 'PENDING_OFFER',
+        ...(options.departureId ? { departureId: options.departureId } : {}),
+        departure: {
+          status: { in: [...SELLABLE_STATUSES] },
+          departureAt: { gte: new Date() },
+        },
+      },
+      orderBy: [{ offeredNgn: 'desc' }, { createdAt: 'asc' }],
+      take: Math.min(Math.max(options.limit ?? 40, 1), 100),
+      include: {
+        departure: { include: { route: true } },
+        user: { select: { id: true, name: true, phone: true } },
+      },
+    }),
+
+  /**
+   * Accept a bid: allocate the seats and take the money, in that order, in one
+   * transaction. The seats were never held, so this is the first moment they
+   * are actually checked — and the first moment the rider can be told the trip
+   * filled up while their offer sat there.
+   */
+  acceptOffer: async (params: {
+    bookingId: string;
+    driverId: string;
+    /**
+     * Built for the *rider* who made the offer, whose id is only known once the
+     * booking is read inside the transaction. Charging the driver's wallet here
+     * would be the worst possible bug in this file, so the caller is handed the
+     * owner rather than being trusted to have looked it up.
+     */
+    chargeWalletFor: (
+      riderUserId: string,
+    ) => (
+      amountNgn: number,
+      reference: string,
+      tx: Prisma.TransactionClient,
+    ) => Promise<void>;
+  }) =>
+    prisma.$transaction(async (tx) => {
+      const booking = await tx.interstateBooking.findUnique({
+        where: { id: params.bookingId },
+        include: { departure: { include: { route: true } } },
+      });
+
+      if (!booking) {
+        throw new InterstateError('That offer no longer exists.', 'BOOKING_NOT_FOUND');
+      }
+      if (booking.status !== 'PENDING_OFFER') {
+        throw new InterstateError(
+          'This offer has already been dealt with.',
+          'OFFER_NOT_PENDING',
+          { status: booking.status },
+        );
+      }
+
+      const departure = booking.departure;
+      if (departure.departureAt.getTime() - Date.now() < BOOKING_CUTOFF_MINUTES * 60_000) {
+        throw new InterstateError(
+          'This trip is too close to departure to accept new passengers.',
+          'DEPARTURE_TOO_SOON',
+        );
+      }
+
+      const claimed = await tx.interstateDeparture.updateMany({
+        where: {
+          id: departure.id,
+          status: { in: [...SELLABLE_STATUSES] },
+          seatsBooked: { lte: departure.totalSeats - booking.seats },
+        },
+        data: { seatsBooked: { increment: booking.seats } },
+      });
+
+      if (claimed.count === 0) {
+        // The seats went while the offer was waiting. Say so plainly rather
+        // than charging for a seat that is not there.
+        await tx.interstateBooking.update({
+          where: { id: booking.id },
+          data: {
+            status: 'OFFER_DECLINED',
+            declineReason: 'The trip filled up before this offer was accepted.',
+          },
+        });
+        throw new InterstateError(
+          'Those seats were taken while this offer was waiting.',
+          'SEATS_TAKEN',
+        );
+      }
+
+      await params.chargeWalletFor(booking.userId)(
+        money(booking.amountNgn),
+        booking.reference,
+        tx,
+      );
+
+      const accepted = await tx.interstateBooking.update({
+        where: { id: booking.id },
+        data: { status: 'CONFIRMED', acceptedAt: new Date() },
+      });
+
+      const nowBooked = departure.seatsBooked + booking.seats;
+      await tx.interstateDeparture.update({
+        where: { id: departure.id },
+        data: {
+          status: nowBooked >= departure.totalSeats ? 'FULL' : 'FILLING',
+          // Accepting a passenger's price is also taking the trip.
+          ...(departure.driverId ? {} : { driverId: params.driverId }),
+        },
+      });
+
+      return { booking: accepted, departure, route: departure.route };
+    }),
+
+  declineOffer: async (params: { bookingId: string; reason?: string }) => {
+    const result = await prisma.interstateBooking.updateMany({
+      where: { id: params.bookingId, status: 'PENDING_OFFER' },
+      data: {
+        status: 'OFFER_DECLINED',
+        declineReason: params.reason ?? 'A driver passed on this offer.',
+      },
+    });
+
+    if (result.count === 0) {
+      throw new InterstateError(
+        'This offer has already been dealt with.',
+        'OFFER_NOT_PENDING',
+      );
+    }
+
+    return prisma.interstateBooking.findUniqueOrThrow({
+      where: { id: params.bookingId },
+      include: { departure: { include: { route: true } } },
     });
   },
 
@@ -444,9 +715,32 @@ export const interstateClient = {
       if (!booking || booking.userId !== params.userId) {
         throw new InterstateError('Booking not found.', 'BOOKING_NOT_FOUND');
       }
+      // Withdrawing a bid is not cancelling a booking. Nothing was charged and
+      // no seat was held, so there is nothing to refund and nothing to release
+      // — running it through the refund path would credit a wallet that was
+      // never debited.
+      if (booking.status === 'PENDING_OFFER') {
+        const withdrawn = await tx.interstateBooking.update({
+          where: { id: booking.id },
+          data: {
+            status: 'CANCELLED',
+            cancelledAt: new Date(),
+            cancelReason: params.reason ?? 'Offer withdrawn by rider',
+          },
+        });
+        // Same shape as a real cancellation so callers never have to branch:
+        // nothing was paid, so nothing is refunded and nothing is forfeited.
+        return {
+          booking: withdrawn,
+          refundNgn: 0,
+          forfeitedNgn: 0,
+          refundFraction: 1,
+        };
+      }
+
       if (booking.status !== 'CONFIRMED') {
         throw new InterstateError(
-          `This booking is already ${booking.status.toLowerCase()}.`,
+          `This booking is already ${booking.status.toLowerCase().replace(/_/g, ' ')}.`,
           'BOOKING_NOT_CANCELLABLE',
           { status: booking.status },
         );
@@ -773,6 +1067,10 @@ function serializeBooking(
     mode: booking.mode,
     seats: booking.seats,
     amountNgn: money(booking.amountNgn),
+    offeredNgn: booking.offeredNgn === null ? null : money(booking.offeredNgn),
+    listPriceNgn: booking.listPriceNgn === null ? null : money(booking.listPriceNgn),
+    declineReason: booking.declineReason,
+    acceptedAt: booking.acceptedAt,
     refundedNgn: booking.refundedNgn === null ? null : money(booking.refundedNgn),
     status: booking.status,
     passengerName: booking.passengerName,

@@ -375,6 +375,9 @@ async function handleRideEvent(
       await registry.sendToUser(event.riderId, 'ride:matched', {
         rideId: event.rideId,
         driverId: event.driverId,
+        // Feedback is addressed to a *user*, not a driver record, so without
+        // this the rider's app has nobody to attach a rating to.
+        driverUserId: event.driverUserId,
         driverName: event.driverName,
         driverRating: event.driverRating,
         vehiclePlate: event.vehiclePlate,

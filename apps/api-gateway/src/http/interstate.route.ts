@@ -1,9 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { driverClient, InterstateError, interstateClient } from '@wheleers/db';
 import { authenticateHttpUser, HttpAuthError } from './authenticate';
+import { runIdempotentJsonRequest } from './idempotency';
 import { logActivity } from '../analytics/log-activity';
 import { getNumber, getString, isRecord } from '../utils/object';
 import { readJsonBody, sendJson } from './utils';
+import type { RedisClient } from '../redis/client';
 
 /**
  * Interstate travel — booking a seat (or a whole vehicle) between cities.
@@ -17,6 +19,7 @@ import { readJsonBody, sendJson } from './utils';
 
 interface InterstateDeps {
   jwtSecret: string;
+  redisClient: RedisClient;
 }
 
 function fail(res: ServerResponse, error: unknown, fallback: string): void {
@@ -249,21 +252,106 @@ export async function handleCreateInterstateBookingRoute(
       return;
     }
 
+    // Booking moves money, so a retried request must not buy the seat twice.
+    // The app already sends an idempotency key; this route used to ignore it,
+    // which made a double-tap a double charge.
+    const result = await runIdempotentJsonRequest({
+      req,
+      redisClient: deps.redisClient,
+      userId: user.id,
+      routeKey: 'interstate:booking:create',
+      requestBody: body,
+      execute: async () => {
+        return await createInterstateBooking(user, body);
+      },
+    });
+
+    sendJson(res, result.statusCode, result.body);
+  } catch (error) {
+    fail(res, error, 'could not complete this booking');
+  }
+}
+
+/**
+ * The booking itself, split out so the idempotency wrapper above has a single
+ * function to memoise. Returns the response rather than writing it, because a
+ * replayed request must produce the same body without re-running any of this.
+ */
+async function createInterstateBooking(
+  user: Awaited<ReturnType<typeof authenticateHttpUser>>,
+  body: Record<string, unknown>,
+): Promise<{ statusCode: number; body: Record<string, unknown> }> {
     const departureId = getString(body, 'departureId');
     if (!departureId) {
-      sendJson(res, 400, { error: 'departureId is required' });
-      return;
+      return { statusCode: 400, body: { error: 'departureId is required' } };
     }
     const seats = Math.max(1, Math.floor(getNumber(body, 'seats') ?? 1));
     if (seats > 10) {
-      sendJson(res, 400, { error: 'You can book at most 10 seats at once. Charter a vehicle for a larger group.' });
-      return;
+      return {
+        statusCode: 400,
+        body: {
+          error:
+            'You can book at most 10 seats at once. Charter a vehicle for a larger group.',
+        },
+      };
+    }
+
+    // A rider may name their own price. Below the posted fare it becomes an
+    // offer a driver has to accept; at or above it, the booking is immediate.
+    const offeredNgn = getNumber(body, 'offeredNgn');
+    if (offeredNgn !== undefined && (!Number.isFinite(offeredNgn) || offeredNgn <= 0)) {
+      return { statusCode: 400, body: { error: 'Enter a valid amount for your offer.' } };
+    }
+
+    if (offeredNgn !== undefined) {
+      const departure = await interstateClient.findDeparture(departureId);
+      if (!departure) {
+        return { statusCode: 404, body: { error: 'That trip is no longer available.' } };
+      }
+
+      const listPriceNgn = Number(departure.seatPriceNgn) * seats;
+      if (Math.round(offeredNgn) < listPriceNgn) {
+        const offer = await interstateClient.offerForSeats({
+          departureId,
+          userId: user.id,
+          seats,
+          offeredNgn,
+          passengerName: getString(body, 'passengerName'),
+          passengerPhone: getString(body, 'passengerPhone'),
+          pickupNote: getString(body, 'pickupNote'),
+        });
+
+        logActivity({
+          userId: user.id,
+          eventType: 'interstate_offer_placed',
+          metadata: {
+            reference: offer.booking.reference,
+            seats,
+            offeredNgn: Number(offer.booking.offeredNgn ?? 0),
+            listPriceNgn,
+            route: `${offer.route.originCity} → ${offer.route.destCity}`,
+          },
+        });
+
+        return {
+          statusCode: 201,
+          body: {
+            booking: (await interstateClient.findBooking(
+              offer.booking.id,
+              user.id,
+            )) as unknown as Record<string, unknown>,
+            pendingOffer: true,
+            replacedPreviousOffer: offer.replaced,
+          },
+        };
+      }
     }
 
     const result = await interstateClient.bookSeats({
       departureId,
       userId: user.id,
       seats,
+      offeredNgn,
       passengerName: getString(body, 'passengerName'),
       passengerPhone: getString(body, 'passengerPhone'),
       pickupNote: getString(body, 'pickupNote'),
@@ -282,13 +370,17 @@ export async function handleCreateInterstateBookingRoute(
       },
     });
 
-    sendJson(res, 201, {
-      booking: await interstateClient.findBooking(result.booking.id, user.id),
-      seatsRemaining: result.seatsRemaining,
-    });
-  } catch (error) {
-    fail(res, error, 'could not complete this booking');
-  }
+    return {
+      statusCode: 201,
+      body: {
+        booking: (await interstateClient.findBooking(
+          result.booking.id,
+          user.id,
+        )) as unknown as Record<string, unknown>,
+        seatsRemaining: result.seatsRemaining,
+        pendingOffer: false,
+      },
+    };
 }
 
 /** POST /interstate/charters  { routeId, departureAt, vehicleType? } */
@@ -598,6 +690,132 @@ export async function handleCompleteDepartureRoute(
     sendJson(res, 200, { departure: serializeDeparture(departure) });
   } catch (error) {
     fail(res, error, 'could not finish this trip');
+  }
+}
+
+/** GET /interstate/driver/offers — bids waiting on a decision. */
+export async function handleListInterstateOffersRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: InterstateDeps,
+  url: URL,
+): Promise<void> {
+  try {
+    await requireDriver(req, deps.jwtSecret);
+    const offers = await interstateClient.listPendingOffers({
+      departureId: url.searchParams.get('departureId') ?? undefined,
+    });
+
+    sendJson(res, 200, {
+      offers: offers.map((offer) => ({
+        bookingId: offer.id,
+        reference: offer.reference,
+        seats: offer.seats,
+        offeredNgn: Number(offer.offeredNgn ?? offer.amountNgn),
+        listPriceNgn: Number(offer.listPriceNgn ?? 0),
+        pickupNote: offer.pickupNote,
+        createdAt: offer.createdAt.toISOString(),
+        passenger: {
+          name: offer.passengerName ?? offer.user.name ?? 'Passenger',
+          // The phone stays hidden until a driver has actually taken the trip.
+          // A pending bid is not a reason to hand out a rider's number.
+          phone: null,
+        },
+        departure: {
+          id: offer.departure.id,
+          departureAt: offer.departure.departureAt.toISOString(),
+          seatsAvailable: offer.departure.totalSeats - offer.departure.seatsBooked,
+          seatPriceNgn: Number(offer.departure.seatPriceNgn),
+          route: {
+            id: offer.departure.route.id,
+            origin: {
+              state: offer.departure.route.originState,
+              city: offer.departure.route.originCity,
+              terminal: offer.departure.route.originTerminal,
+            },
+            destination: {
+              state: offer.departure.route.destState,
+              city: offer.departure.route.destCity,
+              terminal: offer.departure.route.destTerminal,
+            },
+            distanceKm: offer.departure.route.distanceKm,
+            durationMinutes: offer.departure.route.durationMinutes,
+          },
+        },
+      })),
+    });
+  } catch (error) {
+    fail(res, error, 'could not load passenger offers');
+  }
+}
+
+/** POST /interstate/driver/offers/:bookingId/accept */
+export async function handleAcceptInterstateOfferRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: InterstateDeps,
+  bookingId: string,
+): Promise<void> {
+  try {
+    const { user, driver } = await requireDriver(req, deps.jwtSecret);
+    let result;
+    try {
+      result = await interstateClient.acceptOffer({
+        bookingId,
+        driverId: driver.id,
+        // The rider is charged here, not when they made the offer — this is the
+        // first moment anyone agreed to carry them at that price.
+        chargeWalletFor: (riderUserId) => walletCharge(riderUserId),
+      });
+    } catch (error) {
+      // The wallet error is written for the person who owns the wallet, and
+      // that is the passenger, not the driver reading this response. Sending it
+      // through untouched would tell the driver *their* balance was short and
+      // would put the passenger's balance on the driver's screen.
+      if (error instanceof InterstateError && error.code === 'INSUFFICIENT_BALANCE') {
+        sendJson(res, 409, {
+          error:
+            'This passenger does not have enough in their wallet to pay that offer. Nothing was charged.',
+          code: 'PASSENGER_INSUFFICIENT_BALANCE',
+        });
+        return;
+      }
+      throw error;
+    }
+
+    await logActivity({
+      userId: user.id,
+      eventType: 'interstate_offer_accepted',
+      source: 'app',
+      metadata: {
+        bookingId,
+        amountNgn: Number(result.booking.amountNgn),
+        route: `${result.route.originCity} → ${result.route.destCity}`,
+      },
+    });
+
+    sendJson(res, 200, { accepted: true, bookingId: result.booking.id });
+  } catch (error) {
+    fail(res, error, 'could not accept this offer');
+  }
+}
+
+/** POST /interstate/driver/offers/:bookingId/decline */
+export async function handleDeclineInterstateOfferRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: InterstateDeps,
+  bookingId: string,
+): Promise<void> {
+  try {
+    await requireDriver(req, deps.jwtSecret);
+    const body = await readJsonBody(req).catch(() => ({}));
+    const reason = isRecord(body) ? getString(body, 'reason') : undefined;
+
+    await interstateClient.declineOffer({ bookingId, reason });
+    sendJson(res, 200, { declined: true, bookingId });
+  } catch (error) {
+    fail(res, error, 'could not decline this offer');
   }
 }
 
