@@ -1,6 +1,11 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
-import { minimumOfferNgn } from './interstate-pricing';
+import {
+  minimumOfferNgn,
+  priceForBooking,
+  vehicleClass,
+  type InterstateVehicleType,
+} from './interstate-pricing';
 
 /**
  * Interstate travel — Lagos → Ibadan, Abuja → Kaduna, and the rest.
@@ -28,7 +33,17 @@ const BOOKING_CUTOFF_MINUTES = 30;
 
 // The offer floor lives in its own import-free module so the rider app's copy
 // of the same rule can be tested against it directly.
-export { minimumOfferNgn, isBidBelowFare } from './interstate-pricing';
+export {
+  minimumOfferNgn,
+  isBidBelowFare,
+  vehiclePriceNgn,
+  seatPriceNgn,
+  priceForBooking,
+  vehicleClass,
+  VEHICLE_CLASSES,
+  RATE_PER_KM_NGN,
+} from './interstate-pricing';
+export type { InterstateVehicleType, VehicleClass } from './interstate-pricing';
 
 export class InterstateError extends Error {
   constructor(
@@ -336,6 +351,127 @@ export const interstateClient = {
       });
 
       return { booking, departure, route: departure.route, seatsRemaining: departure.totalSeats - nowBooked };
+    });
+  },
+
+  /**
+   * A rider asking to travel, rather than buying into a trip that already
+   * exists.
+   *
+   * Browsing departures only works once somebody has scheduled one. Most
+   * riders arrive knowing where they are going and when, so this creates the
+   * departure from their request and puts their booking on it. Drivers then see
+   * it exactly like any other trip waiting to be taken.
+   *
+   * `alone` reserves the whole vehicle, so nobody else can join. `together`
+   * takes the seats asked for and leaves the rest open — the rider is opening a
+   * shared trip other people can book into, which is how these vehicles fill.
+   */
+  createTravelRequest: async (params: {
+    routeId: string;
+    userId: string;
+    departureAt: Date;
+    vehicleType: InterstateVehicleType;
+    mode: 'alone' | 'together';
+    seats: number;
+    /** What the rider is willing to pay in total. Defaults to the posted fare. */
+    offeredNgn?: number;
+    passengerName?: string;
+    passengerPhone?: string;
+    pickupNote?: string;
+    /** Only called when the offer meets the posted fare — see below. */
+    chargeWallet: (
+      amountNgn: number,
+      reference: string,
+      tx: Prisma.TransactionClient,
+    ) => Promise<void>;
+  }) => {
+    if (params.departureAt.getTime() - Date.now() < BOOKING_CUTOFF_MINUTES * 60_000) {
+      throw new InterstateError(
+        `Travel has to be booked at least ${BOOKING_CUTOFF_MINUTES} minutes ahead.`,
+        'DEPARTURE_TOO_SOON',
+      );
+    }
+
+    const route = await prisma.interstateRoute.findUnique({
+      where: { id: params.routeId },
+    });
+    if (!route || !route.active) {
+      throw new InterstateError('That route is not available.', 'ROUTE_NOT_FOUND');
+    }
+
+    const vehicle = vehicleClass(params.vehicleType);
+    const seats =
+      params.mode === 'alone'
+        ? vehicle.seats
+        : Math.min(Math.max(1, Math.floor(params.seats)), vehicle.seats);
+
+    const listPriceNgn = priceForBooking({
+      distanceKm: route.distanceKm,
+      vehicleType: params.vehicleType,
+      mode: params.mode,
+      seats,
+    });
+
+    const offeredNgn =
+      params.offeredNgn === undefined ? listPriceNgn : Math.round(params.offeredNgn);
+    const floor = minimumOfferNgn(listPriceNgn);
+
+    if (offeredNgn < floor) {
+      throw new InterstateError(
+        `The lowest offer on this trip is ₦${floor.toLocaleString('en-NG')}.`,
+        'OFFER_TOO_LOW',
+        { minimumOfferNgn: floor, listPriceNgn },
+      );
+    }
+
+    // Below the posted fare this is a bid: the trip is created so drivers can
+    // see it, but the seats are not held and the wallet is not touched until
+    // one of them accepts. At or above it, the rider has agreed to our price
+    // and the booking is real straight away.
+    const isBid = offeredNgn < listPriceNgn;
+    const reference = bookingReference();
+
+    return prisma.$transaction(async (tx) => {
+      const departure = await tx.interstateDeparture.create({
+        data: {
+          routeId: route.id,
+          departureAt: params.departureAt,
+          vehicleType: params.vehicleType,
+          totalSeats: vehicle.seats,
+          // A bid holds nothing. A confirmed booking holds what it paid for.
+          seatsBooked: isBid ? 0 : seats,
+          seatPriceNgn: Math.round(listPriceNgn / Math.max(1, seats)),
+          charterPriceNgn: listPriceNgn,
+          bookingMode: params.mode === 'alone' ? 'CHARTER' : 'SHARED',
+          minimumSeats: 1,
+          status: isBid || seats < vehicle.seats ? 'SCHEDULED' : 'FULL',
+        },
+      });
+
+      if (!isBid) {
+        await params.chargeWallet(offeredNgn, reference, tx);
+      }
+
+      const booking = await tx.interstateBooking.create({
+        data: {
+          departureId: departure.id,
+          userId: params.userId,
+          mode: params.mode === 'alone' ? 'CHARTER' : 'SHARED',
+          seats,
+          amountNgn: offeredNgn,
+          offeredNgn,
+          listPriceNgn,
+          status: isBid ? 'PENDING_OFFER' : 'CONFIRMED',
+          ...(isBid ? {} : { acceptedAt: new Date() }),
+          passengerName: params.passengerName ?? null,
+          passengerPhone: params.passengerPhone ?? null,
+          pickupNote: params.pickupNote ?? null,
+          reference,
+        },
+      });
+
+      return { booking, departure, route, listPriceNgn, isBid };
     });
   },
 
