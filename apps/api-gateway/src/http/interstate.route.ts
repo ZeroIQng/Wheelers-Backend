@@ -1,5 +1,14 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { driverClient, InterstateError, interstateClient } from '@wheleers/db';
+import {
+  driverClient,
+  InterstateError,
+  interstateClient,
+  RATE_PER_KM_NGN,
+  VEHICLE_CLASSES,
+  priceForBooking,
+  minimumOfferNgn,
+  type InterstateVehicleType,
+} from '@wheleers/db';
 import { authenticateHttpUser, HttpAuthError } from './authenticate';
 import { runIdempotentJsonRequest } from './idempotency';
 import { logActivity } from '../analytics/log-activity';
@@ -236,6 +245,201 @@ export async function handleInterstateDeparturesRoute(
   } catch (error) {
     fail(res, error, 'could not load departures');
   }
+}
+
+/**
+ * GET /interstate/vehicles?routeId=&seats=
+ *
+ * The cars a rider can pick between on this route, each priced from the ₦450/km
+ * rate. Everything the booking form needs to render its list in one call, so
+ * the app never has to know the pricing rule to show a price.
+ */
+export async function handleInterstateVehiclesRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: InterstateDeps,
+  url: URL,
+): Promise<void> {
+  try {
+    await authenticateHttpUser(req, deps.jwtSecret);
+
+    const routeId = url.searchParams.get('routeId');
+    if (!routeId) {
+      sendJson(res, 400, { error: 'Choose where you are travelling to first.' });
+      return;
+    }
+
+    const route = await interstateClient.findRoute(routeId);
+    if (!route || !route.active) {
+      sendJson(res, 404, { error: 'We are not running that route right now.' });
+      return;
+    }
+
+    const seatsRaw = Number.parseInt(url.searchParams.get('seats') ?? '1', 10);
+    const seats = Number.isFinite(seatsRaw) ? Math.max(1, seatsRaw) : 1;
+
+    sendJson(res, 200, {
+      route: {
+        id: route.id,
+        origin: {
+          state: route.originState,
+          city: route.originCity,
+          terminal: route.originTerminal,
+        },
+        destination: {
+          state: route.destState,
+          city: route.destCity,
+          terminal: route.destTerminal,
+        },
+        distanceKm: route.distanceKm,
+        durationMinutes: route.durationMinutes,
+      },
+      ratePerKmNgn: RATE_PER_KM_NGN,
+      vehicles: VEHICLE_CLASSES.map((vehicle) => {
+        // Both prices, because the rider has not chosen how they travel yet and
+        // the form shows the consequence of each choice side by side.
+        const alonePriceNgn = priceForBooking({
+          distanceKm: route.distanceKm,
+          vehicleType: vehicle.type,
+          mode: 'alone',
+          seats: vehicle.seats,
+        });
+        const togetherPriceNgn = priceForBooking({
+          distanceKm: route.distanceKm,
+          vehicleType: vehicle.type,
+          mode: 'together',
+          seats,
+        });
+
+        return {
+          type: vehicle.type,
+          label: vehicle.label,
+          description: vehicle.description,
+          seats: vehicle.seats,
+          alonePriceNgn,
+          togetherPriceNgn,
+          seatPriceNgn: Math.round(togetherPriceNgn / seats),
+          minimumOfferAloneNgn: minimumOfferNgn(alonePriceNgn),
+          minimumOfferTogetherNgn: minimumOfferNgn(togetherPriceNgn),
+        };
+      }),
+    });
+  } catch (error) {
+    fail(res, error, 'could not price this route');
+  }
+}
+
+/**
+ * POST /interstate/requests
+ *
+ * A rider asking to travel, rather than buying into a trip somebody else
+ * already scheduled. Creates the trip and puts their booking on it — bidding
+ * below the posted fare leaves it for a driver to accept, exactly like an offer
+ * on an existing departure.
+ */
+export async function handleCreateTravelRequestRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: InterstateDeps,
+): Promise<void> {
+  try {
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
+    const body = await readJsonBody(req);
+    if (!isRecord(body)) {
+      sendJson(res, 400, { error: 'Body must be a JSON object' });
+      return;
+    }
+
+    // Creating a trip moves money whenever the rider pays the posted fare, so a
+    // retried request must not create a second one.
+    const result = await runIdempotentJsonRequest({
+      req,
+      redisClient: deps.redisClient,
+      userId: user.id,
+      routeKey: 'interstate:travel-request:create',
+      requestBody: body,
+      execute: async () => createTravelRequest(user, body),
+    });
+
+    sendJson(res, result.statusCode, result.body);
+  } catch (error) {
+    fail(res, error, 'could not create this travel request');
+  }
+}
+
+async function createTravelRequest(
+  user: Awaited<ReturnType<typeof authenticateHttpUser>>,
+  body: Record<string, unknown>,
+): Promise<{ statusCode: number; body: Record<string, unknown> }> {
+  const routeId = getString(body, 'routeId');
+  if (!routeId) {
+    return { statusCode: 400, body: { error: 'Choose where you are travelling to.' } };
+  }
+
+  const departureAtRaw = getString(body, 'departureAt');
+  if (!departureAtRaw) {
+    return { statusCode: 400, body: { error: 'Choose when you want to travel.' } };
+  }
+
+  const departureAt = new Date(departureAtRaw);
+  if (Number.isNaN(departureAt.getTime())) {
+    return { statusCode: 400, body: { error: 'That travel time is not valid.' } };
+  }
+
+  const vehicleRaw = String(getString(body, 'vehicleType') ?? '').toUpperCase();
+  const vehicleType = VEHICLE_CLASSES.some((entry) => entry.type === vehicleRaw)
+    ? (vehicleRaw as InterstateVehicleType)
+    : null;
+  if (!vehicleType) {
+    return { statusCode: 400, body: { error: 'Choose a vehicle for this trip.' } };
+  }
+
+  const mode = getString(body, 'mode') === 'alone' ? 'alone' : 'together';
+  const seats = Math.max(1, Math.floor(getNumber(body, 'seats') ?? 1));
+  const offeredNgn = getNumber(body, 'offeredNgn');
+  if (offeredNgn !== undefined && (!Number.isFinite(offeredNgn) || offeredNgn <= 0)) {
+    return { statusCode: 400, body: { error: 'Enter a valid amount for your offer.' } };
+  }
+
+  const result = await interstateClient.createTravelRequest({
+    routeId,
+    userId: user.id,
+    departureAt,
+    vehicleType,
+    mode,
+    seats,
+    offeredNgn,
+    passengerName: getString(body, 'passengerName'),
+    passengerPhone: getString(body, 'passengerPhone'),
+    pickupNote: getString(body, 'pickupNote'),
+    chargeWallet: walletCharge(user.id),
+  });
+
+  logActivity({
+    userId: user.id,
+    eventType: result.isBid ? 'interstate_request_bid' : 'interstate_request_booked',
+    metadata: {
+      reference: result.booking.reference,
+      route: `${result.route.originCity} → ${result.route.destCity}`,
+      vehicleType,
+      mode,
+      seats: result.booking.seats,
+      offeredNgn: Number(result.booking.amountNgn),
+      listPriceNgn: result.listPriceNgn,
+    },
+  });
+
+  return {
+    statusCode: 201,
+    body: {
+      booking: (await interstateClient.findBooking(
+        result.booking.id,
+        user.id,
+      )) as unknown as Record<string, unknown>,
+      listPriceNgn: result.listPriceNgn,
+      pendingOffer: result.isBid,
+    },
+  };
 }
 
 /** POST /interstate/bookings  { departureId, seats?, passengerName?, ... } */

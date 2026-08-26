@@ -123,6 +123,8 @@ import {
   handleStartDepartureRoute,
   handleCompleteDepartureRoute,
   handleDepartureManifestRoute,
+  handleInterstateVehiclesRoute,
+  handleCreateTravelRequestRoute,
   handleListInterstateOffersRoute,
   handleAcceptInterstateOfferRoute,
   handleDeclineInterstateOfferRoute,
@@ -1245,6 +1247,24 @@ async function bootstrap(): Promise<void> {
           interstateDeps,
           decodeURIComponent(manifestMatch[1]),
         );
+        return;
+      }
+
+      if (url.pathname === "/interstate/vehicles") {
+        if (req.method !== "GET") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleInterstateVehiclesRoute(req, res, interstateDeps, url);
+        return;
+      }
+
+      if (url.pathname === "/interstate/requests") {
+        if (req.method !== "POST") {
+          sendMethodNotAllowed(res);
+          return;
+        }
+        await handleCreateTravelRequestRoute(req, res, interstateDeps);
         return;
       }
 

@@ -21,6 +21,17 @@ export { activityClient }       from './clients/activity.client';
 export { adminMetricsClient }   from './clients/admin-metrics.client';
 export { interstateClient, InterstateError, refundFractionFor } from './clients/interstate.client';
 export type { BookingMode, QuoteResult } from './clients/interstate.client';
+export {
+  minimumOfferNgn,
+  isBidBelowFare,
+  vehiclePriceNgn,
+  seatPriceNgn,
+  priceForBooking,
+  vehicleClass,
+  VEHICLE_CLASSES,
+  RATE_PER_KM_NGN,
+} from './clients/interstate-pricing';
+export type { InterstateVehicleType, VehicleClass } from './clients/interstate-pricing';
 export { safetyAlertClient, LIVE_ALERT_STATUSES } from './clients/safety-alert.client';
 export type {
   SafetyAlertRole,

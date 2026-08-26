@@ -45,6 +45,8 @@
     "test:rider-signup": "npm -w @wheleers/api-gateway run build && node --test test/rider-signup.test.js",
     "test:interstate": "npm -w @wheleers/db run build && node --test --test-force-exit test/interstate.test.js",
     "seed:interstate": "node scripts/seed-interstate-routes.mjs",
+    "seed:demo": "node scripts/seed-demo.mjs",
+    "demo:live": "node scripts/demo-live.mjs --confirm",
     "test:mcp-server": "npm -w @wheleers/mcp-server run build && node --test --test-force-exit test/mcp-server.test.js",
     "test:wallet-payment-integration": "npm run build && tsc -p test/tsconfig.json && node test/dist/payment-wallet.integration.js",
     "test:driver-reonline": "tsc -p test/tsconfig.json && node test/dist/driver-reonline.integration.js"

@@ -1050,8 +1050,25 @@ async function main() {
         await prisma.wallet.findMany({ where: { userId: { in: ids } }, select: { id: true } })
       ).map((w) => w.id);
 
+      // SafetyAlert holds a foreign key to User, and activity rows outlive the
+      // rides they describe — both would strand the delete or leave orphans.
+      await prisma.safetyAlert.deleteMany({ where: { userId: { in: ids } } });
+      await prisma.userActivityEvent.deleteMany({ where: { userId: { in: ids } } });
+      await prisma.chatMessage.deleteMany({ where: { ride: { riderId: { in: ids } } } });
       await prisma.transaction.deleteMany({ where: { walletId: { in: walletIds } } });
       await prisma.transaction.deleteMany({ where: { metadata: { path: ['seed'], equals: true } } });
+
+      // The platform wallet is not a seeded user, so its fee rows survive the
+      // two deletes above — every PLATFORM_FEE references a ride by id, and
+      // leaving them behind would inflate platform revenue on the next seed.
+      const seededRideIds = (
+        await prisma.ride.findMany({ where: { riderId: { in: ids } }, select: { id: true } })
+      ).map((r) => r.id);
+      for (let i = 0; i < seededRideIds.length; i += 1000) {
+        await prisma.transaction.deleteMany({
+          where: { referenceId: { in: seededRideIds.slice(i, i + 1000) } },
+        });
+      }
       await prisma.withdrawalRequest.deleteMany({ where: { userId: { in: ids } } });
       await prisma.walletReservation.deleteMany({ where: { userId: { in: ids } } });
       await prisma.groupRideFaceVerification.deleteMany({ where: { userId: { in: ids } } });
@@ -1060,9 +1077,48 @@ async function main() {
       await prisma.rideHold.deleteMany({ where: { riderId: { in: ids } } });
       await prisma.rideStop.deleteMany({ where: { ride: { riderId: { in: ids } } } });
       await prisma.ride.deleteMany({ where: { riderId: { in: ids } } });
+      // Driver has three dependants of its own — the KYC rows it was approved
+      // on, and any interstate departure it was assigned to drive.
+      const driverIds = (
+        await prisma.driver.findMany({ where: { userId: { in: ids } }, select: { id: true } })
+      ).map((d) => d.id);
+      await prisma.driverKycReview.deleteMany({ where: { driverId: { in: driverIds } } });
+      await prisma.driverKycSubmission.deleteMany({ where: { driverId: { in: driverIds } } });
+      await prisma.interstateDeparture.updateMany({
+        where: { driverId: { in: driverIds } },
+        data: { driverId: null },
+      });
       await prisma.driver.deleteMany({ where: { userId: { in: ids } } });
       await prisma.wallet.deleteMany({ where: { userId: { in: ids } } });
       await prisma.user.deleteMany({ where: { id: { in: ids } } });
+
+      // The platform wallet survives, so its balance has to come back down by
+      // the fees that just went away. It only ever moves by transaction, so
+      // recomputing from what is left is exact — no arithmetic to get wrong.
+      const platformWallet = await prisma.wallet.findUnique({
+        where: { userId: '00000000-0000-0000-0000-000000000001' },
+      });
+      if (platformWallet) {
+        const [credits, debits] = await Promise.all([
+          prisma.transaction.aggregate({
+            where: { walletId: platformWallet.id, direction: 'CREDIT' },
+            _sum: { amountNgn: true },
+          }),
+          prisma.transaction.aggregate({
+            where: { walletId: platformWallet.id, direction: 'DEBIT' },
+            _sum: { amountNgn: true },
+          }),
+        ]);
+        const balance = round2(
+          Number(credits._sum.amountNgn ?? 0) - Number(debits._sum.amountNgn ?? 0),
+        );
+        await prisma.wallet.update({
+          where: { id: platformWallet.id },
+          data: { balanceNgn: Math.max(0, balance) },
+        });
+        console.log(`  platform wallet rebalanced to ₦${Math.round(balance).toLocaleString('en-NG')}`);
+      }
+
       console.log('  done — seeded data removed\n');
       return;
     }
@@ -1141,6 +1197,26 @@ async function main() {
       create: { id: '00000000-0000-0000-0000-000000000001', privyDid: 'platform:wheelers', role: 'RIDER', name: 'Wheelers Platform' },
       update: {},
     });
+
+    // The platform wallet outlives a purge — it can hold real fee income, so
+    // it is never deleted. `createMany` would then skip it, stranding every
+    // PLATFORM_FEE row against a wallet id that was never inserted. Point the
+    // ledger at the wallet that already exists instead, and add the seeded
+    // fees to its balance rather than overwriting what is there.
+    const existingPlatformWallet = await prisma.wallet.findUnique({
+      where: { userId: '00000000-0000-0000-0000-000000000001' },
+    });
+    if (existingPlatformWallet) {
+      const generatedId = ledger.platformWallet.id;
+      const openingNgn = Number(existingPlatformWallet.balanceNgn);
+      ledger.platformWallet.id = existingPlatformWallet.id;
+      for (const t of ledger.transactions) {
+        if (t.walletId !== generatedId) continue;
+        t.walletId = existingPlatformWallet.id;
+        // The ledger counted up from zero; this wallet did not start there.
+        t.balanceAfterNgn = round2(t.balanceAfterNgn + openingNgn);
+      }
+    }
 
     await write('users', data.users, (batch) =>
       prisma.user.createMany({
@@ -1223,6 +1299,14 @@ async function main() {
         })),
       }),
     );
+
+    // Skipped by `skipDuplicates` above — credit the seeded fees explicitly.
+    if (existingPlatformWallet) {
+      await prisma.wallet.update({
+        where: { id: existingPlatformWallet.id },
+        data: { balanceNgn: { increment: Math.max(0, ledger.platformWallet.balance) } },
+      });
+    }
 
     await write('rides', data.rides, (batch) =>
       prisma.ride.createMany({
