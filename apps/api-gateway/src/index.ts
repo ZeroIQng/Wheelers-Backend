@@ -59,6 +59,7 @@ import {
   handleGetDriverStatsRoute,
   handleGetDriverEarningsRoute,
   handleGetDriverRideHistoryRoute,
+  handleGetDriverActiveRideRoute,
 } from "./http/driver.route";
 import {
   handleDriverKycSubmitRoute,
@@ -892,6 +893,18 @@ async function bootstrap(): Promise<void> {
       await handleGetDriverEarningsRoute(req, res, {
         jwtSecret: gatewayEnv.JWT_SECRET,
       }, url);
+      return;
+    }
+
+    if (url.pathname === "/drivers/me/rides/active") {
+      if (req.method !== "GET") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+
+      await handleGetDriverActiveRideRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+      });
       return;
     }
 

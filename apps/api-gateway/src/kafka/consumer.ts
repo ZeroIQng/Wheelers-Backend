@@ -13,6 +13,7 @@ import {
 import { calculateRideFees } from '@wheleers/config';
 import { buildRideEstimatePricing } from '../pricing/ride-estimate';
 import { SocketRegistry } from '../websocket/registry';
+import { loadDriverRideSnapshot } from '../websocket/driver-ride-sync';
 import type { RedisClient } from '../redis/client';
 import {
   isWhatsappRider,
@@ -414,9 +415,19 @@ async function handleRideEvent(
       riderPhone = riderUser?.phone ?? undefined;
     } catch { /* non-critical */ }
 
+    // Ship the route with the match. The driver app's offer card expires
+    // after 30s while the rider takes minutes to pay, so by now the app often
+    // has nothing left to rebuild the trip from — the match was dropped with
+    // a console warning and the driver kept seeing "waiting for rider".
+    const rideSnapshot = await loadDriverRideSnapshot(event.rideId).catch(() => null);
+
     await registry.sendToUser(event.driverUserId, 'ride:matched', {
       rideId: event.rideId,
       riderId: event.riderId,
+      rideStatus: 'DRIVER_ASSIGNED',
+      pickup: rideSnapshot?.pickup,
+      destination: rideSnapshot?.destination,
+      stops: rideSnapshot?.stops ?? [],
       driverId: event.driverId,
       driverName: event.driverName,
       driverRating: event.driverRating,

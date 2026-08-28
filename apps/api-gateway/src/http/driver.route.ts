@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { driverClient, rideClient, walletClient } from '@wheleers/db';
 import { authenticateHttpUser, HttpAuthError } from './authenticate';
 import { sendJson } from './utils';
+import { loadDriverActiveRideSnapshot } from '../websocket/driver-ride-sync';
 
 interface DriverRouteDeps {
   jwtSecret: string;
@@ -93,6 +94,32 @@ export async function handleGetDriverStatsRoute(
     });
   } catch (error) {
     sendDriverRouteError(res, 'GET /drivers/me/stats', error, 'Could not load driver stats.');
+  }
+}
+
+// GET /drivers/me/rides/active — the ride this driver is assigned to right
+// now, or null. The socket is the primary channel, but it is fire-and-forget:
+// a driver whose app was backgrounded (or restarted) when the rider paid
+// never got `ride:matched`. This is how the app catches up on reconnect,
+// on foreground, and when it is unsure what a stale "bid sent" card means.
+export async function handleGetDriverActiveRideRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: DriverRouteDeps,
+): Promise<void> {
+  try {
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
+    const driver = await driverClient.findByUserId(user.id);
+
+    if (!driver) {
+      sendJson(res, 404, { error: 'No driver profile found.' });
+      return;
+    }
+
+    const ride = await loadDriverActiveRideSnapshot(driver.id);
+    sendJson(res, 200, { ride });
+  } catch (error) {
+    sendDriverRouteError(res, 'GET /drivers/me/rides/active', error, 'Could not load active ride.');
   }
 }
 

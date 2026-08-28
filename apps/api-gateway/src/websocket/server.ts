@@ -10,6 +10,7 @@ import { isRecord } from '../utils/object';
 import { handleDriverMessage } from './handlers/driver.handler';
 import { handleRideMessage } from './handlers/ride.handler';
 import { handleWalletMessage } from './handlers/wallet.handler';
+import { resyncDriverActiveRide } from './driver-ride-sync';
 import type { GatewayPublisher } from './publisher';
 import { SocketRegistry } from './registry';
 
@@ -117,6 +118,11 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
               ...getRequestLogContext(request, requestOrigin),
             });
             wsServer.emit('connection', ws, request);
+            // A driver reconnecting mid-trip (or after missing the match
+            // while backgrounded) gets their assigned ride back immediately.
+            if (driver) {
+              void resyncDriverActiveRide(deps.registry, ws, driver.id);
+            }
           }).catch((error) => {
             console.error('[ws] registry error', {
               message: error instanceof Error ? error.message : String(error),

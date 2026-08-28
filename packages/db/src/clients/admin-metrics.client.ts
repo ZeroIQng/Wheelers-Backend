@@ -829,10 +829,19 @@ export const adminMetricsClient = {
     const offset = Math.max(options.offset ?? 0, 0);
     const q = options.q?.trim();
 
+    // `live` is every status where somebody is mid-journey right now: a rider
+    // waiting on bids, a driver on the way, a trip under way. An operator
+    // asking "who is out there at this moment" wants all of them in one list,
+    // not one status at a time.
+    const statusFilter: Prisma.RideWhereInput =
+      !options.status || options.status === 'all'
+        ? {}
+        : options.status === 'live'
+          ? { status: { in: [...ACTIVE_RIDE_STATUSES] as Prisma.EnumRideStatusFilter['in'] } }
+          : { status: options.status as Prisma.EnumRideStatusFilter['equals'] };
+
     const where: Prisma.RideWhereInput = {
-      ...(options.status && options.status !== 'all'
-        ? { status: options.status as Prisma.EnumRideStatusFilter['equals'] }
-        : {}),
+      ...statusFilter,
       ...(q
         ? {
             OR: [

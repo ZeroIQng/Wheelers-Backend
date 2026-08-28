@@ -4,6 +4,7 @@
     "packages/*"
   ],
   "scripts": {
+    "postinstall": "npm run db:generate",
     "dev": "npm --workspaces --if-present run dev",
     "build": "npm run build:packages && npm run build:apps",
     "build:packages": "npm -w @wheleers/config run build && npm -w @wheleers/kafka-schemas run build && npm -w @wheleers/kafka-client run build && npm -w @wheleers/db run build && npm -w @wheleers/multi-chain-wallet run build && npm -w @wheleers/pouch-client run build",
