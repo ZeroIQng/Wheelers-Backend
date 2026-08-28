@@ -83,6 +83,7 @@ model Driver {
   kycSubmission        DriverKycSubmission?
   kycReviews           DriverKycReview[]
   rides                Ride[]                @relation("DriverRides")
+  bids                 DriverBid[]           @relation("DriverBids")
   interstateDepartures InterstateDeparture[] @relation("DriverInterstateDepartures")
 
   @@index([status])
@@ -337,6 +338,7 @@ model Ride {
   gpsLogs                GpsLog[]
   driver                 Driver?           @relation("DriverRides", fields: [driverId], references: [id])
   routeStops             RideStop[]
+  bids                   DriverBid[]
   referralQualifications Referral[]        @relation("ReferralFirstRide")
 
   chatMessages ChatMessage[]
@@ -374,6 +376,30 @@ model RideStop {
 
   @@unique([rideId, stopOrder])
   @@index([rideId, status, stopOrder])
+}
+
+/// One driver's offer on one ride. ride-service keeps bids only in memory
+/// while the auction runs, so this is the durable record: what the driver
+/// bid, when, and how it ended — the driver's "my bids" history.
+model DriverBid {
+  id           String          @id @default(uuid())
+  rideId       String
+  driverId     String
+  driverUserId String
+  riderId      String
+  amountNgn    Decimal         @db.Decimal(18, 2)
+  etaSeconds   Int
+  distanceKm   Float?
+  status       DriverBidStatus @default(PENDING)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  resolvedAt   DateTime?
+  ride         Ride            @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  driver       Driver          @relation("DriverBids", fields: [driverId], references: [id])
+
+  @@unique([rideId, driverId])
+  @@index([driverId, createdAt])
+  @@index([rideId, status])
 }
 
 model ScheduledRide {
@@ -730,6 +756,15 @@ enum RideHoldStatus {
   ACTIVE
   RELEASED
   CHARGED
+}
+
+enum DriverBidStatus {
+  PENDING
+  ACCEPTED
+  LOST
+  WITHDRAWN
+  EXPIRED
+  CANCELLED
 }
 
 enum RideStopType {

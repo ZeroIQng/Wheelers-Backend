@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { GoogleMapsRoutePlanner, RIDE, validateRiderOffer, calculateSuggestedFare } from '@wheleers/config';
-import { chatClient, driverClient, groupRideClient, referralClient, rideClient } from '@wheleers/db';
+import { chatClient, driverClient, groupRideClient, referralClient, rideClient, driverBidClient } from '@wheleers/db';
 import {
   ChatMessageSentEvent,
   DisputeOpenedEvent,
@@ -607,10 +607,12 @@ export async function handleRideMessage(
     let driverRating = getNumber(payload, 'driverRating') ?? 5.0;
     let vehiclePlate = getString(payload, 'vehiclePlate') ?? '';
     let vehicleModel = getString(payload, 'vehicleModel') ?? '';
+    let driverRowId: string | null = null;
 
     try {
       const driver = await driverClient.findByUserId(auth.userId);
       if (driver) {
+        driverRowId = driver.id;
         driverName = driver.user.name ?? driver.user.phone ?? driverName;
         driverRating = driver.rating ?? driverRating;
         vehiclePlate = driver.vehiclePlate ?? vehiclePlate;
@@ -644,6 +646,29 @@ export async function handleRideMessage(
     });
 
     await publisher.publishRideEvent(counterOfferEvent);
+
+    // The durable trace of this bid — ride-service forgets the auction the
+    // moment the ride is matched, and the driver's bid history reads from
+    // here. Best-effort: a failed write must not block the bid itself.
+    if (driverRowId) {
+      await driverBidClient
+        .record({
+          rideId: counterOfferEvent.rideId,
+          driverId: driverRowId,
+          driverUserId: auth.userId,
+          riderId: counterOfferEvent.riderId,
+          amountNgn: counterOfferEvent.counterOfferNgn,
+          etaSeconds: counterOfferEvent.etaSeconds,
+          distanceKm: counterOfferEvent.distanceKm,
+        })
+        .catch((error) => {
+          console.warn('[gateway] could not record driver bid', {
+            rideId: counterOfferEvent.rideId,
+            driverId: driverRowId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+    }
 
     return {
       type: 'driver:accept:accepted',

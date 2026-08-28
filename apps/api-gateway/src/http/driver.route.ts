@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { driverClient, rideClient, walletClient } from '@wheleers/db';
+import { driverClient, rideClient, walletClient, driverBidClient } from '@wheleers/db';
 import { authenticateHttpUser, HttpAuthError } from './authenticate';
 import { sendJson } from './utils';
 import { loadDriverActiveRideSnapshot } from '../websocket/driver-ride-sync';
@@ -120,6 +120,62 @@ export async function handleGetDriverActiveRideRoute(
     sendJson(res, 200, { ride });
   } catch (error) {
     sendDriverRouteError(res, 'GET /drivers/me/rides/active', error, 'Could not load active ride.');
+  }
+}
+
+// GET /drivers/me/bids?limit=20&cursor= — every bid this driver has sent,
+// newest first, with how each one ended and the trip it was on.
+export async function handleGetDriverBidsRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: DriverRouteDeps,
+  url: URL,
+): Promise<void> {
+  try {
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
+    const driver = await driverClient.findByUserId(user.id);
+
+    if (!driver) {
+      sendJson(res, 404, { error: 'No driver profile found.' });
+      return;
+    }
+
+    const limit = parseLimit(url.searchParams.get('limit'));
+    const cursor = url.searchParams.get('cursor') ?? undefined;
+    const bids = await driverBidClient.findForDriver(driver.id, limit + 1, cursor);
+    const hasMore = bids.length > limit;
+    const page = hasMore ? bids.slice(0, limit) : bids;
+
+    sendJson(res, 200, {
+      items: page.map((bid) => ({
+        id: bid.id,
+        rideId: bid.rideId,
+        amountNgn: decimalToNumber(bid.amountNgn),
+        etaSeconds: bid.etaSeconds,
+        distanceKm: bid.distanceKm ?? null,
+        status: bid.status,
+        createdAt: bid.createdAt.toISOString(),
+        resolvedAt: bid.resolvedAt?.toISOString() ?? null,
+        ride: {
+          status: bid.ride.status,
+          pickupAddress: bid.ride.pickupAddress,
+          destAddress: bid.ride.destAddress,
+          riderOfferNgn:
+            bid.ride.riderOfferNgn === null ? null : decimalToNumber(bid.ride.riderOfferNgn),
+          agreedFareNgn:
+            bid.ride.agreedFareNgn === null ? null : decimalToNumber(bid.ride.agreedFareNgn),
+          fareEstimateNgn:
+            bid.ride.fareEstimateNgn === null ? null : decimalToNumber(bid.ride.fareEstimateNgn),
+          distanceKm: bid.ride.distanceKm ?? null,
+          matchedAt: bid.ride.matchedAt?.toISOString() ?? null,
+          completedAt: bid.ride.completedAt?.toISOString() ?? null,
+          cancelledAt: bid.ride.cancelledAt?.toISOString() ?? null,
+        },
+      })),
+      nextCursor: hasMore ? page[page.length - 1]!.id : null,
+    });
+  } catch (error) {
+    sendDriverRouteError(res, 'GET /drivers/me/bids', error, 'Could not load your bids.');
   }
 }
 

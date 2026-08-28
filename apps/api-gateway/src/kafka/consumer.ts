@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { WheelersConsumer } from '@wheleers/kafka-client';
-import { referralClient, walletClient, virtualAccountClient, driverClient, userClient } from '@wheleers/db';
+import { referralClient, walletClient, virtualAccountClient, driverClient, userClient, driverBidClient } from '@wheleers/db';
 import {
   ComplianceEvent,
   GroupRideEvent,
@@ -297,6 +297,8 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_BID_TIMEOUT') {
+    await driverBidClient.resolvePending(event.rideId, 'EXPIRED').catch(() => {});
+
     // Same money cleanup as a cancellation: the fare hold and any reserved
     // referral cashback must go back to the rider now that nobody accepted.
     await walletClient.cancelRideHold(event.rideId).catch(() => {});
@@ -328,6 +330,15 @@ async function handleRideEvent(
     rideParticipants.set(event.rideId, {
       riderId: event.riderId,
       driverUserId: event.driverUserId,
+    });
+
+    // This driver's bid won; every other open bid on the ride lost.
+    await driverBidClient.markAccepted(event.rideId, event.driverId).catch((error) => {
+      console.warn('[gateway] could not mark bid accepted', {
+        rideId: event.rideId,
+        driverId: event.driverId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
 
     // Notify rider
@@ -568,6 +579,8 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_CANCELLED') {
+    await driverBidClient.resolvePending(event.rideId, 'CANCELLED').catch(() => {});
+
     // Release wallet hold so locked funds return to rider's balance
     await walletClient.cancelRideHold(event.rideId).catch(() => {});
 
@@ -636,6 +649,11 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_DRIVER_REJECTED') {
+    // A driver taking back a bid they'd sent — a timeout is the offer card
+    // lapsing, which says nothing about a bid.
+    if (event.reason === 'manual_reject') {
+      await driverBidClient.markWithdrawn(event.rideId, event.driverId).catch(() => {});
+    }
     await registry.sendToUser(event.riderId, 'ride:driver_rejected', {
       rideId: event.rideId,
       reason: event.reason,

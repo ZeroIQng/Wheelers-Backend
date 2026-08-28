@@ -5,6 +5,7 @@ export { prisma } from './prisma';
 export { userClient }           from './clients/user.client';
 export { driverClient }         from './clients/driver.client';
 export { rideClient }           from './clients/rider.client';
+export { driverBidClient }      from './clients/driver-bid.client';
 export { scheduledRideClient }  from './clients/scheduled-ride.client';
 export { outboxClient }         from './clients/outbox.client';
 export { walletClient }         from './clients/wallet.client';
