@@ -277,7 +277,15 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_COUNTER_OFFER') {
-    const waRider = await isWhatsappRider(deps.redisClient, event.riderId);
+    let waRider = await isWhatsappRider(deps.redisClient, event.riderId);
+    if (!waRider && deps.whatsappNotifier) {
+      // isWhatsappRider keys on the active-ride entry — which the
+      // bid-timeout cleanup deletes. A late bid then looked like it belonged
+      // to an app rider and the WhatsApp rider heard nothing. The phone
+      // mapping outlives the cleanup: a rider with a phone on file is a
+      // WhatsApp rider, active-ride key or not.
+      waRider = (await lookupPhoneByUserId(deps.redisClient, event.riderId)) !== null;
+    }
     if (waRider && deps.whatsappNotifier) {
       const bid: WhatsappBid = {
         bidId: event.bidId,
