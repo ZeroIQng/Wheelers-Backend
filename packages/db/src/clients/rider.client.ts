@@ -122,6 +122,14 @@ export const rideClient = {
       },
     }),
 
+  /** Trips this driver was assigned that ended cancelled — the raw material
+   *  of a cancellation rate. Data first; policy later. */
+  countCancelledByDriver: (driverId: string) =>
+    prisma.ride.count({ where: { driverId, status: 'CANCELLED' } }),
+
+  countCompletedByDriver: (driverId: string) =>
+    prisma.ride.count({ where: { driverId, status: 'COMPLETED' } }),
+
   countCompletedByRider: (riderId: string) =>
     prisma.ride.count({ where: { riderId, status: 'COMPLETED' } }),
 

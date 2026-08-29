@@ -76,6 +76,11 @@ export async function handleGetDriverStatsRoute(
     }
 
     const wallet = await walletClient.findByUserId(user.id);
+    const [completedRides, cancelledRides] = await Promise.all([
+      rideClient.countCompletedByDriver(driver.id).catch(() => 0),
+      rideClient.countCancelledByDriver(driver.id).catch(() => 0),
+    ]);
+    const decidedRides = completedRides + cancelledRides;
 
     sendJson(res, 200, {
       driverId: driver.id,
@@ -85,6 +90,12 @@ export async function handleGetDriverStatsRoute(
       rating: driver.rating,
       totalRides: driver.totalRides,
       totalEarningsNgn: decimalToNumber(driver.totalEarningsNgn),
+      ratingCount: driver.ratingCount,
+      completedRides,
+      cancelledRides,
+      // Share of decided trips that ended cancelled. Accountability starts
+      // as a number on your own profile before it's ever a policy.
+      cancellationRate: decidedRides > 0 ? Math.round((cancelledRides / decidedRides) * 100) / 100 : 0,
       vehicleMake: driver.vehicleMake,
       vehicleModel: driver.vehicleModel,
       vehiclePlate: driver.vehiclePlate,
