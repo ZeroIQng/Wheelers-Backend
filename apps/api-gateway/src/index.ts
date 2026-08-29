@@ -60,6 +60,7 @@ import {
   handleGetDriverEarningsRoute,
   handleGetDriverRideHistoryRoute,
   handleGetDriverActiveRideRoute,
+  handlePostDriverLocationRoute,
   handleGetDriverBidsRoute,
 } from "./http/driver.route";
 import {
@@ -894,6 +895,17 @@ async function bootstrap(): Promise<void> {
       await handleGetDriverEarningsRoute(req, res, {
         jwtSecret: gatewayEnv.JWT_SECRET,
       }, url);
+      return;
+    }
+
+    if (url.pathname === "/drivers/me/location") {
+      if (req.method !== "POST") {
+        sendMethodNotAllowed(res);
+        return;
+      }
+      await handlePostDriverLocationRoute(req, res, {
+        jwtSecret: gatewayEnv.JWT_SECRET,
+      });
       return;
     }
 

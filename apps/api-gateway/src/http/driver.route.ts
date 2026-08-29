@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { driverClient, rideClient, walletClient, driverBidClient } from '@wheleers/db';
 import { authenticateHttpUser, HttpAuthError } from './authenticate';
-import { sendJson } from './utils';
+import { readJsonBody, sendJson } from './utils';
 import { loadDriverActiveRideSnapshot } from '../websocket/driver-ride-sync';
 
 interface DriverRouteDeps {
@@ -176,6 +176,36 @@ export async function handleGetDriverBidsRoute(
     });
   } catch (error) {
     sendDriverRouteError(res, 'GET /drivers/me/bids', error, 'Could not load your bids.');
+  }
+}
+
+// POST /drivers/me/location — background heartbeat. The WebSocket dies when
+// the app is backgrounded; this is how a pocketed phone stays a live driver
+// (matching requires lastSeenAt within 90s). Body: { lat, lng }.
+export async function handlePostDriverLocationRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: DriverRouteDeps,
+): Promise<void> {
+  try {
+    const user = await authenticateHttpUser(req, deps.jwtSecret);
+    const driver = await driverClient.findByUserId(user.id);
+    if (!driver) {
+      sendJson(res, 404, { error: 'No driver profile found.' });
+      return;
+    }
+    const body = await readJsonBody(req).catch(() => null);
+    const record = (body ?? {}) as Record<string, unknown>;
+    const lat = typeof record.lat === 'number' ? record.lat : Number(record.lat);
+    const lng = typeof record.lng === 'number' ? record.lng : Number(record.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      sendJson(res, 400, { error: 'lat and lng are required numbers.' });
+      return;
+    }
+    await driverClient.updateLocation(driver.id, lat, lng);
+    sendJson(res, 200, { ok: true });
+  } catch (error) {
+    sendDriverRouteError(res, 'POST /drivers/me/location', error, 'Could not update location.');
   }
 }
 
