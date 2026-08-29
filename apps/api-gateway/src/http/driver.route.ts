@@ -161,6 +161,9 @@ export async function handleGetDriverBidsRoute(
       items: page.map((bid) => ({
         id: bid.id,
         rideId: bid.rideId,
+        // The rider's id — without it a re-bid from a backfilled card had
+        // nothing to address and the gateway rejected it.
+        riderId: bid.riderId,
         amountNgn: decimalToNumber(bid.amountNgn),
         etaSeconds: bid.etaSeconds,
         distanceKm: bid.distanceKm ?? null,

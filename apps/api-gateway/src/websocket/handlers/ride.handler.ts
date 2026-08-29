@@ -721,6 +721,16 @@ export async function handleRideMessage(
     }
 
     const acceptRideId = requireString(payload, 'rideId');
+    // The rider's id normally rides in the payload — but a bid card rebuilt
+    // from history may not know it. The ride row always does; a missing or
+    // empty riderId must not kill a legitimate bid.
+    let bidRiderId = getString(payload, 'riderId');
+    if (!bidRiderId) {
+      bidRiderId = (await rideClient.findById(acceptRideId).catch(() => null))?.riderId;
+    }
+    if (!bidRiderId) {
+      throw new Error('This request no longer exists.');
+    }
     const proximity = await computeBidProximity(
       auth.userId,
       acceptRideId,
@@ -743,7 +753,7 @@ export async function handleRideMessage(
           rideId: acceptRideId,
           driverId: driverRowId,
           driverUserId: auth.userId,
-          riderId: requireString(payload, 'riderId'),
+          riderId: bidRiderId,
           amountNgn: requireNumber(payload, 'agreedFareNgn'),
           etaSeconds: proximity.etaSeconds,
           distanceKm: proximity.distanceKm,
@@ -762,7 +772,7 @@ export async function handleRideMessage(
       eventType: 'RIDE_COUNTER_OFFER',
       rideId: acceptRideId,
       bidId: bidRowId,
-      riderId: requireString(payload, 'riderId'),
+      riderId: bidRiderId,
       driverId,
       driverUserId: auth.userId,
       counterOfferNgn: requireNumber(payload, 'agreedFareNgn'),
