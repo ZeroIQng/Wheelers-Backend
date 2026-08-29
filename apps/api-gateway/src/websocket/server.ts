@@ -1,7 +1,8 @@
 import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { Duplex } from 'stream';
 import WebSocket, { Server as WebSocketServer } from 'ws';
-import { driverClient, userClient } from '@wheleers/db';
+import { driverBidClient, driverClient, userClient } from '@wheleers/db';
+import { DriverOfflineEvent } from '@wheleers/kafka-schemas';
 import type { GoogleMapsRoutePlanner } from '@wheleers/config';
 import { buildGatewayAuthContext } from '../auth/context';
 import { verifyLocalAccessToken } from '../auth/local';
@@ -22,6 +23,68 @@ interface WebSocketServerDeps {
   registry: SocketRegistry;
   publisher: GatewayPublisher;
   routePlanner: GoogleMapsRoutePlanner;
+}
+
+/**
+ * A driver whose socket died gets a short grace to reconnect (network blips
+ * are normal); after it, they are OFF the market: marked offline and their
+ * open bids withdrawn, each affected rider told. Without this, dead phones
+ * stayed ONLINE in the DB forever — ghost drivers absorbed candidate slots
+ * and riders paid for drivers who no longer existed.
+ */
+const DRIVER_OFFLINE_GRACE_MS = 45_000;
+const pendingDriverOffline = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelPendingDriverOffline(driverId: string): void {
+  const timer = pendingDriverOffline.get(driverId);
+  if (timer) {
+    clearTimeout(timer);
+    pendingDriverOffline.delete(driverId);
+  }
+}
+
+async function withdrawDriverFromMarket(
+  deps: WebSocketServerDeps,
+  driverUserId: string,
+): Promise<void> {
+  const affected = await driverBidClient
+    .withdrawAllPendingForDriver(driverUserId)
+    .catch(() => []);
+  for (const bid of affected) {
+    void deps.registry.sendToUser(bid.riderId, 'ride:driver_rejected', {
+      rideId: bid.rideId,
+      driverId: bid.driverId,
+      reason: 'driver_unavailable',
+    });
+  }
+}
+
+function scheduleDriverOffline(
+  deps: WebSocketServerDeps,
+  auth: { userId: string; driverId: string },
+): void {
+  cancelPendingDriverOffline(auth.driverId);
+  const timer = setTimeout(() => {
+    pendingDriverOffline.delete(auth.driverId);
+    if (deps.registry.hasUser(auth.userId)) return; // reconnected in time
+    console.info('[ws] driver offline after disconnect grace', {
+      driverId: auth.driverId,
+      userId: auth.userId,
+    });
+    void deps.publisher
+      .publishDriverEvent(
+        DriverOfflineEvent.parse({
+          eventType: 'DRIVER_OFFLINE',
+          driverId: auth.driverId,
+          reason: 'inactivity',
+          timestamp: new Date().toISOString(),
+        }),
+      )
+      .catch(() => undefined);
+    void withdrawDriverFromMarket(deps, auth.userId);
+  }, DRIVER_OFFLINE_GRACE_MS);
+  timer.unref?.();
+  pendingDriverOffline.set(auth.driverId, timer);
 }
 
 function getRequestOrigin(request: IncomingMessage): string | null {
@@ -121,6 +184,7 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
             // A driver reconnecting mid-trip (or after missing the match
             // while backgrounded) gets their assigned ride back immediately.
             if (driver) {
+              cancelPendingDriverOffline(driver.id);
               void resyncDriverActiveRide(deps.registry, ws, driver.id);
             }
           }).catch((error) => {
@@ -226,6 +290,14 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
 
         deps.registry.sendToSocket(socket, response.type, response.payload);
 
+        // Going offline on purpose leaves the market immediately: open bids
+        // are withdrawn and their riders told — same rule as a dead socket,
+        // without the grace.
+        if (parsed.type === 'driver:offline' && auth.driverId) {
+          cancelPendingDriverOffline(auth.driverId);
+          void withdrawDriverFromMarket(deps, auth.userId);
+        }
+
       } catch (error) {
         console.warn('[ws] message error', {
           message: error instanceof Error ? error.message : 'Unknown message handling error',
@@ -252,6 +324,11 @@ export function createGatewayWebSocketServer(deps: WebSocketServerDeps): void {
         driverId: auth?.driverId ?? null,
       });
       void deps.registry.unregister(socket);
+      if (auth?.driverId) {
+        // unregister is async; the grace timer re-checks liveness at fire
+        // time, so scheduling immediately is safe either way.
+        scheduleDriverOffline(deps, { userId: auth.userId, driverId: auth.driverId });
+      }
     });
 
     socket.on('error', (error) => {

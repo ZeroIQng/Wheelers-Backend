@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { WheelersConsumer } from '@wheleers/kafka-client';
-import { referralClient, walletClient, virtualAccountClient, driverClient, userClient, driverBidClient } from '@wheleers/db';
+import { referralClient, walletClient, virtualAccountClient, driverClient, userClient, driverBidClient, rideClient, complianceClient } from '@wheleers/db';
 import {
   ComplianceEvent,
   GroupRideEvent,
@@ -144,6 +144,35 @@ const pendingBidFlushTimers = new Map<string, NodeJS.Timeout>();
 /** Just past the 30s notification debounce, so shouldNotify passes at fire time. */
 const BID_FLUSH_DELAY_MS = 31_000;
 
+/**
+ * Who is asking for this ride — name and track record, cached briefly so a
+ * five-driver broadcast doesn't cost five identical lookups.
+ */
+const riderOfferInfoCache = new Map<string, { at: number; value: { name?: string; rating: number; tripCount: number } | null }>();
+const RIDER_INFO_TTL_MS = 5 * 60_000;
+
+async function getRiderOfferInfo(riderId: string) {
+  const cached = riderOfferInfoCache.get(riderId);
+  if (cached && Date.now() - cached.at < RIDER_INFO_TTL_MS) return cached.value;
+  let value: { name?: string; rating: number; tripCount: number } | null = null;
+  try {
+    const [user, tripCount] = await Promise.all([
+      userClient.findById(riderId),
+      rideClient.countCompletedByRider(riderId),
+    ]);
+    value = {
+      name: user?.name?.split(' ')[0] ?? undefined,
+      rating: user?.riderRating ?? 5,
+      tripCount,
+    };
+  } catch {
+    // enrichment is best-effort — the offer must still go out
+  }
+  riderOfferInfoCache.set(riderId, { at: Date.now(), value });
+  return value;
+}
+
+
 function scheduleBidFlush(
   deps: StartGatewayConsumerDeps,
   rideId: string,
@@ -195,9 +224,18 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_OFFER_SENT') {
+    // Drivers commit a car and half an hour to this request — it carries a
+    // person, not just coordinates. Cached per rider: one broadcast fans out
+    // to up to five drivers and must not cost five identical lookups.
+    const riderInfo = await getRiderOfferInfo(event.riderId);
+
     await registry.sendToUser(event.driverUserId, 'ride:offer', {
       rideId: event.rideId,
       riderId: event.riderId,
+      riderName: riderInfo?.name,
+      riderRating: riderInfo?.rating,
+      riderTripCount: riderInfo?.tripCount,
+      bidsCloseAt: event.bidsCloseAt ?? event.expiresAt,
       pickup: event.pickup,
       destination: event.destination,
       stops: event.stops,
@@ -224,6 +262,7 @@ async function handleRideEvent(
     const waRider = await isWhatsappRider(deps.redisClient, event.riderId);
     if (waRider && deps.whatsappNotifier) {
       const bid: WhatsappBid = {
+        bidId: event.bidId,
         driverId: event.driverId,
         driverUserId: event.driverUserId,
         counterOfferNgn: event.counterOfferNgn,
@@ -260,6 +299,7 @@ async function handleRideEvent(
     } else {
       await registry.sendToUser(event.riderId, 'ride:counter_offer', {
         rideId: event.rideId,
+        bidId: event.bidId,
         driverId: event.driverId,
         driverUserId: event.driverUserId,
         counterOfferNgn: event.counterOfferNgn,
@@ -325,7 +365,8 @@ async function handleRideEvent(
     if (waRider && deps.whatsappNotifier) {
       const phone = await lookupPhoneByUserId(deps.redisClient, event.riderId);
       if (phone) {
-        await sendBidTimeoutNotification(deps.whatsappNotifier, phone).catch(() => {});
+        const timedOutMeta = await getRideMeta(deps.redisClient, event.rideId).catch(() => null);
+        await sendBidTimeoutNotification(deps.whatsappNotifier, phone, timedOutMeta?.offerNgn).catch(() => {});
       }
       await clearActiveRide(deps.redisClient, event.riderId);
       await cleanupRideKeys(deps.redisClient, event.rideId);
@@ -344,7 +385,9 @@ async function handleRideEvent(
       driverUserId: event.driverUserId,
     });
 
-    // This driver's bid won; every other open bid on the ride lost.
+    // This driver's bid won; every other open bid on the ride lost — and
+    // the losers deserve to hear it, not to watch a card silently vanish.
+    const losingBids = await driverBidClient.findByRide(event.rideId).catch(() => []);
     await driverBidClient.markAccepted(event.rideId, event.driverId).catch((error) => {
       console.warn('[gateway] could not mark bid accepted', {
         rideId: event.rideId,
@@ -352,6 +395,26 @@ async function handleRideEvent(
         error: error instanceof Error ? error.message : String(error),
       });
     });
+    for (const losing of losingBids) {
+      if (losing.driverId === event.driverId || losing.status !== 'PENDING') continue;
+      void registry.sendToUser(losing.driverUserId, 'ride:bid_lost', {
+        rideId: event.rideId,
+      });
+    }
+
+    // The winner is off the market: withdraw their bids on every OTHER ride
+    // so no second rider can pay for a driver who just left. Each affected
+    // rider's offer list drops the entry.
+    const withdrawn = await driverBidClient
+      .withdrawAllPendingForDriver(event.driverUserId, event.rideId)
+      .catch(() => []);
+    for (const gone of withdrawn) {
+      void registry.sendToUser(gone.riderId, 'ride:driver_rejected', {
+        rideId: gone.rideId,
+        driverId: gone.driverId,
+        reason: 'driver_unavailable',
+      });
+    }
 
     // Notify rider
     const waRider = await isWhatsappRider(deps.redisClient, event.riderId);
@@ -871,6 +934,31 @@ async function handleGpsProcessedEvent(
 }
 
 async function handleComplianceEvent(event: ComplianceEvent, registry: SocketRegistry): Promise<void> {
+  if (event.eventType === 'FEEDBACK_LOGGED') {
+    // Ratings were decorative: nothing consumed this event, every driver sat
+    // at 5.0 forever, riders had no rating at all. One vote per reviewer per
+    // ride (the unique constraint absorbs repeats), aggregates on both sides.
+    const result = await complianceClient
+      .recordFeedbackAndAggregate({
+        id: event.feedbackId,
+        rideId: event.rideId,
+        reviewerId: event.reviewerId,
+        reviewerRole: event.reviewerRole,
+        revieweeId: event.revieweeId,
+        rating: event.rating,
+        comment: event.comment,
+      })
+      .catch((error) => {
+        console.warn('[gateway] feedback aggregate failed', {
+          rideId: event.rideId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      });
+    if (result) riderOfferInfoCache.delete(event.revieweeId);
+    return;
+  }
+
   if (event.eventType !== 'GPS_STALE_WARNING') return;
 
   await registry.sendToUser(event.riderId, 'gps:stale_warning', {

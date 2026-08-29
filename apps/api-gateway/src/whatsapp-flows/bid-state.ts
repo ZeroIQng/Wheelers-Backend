@@ -27,6 +27,8 @@ export interface WhatsappRideMeta {
 }
 
 export interface WhatsappBid {
+  /** Durable DriverBid.id — acceptance names this exact bid and price. */
+  bidId?: string;
   driverId: string;
   driverUserId: string;
   counterOfferNgn: number;
@@ -450,6 +452,7 @@ export async function clearPendingRoute(
 // ── Pending accept (rider picked a driver, awaiting wallet payment) ───────
 
 export interface PendingAcceptData {
+  bidId?: string;
   rideId: string;
   driverId: string;
   driverUserId: string;
@@ -467,6 +470,43 @@ const PENDING_ACCEPT_TTL = 300; // 5 minutes
 
 function pendingAcceptKey(userId: string): string {
   return `whatsapp:user:${userId}:pending_accept`;
+}
+
+export interface LastRouteData {
+  pickupLat: number;
+  pickupLng: number;
+  pickupAddress: string;
+  destLat: number;
+  destLng: number;
+  destAddress: string;
+  distanceKm: number;
+  durationSeconds: number;
+  suggestedFareNgn: number;
+  minOfferNgn: number;
+  ratePerKmNgn: number;
+  route?: unknown;
+  offerNgn: number;
+}
+
+const lastRouteKey = (userId: string) => `wa:lastroute:${userId}`;
+const LAST_ROUTE_TTL = 86_400; // a day — "search again" should survive a nap
+
+/** The route the rider last searched with — fuel for "search again". */
+export async function storeLastRoute(
+  redis: RedisClient,
+  userId: string,
+  data: LastRouteData,
+): Promise<void> {
+  await redis.set(lastRouteKey(userId), JSON.stringify(data), LAST_ROUTE_TTL);
+}
+
+export async function getLastRoute(
+  redis: RedisClient,
+  userId: string,
+): Promise<LastRouteData | null> {
+  const raw = await redis.get(lastRouteKey(userId));
+  if (!raw) return null;
+  try { return JSON.parse(raw) as LastRouteData; } catch { return null; }
 }
 
 export async function storePendingAccept(

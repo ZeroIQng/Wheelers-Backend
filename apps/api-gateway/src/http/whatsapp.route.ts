@@ -1,12 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import type { IncomingMessage, ServerResponse } from 'http';
-import {
-  driverClient,
-  groupRideClient,
-  walletClient,
-  virtualAccountClient,
-  withdrawalClient,
-} from '@wheleers/db';
+import { driverClient, groupRideClient, walletClient, virtualAccountClient, withdrawalClient, rideClient } from '@wheleers/db';
 import {
   GoogleMapsRoutePlanner,
   calculateRideFees,
@@ -83,6 +77,8 @@ import {
   storePendingWhatsappWithdrawal,
   getPendingWhatsappWithdrawal,
   clearPendingWhatsappWithdrawal,
+  storeLastRoute,
+  getLastRoute,
 } from '../whatsapp-flows/bid-state';
 import type { WhatsappBid } from '../whatsapp-flows/bid-state';
 import {
@@ -2120,6 +2116,25 @@ export async function handleMetaWhatsappWebhookRoute(
 
         const agreedFare = pendingAccept.fareNgn;
 
+        // The driver must still exist in the market before money moves —
+        // online, recently seen, not already on someone else's trip.
+        const payDriver = await driverClient.findById(pendingAccept.driverId).catch(() => null);
+        const payDriverFresh =
+          payDriver?.lastSeenAt != null && Date.now() - payDriver.lastSeenAt.getTime() < 2 * 60_000;
+        const payDriverBusy = payDriver
+          ? await rideClient.findActiveByDriver(pendingAccept.driverId).catch(() => null)
+          : null;
+        if (!payDriver || payDriver.status !== 'ONLINE' || !payDriverFresh || payDriverBusy) {
+          await clearPendingAccept(deps.redisClient, user.id);
+          const reply = `😕 *${pendingAccept.driverName}* just became unavailable — your money has not moved.\n\nReply *more* to see other drivers, or *search again* for a fresh search.`;
+          await appendWhatsappConversation(deps.redisClient, phone, [
+            { role: 'user', content: incomingMessage },
+            { role: 'assistant', content: reply },
+          ]);
+          await sendMetaReply(deps, phone, reply);
+          return;
+        }
+
         // Check wallet balance
         const wallet = await walletClient.findByUserId(user.id);
         const balance = wallet ? Number(wallet.balanceNgn) : 0;
@@ -2193,6 +2208,7 @@ export async function handleMetaWhatsappWebhookRoute(
           riderId: user.id,
           driverId: pendingAccept.driverId,
           driverUserId: pendingAccept.driverUserId,
+          bidId: pendingAccept.bidId,
           agreedFareNgn: agreedFare,
           paymentMethod: 'WALLET',
           timestamp: new Date().toISOString(),
@@ -2383,6 +2399,7 @@ export async function handleMetaWhatsappWebhookRoute(
         // Store pending accept — rider must pay before seeing full details
         await storePendingAccept(deps.redisClient, user.id, {
           rideId: activeRideId,
+          bidId: selectedBid.bidId,
           driverId: selectedBid.driverId,
           driverUserId: selectedBid.driverUserId,
           driverName: selectedBid.driverName,
@@ -3167,6 +3184,21 @@ export async function handleMetaWhatsappWebhookRoute(
       });
       await setActiveRide(deps.redisClient, user.id, rideId);
       await setBookingStage(deps.redisClient, user.id, 'searching');
+      await storeLastRoute(deps.redisClient, user.id, {
+        pickupLat: pendingRoute.pickupLat,
+        pickupLng: pendingRoute.pickupLng,
+        pickupAddress: pendingRoute.pickupAddress,
+        destLat: pendingRoute.destLat,
+        destLng: pendingRoute.destLng,
+        destAddress: pendingRoute.destAddress,
+        distanceKm: pendingRoute.distanceKm,
+        durationSeconds: pendingRoute.durationSeconds,
+        suggestedFareNgn: pendingRoute.suggestedFareNgn,
+        minOfferNgn: pendingRoute.minOfferNgn,
+        ratePerKmNgn: pendingRoute.ratePerKmNgn,
+        route: pendingRoute.route,
+        offerNgn,
+      });
 
       const reply = [
         `🔍 *Finding you a driver!*`,
@@ -3519,6 +3551,21 @@ export async function handleMetaWhatsappWebhookRoute(
           createdAt: new Date().toISOString(),
         });
         await setActiveRide(deps.redisClient, user.id, rideId);
+        await storeLastRoute(deps.redisClient, user.id, {
+          pickupLat: pendingRoute.pickupLat,
+          pickupLng: pendingRoute.pickupLng,
+          pickupAddress: pendingRoute.pickupAddress,
+          destLat: pendingRoute.destLat,
+          destLng: pendingRoute.destLng,
+          destAddress: pendingRoute.destAddress,
+          distanceKm: pendingRoute.distanceKm,
+          durationSeconds: pendingRoute.durationSeconds,
+          suggestedFareNgn: pendingRoute.suggestedFareNgn,
+          minOfferNgn: pendingRoute.minOfferNgn,
+          ratePerKmNgn: pendingRoute.ratePerKmNgn,
+          route: pendingRoute.route,
+          offerNgn,
+        });
 
         const reply = [
           `🔍 *Finding you a driver!*`,
@@ -3829,6 +3876,77 @@ export async function handleMetaWhatsappWebhookRoute(
 
     // Ignore empty messages (stickers, images, etc.) — don't send to LLM
     if (!incomingMessage.trim()) {
+      return;
+    }
+
+    // ── "Search again" is a VERB, not a vibe. It used to fall through to
+    // the LLM, which replied something reassuring and published nothing —
+    // the rider believed a search restarted; no driver was ever asked.
+    if (/^\s*(search again|keep searching|try again|retry|find (me )?(a )?driver)\b/i.test(incomingMessage)) {
+      const lastRoute = await getLastRoute(deps.redisClient, user.id);
+      if (!lastRoute) {
+        const reply = 'Tell me the route first — like *"From 102 Opebi Rd to Yaba"* — and I\'ll find you a driver.';
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage },
+          { role: 'assistant', content: reply },
+        ]);
+        await sendMetaReply(deps, phone, reply);
+        return;
+      }
+
+      const rideId = randomUUID();
+      const searchEvent = RideRequestedEvent.parse({
+        eventType: 'RIDE_REQUESTED',
+        rideId,
+        riderId: user.id,
+        pickup: { lat: lastRoute.pickupLat, lng: lastRoute.pickupLng, address: lastRoute.pickupAddress },
+        destination: { lat: lastRoute.destLat, lng: lastRoute.destLng, address: lastRoute.destAddress },
+        stops: [],
+        plannedDistanceKm: lastRoute.distanceKm,
+        plannedDurationSeconds: lastRoute.durationSeconds,
+        fareEstimateNgn: lastRoute.suggestedFareNgn,
+        paymentMethod: 'WALLET',
+        riderOfferNgn: lastRoute.offerNgn,
+        suggestedFareNgn: lastRoute.suggestedFareNgn,
+        minOfferNgn: lastRoute.minOfferNgn,
+        ratePerKmNgn: lastRoute.ratePerKmNgn,
+        route: lastRoute.route as never,
+        timestamp: new Date().toISOString(),
+      });
+      await deps.publisher.publishRideEvent(searchEvent);
+
+      await storeWhatsappRide(deps.redisClient, rideId, {
+        riderId: user.id,
+        phone,
+        pickupAddress: lastRoute.pickupAddress,
+        pickupLat: lastRoute.pickupLat,
+        pickupLng: lastRoute.pickupLng,
+        destinationAddress: lastRoute.destAddress,
+        destinationLat: lastRoute.destLat,
+        destinationLng: lastRoute.destLng,
+        distanceKm: lastRoute.distanceKm,
+        durationSeconds: lastRoute.durationSeconds,
+        offerNgn: lastRoute.offerNgn,
+        suggestedFareNgn: lastRoute.suggestedFareNgn,
+        paymentMethod: 'WALLET',
+        createdAt: new Date().toISOString(),
+      });
+      await setActiveRide(deps.redisClient, user.id, rideId);
+      await setBookingStage(deps.redisClient, user.id, 'searching');
+
+      const reply = [
+        `🔍 *Searching again!*`,
+        ``,
+        `${lastRoute.pickupAddress} → ${lastRoute.destAddress}`,
+        `Your offer: ₦${lastRoute.offerNgn.toLocaleString()}`,
+        ``,
+        `Asking drivers nearby — offers land here as they come. Sending a higher number any time raises your offer.`,
+      ].join('\n');
+      await appendWhatsappConversation(deps.redisClient, phone, [
+        { role: 'user', content: incomingMessage },
+        { role: 'assistant', content: reply },
+      ]);
+      await sendMetaReply(deps, phone, reply);
       return;
     }
 

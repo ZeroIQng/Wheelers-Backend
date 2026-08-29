@@ -182,12 +182,22 @@ export async function sendRideCancelledNotification(
 export async function sendBidTimeoutNotification(
   deps: WhatsappNotifierDeps,
   phone: string,
+  offerNgn?: number,
 ): Promise<void> {
-  await sendMetaWhatsappMessage(
-    deps,
-    phone,
-    'No driver accepted this ride request. Please try booking another ride.',
-  );
+  // A dead end with no door is where riders churn. Name the two ways
+  // forward, in order of what actually works.
+  const lines = [
+    offerNgn
+      ? `😕 No driver took ₦${offerNgn.toLocaleString()} this time.`
+      : '😕 No driver accepted this request.',
+    '',
+    'Two ways forward:',
+    `• Reply *search again* — same route, fresh search`,
+    offerNgn
+      ? `• Send a higher offer (e.g. *${Math.ceil((offerNgn * 1.1) / 100) * 100}*) — usually gets drivers moving`
+      : '• Send a higher offer — usually gets drivers moving',
+  ];
+  await sendMetaWhatsappMessage(deps, phone, lines.join('\n'));
 }
 
 export async function sendRiderPaidNotification(

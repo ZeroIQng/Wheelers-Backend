@@ -66,6 +66,56 @@ export const complianceClient = {
   findFeedbackForRide: (rideId: string) =>
     prisma.feedback.findMany({ where: { rideId } }),
 
+  /**
+   * Persist one rating and refresh the reviewee's aggregate. Ratings were
+   * decorative before this: FEEDBACK_LOGGED had no consumer, and the old
+   * recalculation filtered by the wrong id, so every driver sat at 5.0
+   * forever and riders had no rating at all.
+   *
+   * revieweeId is always a USER id. If that user has a Driver row, the
+   * feedback updates their driver rating; otherwise their rider rating.
+   * Duplicate (rideId, reviewer) pairs are absorbed — one ride, one vote.
+   */
+  recordFeedbackAndAggregate: async (data: {
+    id: string;
+    rideId: string;
+    reviewerId: string;
+    reviewerRole: string;
+    revieweeId: string;
+    rating: number;
+    comment?: string;
+  }): Promise<{ applied: boolean; average: number; count: number } | null> => {
+    try {
+      await prisma.feedback.create({ data });
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code !== 'P2002') throw error;
+      return null; // this reviewer already rated this ride
+    }
+
+    const aggregate = await prisma.feedback.aggregate({
+      where: { revieweeId: data.revieweeId },
+      _avg: { rating: true },
+      _count: { rating: true },
+    });
+    const average = aggregate._avg.rating ?? data.rating;
+    const count = aggregate._count.rating;
+
+    const driver = await prisma.driver.findUnique({ where: { userId: data.revieweeId } });
+    if (driver && data.reviewerRole === 'RIDER') {
+      await prisma.driver.update({
+        where: { id: driver.id },
+        data: { rating: average, ratingCount: count },
+      });
+    } else {
+      await prisma.user.update({
+        where: { id: data.revieweeId },
+        data: { riderRating: average, riderRatingCount: count },
+      });
+    }
+    return { applied: true, average, count };
+  },
+
   // ── Notifications ──────────────────────────────────────────────────────────
 
   createNotification: (data: {

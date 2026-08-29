@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { GoogleMapsRoutePlanner, RIDE, validateRiderOffer, calculateSuggestedFare } from '@wheleers/config';
-import { chatClient, driverClient, groupRideClient, referralClient, rideClient, driverBidClient } from '@wheleers/db';
+import { chatClient, driverClient, groupRideClient, referralClient, rideClient, driverBidClient, walletClient } from '@wheleers/db';
 import {
   ChatMessageSentEvent,
   DisputeOpenedEvent,
@@ -16,6 +16,7 @@ import {
   RideRequestedEvent,
   RideStopConfirmedEvent,
   RideStartedEvent,
+  WalletLockedEvent,
 } from '@wheleers/kafka-schemas';
 import type { GatewayAuthContext } from '../../types';
 import { getBoolean, getNumber, getRecord, getString } from '../../utils/object';
@@ -375,14 +376,110 @@ export async function handleRideMessage(
   }
 
   if (type === 'ride:accept_offer') {
+    const rideId = requireString(payload, 'rideId');
+    const driverId = requireString(payload, 'driverId');
+    const driverUserId = requireString(payload, 'driverUserId');
+    const bidId = getString(payload, 'bidId');
+    const paymentMethod = parsePaymentMethod(payload['paymentMethod']);
+
+    // ── The moment of commitment. The driver must still exist in the
+    // market: online, recently seen, not already on a trip. Without this a
+    // rider could pay for a driver who won another ride minutes ago or
+    // whose phone died — one driver sold twice.
+    const driver = await driverClient.findById(driverId).catch(() => null);
+    const seenRecently =
+      driver?.lastSeenAt != null && Date.now() - driver.lastSeenAt.getTime() < 2 * 60_000;
+    const busyRide = driver
+      ? await rideClient.findActiveByDriver(driverId).catch(() => null)
+      : null;
+    if (!driver || driver.status !== 'ONLINE' || !seenRecently || busyRide) {
+      await driverBidClient.markWithdrawn(rideId, driverId).catch(() => {});
+      return {
+        type: 'ride:accept_offer:rejected',
+        payload: {
+          rideId,
+          driverId,
+          reason: 'driver_unavailable',
+          message: 'That driver just became unavailable. Please pick another offer.',
+        },
+      };
+    }
+
+    // ── Price truth: when the bid's identity is given, the bid ROW is the
+    // price — a stale card on the rider's screen can never set the amount.
+    let agreedFareNgn = requireNumber(payload, 'agreedFareNgn');
+    if (bidId) {
+      const bid = await driverBidClient.findById(bidId).catch(() => null);
+      if (!bid || bid.rideId !== rideId || bid.driverId !== driverId || bid.status !== 'PENDING') {
+        return {
+          type: 'ride:accept_offer:rejected',
+          payload: {
+            rideId,
+            driverId,
+            reason: 'offer_changed',
+            message: 'That offer has changed — check the latest price and try again.',
+          },
+        };
+      }
+      agreedFareNgn = Number(bid.amountNgn);
+    }
+
+    // ── No hold, no match. WhatsApp riders were already checked at "pay";
+    // app riders could book with an empty wallet and the ride ran unsecured.
+    if (paymentMethod !== 'CASH') {
+      const wallet = await walletClient.findByUserId(auth.userId).catch(() => null);
+      const balanceNgn = wallet ? Number(wallet.balanceNgn) : 0;
+      const insufficient = () => ({
+        type: 'ride:accept_offer:rejected',
+        payload: {
+          rideId,
+          driverId,
+          reason: 'insufficient_funds',
+          requiredNgn: agreedFareNgn,
+          balanceNgn,
+          message: `You need ₦${Math.max(0, agreedFareNgn - balanceNgn).toLocaleString()} more in your wallet to book this ride.`,
+        },
+      });
+      if (!wallet || balanceNgn < agreedFareNgn) return insufficient();
+      try {
+        const hold = await walletClient.createRideHold({
+          rideId,
+          walletId: wallet.id,
+          riderId: auth.userId,
+          driverUserId,
+          amountNgn: agreedFareNgn,
+        });
+        if (hold.applied) {
+          // The lock used to be wallet-service's to announce; now that the
+          // hold happens here, the announcement moves here with it — the
+          // rider's app shows locked funds immediately, not on next refresh.
+          await publisher.publishWalletEvent(
+            WalletLockedEvent.parse({
+              eventType: 'WALLET_LOCKED',
+              userId: auth.userId,
+              walletId: wallet.id,
+              rideId,
+              lockedAmountNgn: agreedFareNgn,
+              reason: 'ride_fare_hold',
+              timestamp: new Date().toISOString(),
+            }),
+          ).catch(() => undefined);
+        }
+      } catch {
+        // Race between the balance check and the hold — same honest answer.
+        return insufficient();
+      }
+    }
+
     const event = RideOfferAcceptedEvent.parse({
       eventType: 'RIDE_OFFER_ACCEPTED',
-      rideId: requireString(payload, 'rideId'),
+      rideId,
       riderId: auth.userId,
-      driverId: requireString(payload, 'driverId'),
-      driverUserId: requireString(payload, 'driverUserId'),
-      agreedFareNgn: requireNumber(payload, 'agreedFareNgn'),
-      paymentMethod: parsePaymentMethod(payload['paymentMethod']),
+      driverId,
+      driverUserId,
+      bidId,
+      agreedFareNgn,
+      paymentMethod,
       timestamp,
     });
 
@@ -608,6 +705,7 @@ export async function handleRideMessage(
     let vehiclePlate = getString(payload, 'vehiclePlate') ?? '';
     let vehicleModel = getString(payload, 'vehicleModel') ?? '';
     let driverRowId: string | null = null;
+    let bidRowId: string | undefined;
 
     try {
       const driver = await driverClient.findByUserId(auth.userId);
@@ -629,9 +727,41 @@ export async function handleRideMessage(
       requireNumber(payload, 'etaSeconds'),
     );
 
+    // A driver already on a trip is not in the market.
+    if (driverRowId) {
+      const busy = await rideClient.findActiveByDriver(driverRowId).catch(() => null);
+      if (busy) {
+        throw new Error('Finish your current trip before bidding on new requests.');
+      }
+    }
+
+    // Record the bid FIRST so its durable id travels with the offer — the
+    // rider's acceptance can then name this exact bid and price.
+    if (driverRowId) {
+      try {
+        const bidRow = await driverBidClient.record({
+          rideId: acceptRideId,
+          driverId: driverRowId,
+          driverUserId: auth.userId,
+          riderId: requireString(payload, 'riderId'),
+          amountNgn: requireNumber(payload, 'agreedFareNgn'),
+          etaSeconds: proximity.etaSeconds,
+          distanceKm: proximity.distanceKm,
+        });
+        bidRowId = bidRow.id;
+      } catch (error) {
+        console.warn('[gateway] could not record driver bid', {
+          rideId: acceptRideId,
+          driverId: driverRowId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     const counterOfferEvent = RideCounterOfferEvent.parse({
       eventType: 'RIDE_COUNTER_OFFER',
       rideId: acceptRideId,
+      bidId: bidRowId,
       riderId: requireString(payload, 'riderId'),
       driverId,
       driverUserId: auth.userId,
@@ -646,29 +776,6 @@ export async function handleRideMessage(
     });
 
     await publisher.publishRideEvent(counterOfferEvent);
-
-    // The durable trace of this bid — ride-service forgets the auction the
-    // moment the ride is matched, and the driver's bid history reads from
-    // here. Best-effort: a failed write must not block the bid itself.
-    if (driverRowId) {
-      await driverBidClient
-        .record({
-          rideId: counterOfferEvent.rideId,
-          driverId: driverRowId,
-          driverUserId: auth.userId,
-          riderId: counterOfferEvent.riderId,
-          amountNgn: counterOfferEvent.counterOfferNgn,
-          etaSeconds: counterOfferEvent.etaSeconds,
-          distanceKm: counterOfferEvent.distanceKm,
-        })
-        .catch((error) => {
-          console.warn('[gateway] could not record driver bid', {
-            rideId: counterOfferEvent.rideId,
-            driverId: driverRowId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-    }
 
     return {
       type: 'driver:accept:accepted',

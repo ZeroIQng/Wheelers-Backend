@@ -36,6 +36,9 @@ model User {
   referralReceived           Referral?                   @relation("ReferralReferred")
   referralCashbacks          ReferralCashback[]
   riderKycStatus             RiderKycStatus              @default(NONE)
+  /// Two-sided reputation: drivers see who they're bidding for.
+  riderRating                Float                       @default(5.0)
+  riderRatingCount           Int                         @default(0)
   selfieCid                  String?
   kycVerifiedAt              DateTime?
   riderKycAttempts           RiderKycAttempt[]
@@ -77,6 +80,7 @@ model Driver {
   insuranceCid         String?
   selfieHash           String?
   rating               Float                 @default(5.0)
+  ratingCount          Int                   @default(0)
   totalRides           Int                   @default(0)
   totalEarningsNgn     Decimal               @default(0) @db.Decimal(18, 2)
   user                 User                  @relation(fields: [userId], references: [id])

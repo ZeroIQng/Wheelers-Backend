@@ -323,11 +323,166 @@ async function commandE2e() {
   process.exit(failed.length === 0 ? 0 : 1);
 }
 
+async function commandE2eWave1() {
+  // Marketplace integrity under the Wave-1 rules: one driver can never be
+  // sold twice, losers hear the outcome, money is secured at accept, and
+  // requests carry a person. Fresh actors every run.
+  process.env.DATABASE_URL = SANDBOX.databaseUrl;
+  const { prisma } = await import('@wheleers/db');
+  const runId = Date.now().toString(36);
+
+  async function seedRider(tag, balanceNgn) {
+    const auth = await signup({
+      username: `w1_${tag}_${runId}`, password: 'sandbox123', role: 'RIDER',
+      name: `${tag.toUpperCase()} Rider`, phone: `+23480${String(Date.now()).slice(-8)}`,
+    });
+    const wallet = await prisma.wallet.findUnique({ where: { userId: auth.user.id } });
+    await prisma.wallet.update({ where: { id: wallet.id }, data: { balanceNgn } });
+    return { ...auth, walletId: wallet.id };
+  }
+  async function seedDriver(tag) {
+    const auth = await signup({
+      username: `w1_${tag}_${runId}`, password: 'sandbox123', role: 'DRIVER',
+      name: `${tag.toUpperCase()} Driver`, phone: `+23481${String(Date.now()).slice(-8)}`,
+    });
+    const row = await prisma.driver.update({
+      where: { userId: auth.user.id },
+      data: {
+        status: 'ONLINE', kycStatus: 'APPROVED',
+        lat: OPEBI.lat, lng: OPEBI.lng, lastSeenAt: new Date(),
+        vehiclePlate: `W1-${tag.toUpperCase()}`, vehicleModel: 'Corolla',
+      },
+    });
+    return { ...auth, driverId: row.id };
+  }
+
+  const [r1, r2, d1, d2] = await Promise.all([
+    seedRider('r1', 50_000), seedRider('r2', 100),
+    seedDriver('d1'), seedDriver('d2'),
+  ]);
+
+  const R1 = new Actor('rider1 ', r1.token);
+  const R2 = new Actor('rider2 ', r2.token);
+  const D1 = new Actor('driver1', d1.token);
+  const D2 = new Actor('driver2', d2.token);
+  await Promise.all([R1.connect(), R2.connect(), D1.connect(), D2.connect()]);
+
+  const checks = [];
+  const check = (label, ok, detail = '') => {
+    checks.push({ label, ok });
+    console.log(`  ${ok ? '✓' : '✗'} ${label}${!ok && detail ? ` — ${detail}` : ''}`);
+  };
+
+  D1.send('driver:online', { lat: OPEBI.lat, lng: OPEBI.lng });
+  D2.send('driver:online', { lat: OPEBI.lat, lng: OPEBI.lng });
+  await D1.waitFor('driver:online:accepted');
+  await D2.waitFor('driver:online:accepted');
+
+  console.log('\n── Scenario: two riders want the same driver ──');
+  R1.send('ride:request', { pickup: OPEBI, destination: SURULERE, paymentMethod: 'WALLET', offerNgn: 6000 });
+  const ride1 = (await R1.waitFor('ride:request:accepted')).payload.rideId;
+  const d1Offer = await D1.waitFor('ride:offer', { predicate: (p) => p.rideId === ride1 });
+  await D2.waitFor('ride:offer', { predicate: (p) => p.rideId === ride1 });
+
+  check('offers carry the rider: name + rating + trip count',
+    typeof d1Offer.payload.riderName === 'string' &&
+    typeof d1Offer.payload.riderRating === 'number' &&
+    typeof d1Offer.payload.riderTripCount === 'number',
+    JSON.stringify({ n: d1Offer.payload.riderName, r: d1Offer.payload.riderRating, t: d1Offer.payload.riderTripCount }));
+  const closeMs = new Date(d1Offer.payload.bidsCloseAt ?? 0).getTime() - Date.now();
+  check('offers carry the shared 90s auction clock', closeMs > 60_000 && closeMs < 95_000, `${Math.round(closeMs / 1000)}s`);
+
+  R2.send('ride:request', { pickup: OPEBI, destination: SURULERE, paymentMethod: 'WALLET', offerNgn: 6000 });
+  const ride2 = (await R2.waitFor('ride:request:accepted')).payload.rideId;
+  await D1.waitFor('ride:offer', { predicate: (p) => p.rideId === ride2 });
+
+  D1.send('driver:accept', { rideId: ride1, riderId: r1.user.id, agreedFareNgn: 6000, etaSeconds: 120 });
+  D1.send('driver:accept', { rideId: ride2, riderId: r2.user.id, agreedFareNgn: 6000, etaSeconds: 120 });
+  D2.send('driver:accept', { rideId: ride1, riderId: r1.user.id, agreedFareNgn: 5800, etaSeconds: 150 });
+
+  const r1BidD1 = await R1.waitFor('ride:counter_offer', { predicate: (p) => p.driverId === d1.driverId });
+  await R1.waitFor('ride:counter_offer', { predicate: (p) => p.driverId === d2.driverId });
+  const r2BidD1 = await R2.waitFor('ride:counter_offer', { predicate: (p) => p.driverId === d1.driverId });
+  check('bids carry their durable identity (bidId)', Boolean(r1BidD1.payload.bidId && r2BidD1.payload.bidId));
+
+  R1.send('ride:accept_offer', {
+    rideId: ride1, bidId: r1BidD1.payload.bidId,
+    driverId: d1.driverId, driverUserId: d1.user.id,
+    agreedFareNgn: 6000, paymentMethod: 'WALLET',
+  });
+  await R1.waitFor('ride:accept_offer:accepted', { predicate: (p) => p.rideId === ride1 });
+  await R1.waitFor('ride:matched', { predicate: (p) => p.rideId === ride1, timeoutMs: 30_000 });
+
+  const lost = await D2.waitFor('ride:bid_lost', { predicate: (p) => p.rideId === ride1, timeoutMs: 15_000 })
+    .then(() => true).catch(() => false);
+  check('the losing driver is told (ride:bid_lost)', lost);
+
+  const withdrawn = await R2.waitFor('ride:driver_rejected', {
+    predicate: (p) => p.rideId === ride2 && p.driverId === d1.driverId, timeoutMs: 15_000,
+  }).then(() => true).catch(() => false);
+  check("winning removes the driver's other bids (rider2 told)", withdrawn);
+
+  R2.send('ride:accept_offer', {
+    rideId: ride2, bidId: r2BidD1.payload.bidId,
+    driverId: d1.driverId, driverUserId: d1.user.id,
+    agreedFareNgn: 6000, paymentMethod: 'WALLET',
+  });
+  const busyReject = await R2.waitFor('ride:accept_offer:rejected', {
+    predicate: (p) => p.rideId === ride2, timeoutMs: 15_000,
+  });
+  check('a busy driver cannot be bought twice',
+    busyReject.payload.reason === 'driver_unavailable' || busyReject.payload.reason === 'offer_changed',
+    busyReject.payload.reason);
+
+  console.log('\n── Scenario: no hold, no match ──');
+  D2.send('driver:accept', { rideId: ride2, riderId: r2.user.id, agreedFareNgn: 5500, etaSeconds: 150 });
+  const r2BidD2 = await R2.waitFor('ride:counter_offer', { predicate: (p) => p.driverId === d2.driverId });
+  R2.send('ride:accept_offer', {
+    rideId: ride2, bidId: r2BidD2.payload.bidId,
+    driverId: d2.driverId, driverUserId: d2.user.id,
+    agreedFareNgn: 5500, paymentMethod: 'WALLET',
+  });
+  const broke = await R2.waitFor('ride:accept_offer:rejected', {
+    predicate: (p) => p.reason === 'insufficient_funds', timeoutMs: 15_000,
+  });
+  check('an empty wallet cannot book (told the shortfall)',
+    typeof broke.payload.message === 'string' && broke.payload.requiredNgn === 5500);
+
+  await prisma.wallet.update({ where: { id: r2.walletId }, data: { balanceNgn: 50_000 } });
+  R2.send('ride:accept_offer', {
+    rideId: ride2, bidId: r2BidD2.payload.bidId,
+    driverId: d2.driverId, driverUserId: d2.user.id,
+    agreedFareNgn: 5500, paymentMethod: 'WALLET',
+  });
+  await R2.waitFor('ride:matched', { predicate: (p) => p.rideId === ride2, timeoutMs: 30_000 });
+  const r2Wallet = await prisma.wallet.findUnique({ where: { id: r2.walletId } });
+  check('funds are held at accept (locked = fare)',
+    Number(r2Wallet.lockedNgn) === 5500 && Number(r2Wallet.balanceNgn) === 44_500,
+    `locked=${r2Wallet.lockedNgn} balance=${r2Wallet.balanceNgn}`);
+
+  console.log('\n── Scenario: ratings become real ──');
+  D2.send('feedback:submit', { rideId: ride2, revieweeId: r2.user.id, rating: 4, reviewerRole: 'DRIVER' });
+  let rated = false;
+  for (let i = 0; i < 10 && !rated; i += 1) {
+    await sleep(1000);
+    const u = await prisma.user.findUnique({ where: { id: r2.user.id } });
+    rated = Number(u.riderRating) === 4 && u.riderRatingCount === 1;
+  }
+  check('driver rating a rider updates the rider aggregate', rated);
+
+  [R1, R2, D1, D2].forEach((a) => a.close());
+  await prisma.$disconnect();
+  const failed = checks.filter((c) => !c.ok);
+  console.log(`\n${failed.length === 0 ? '✅ WAVE-1 E2E PASSED' : '❌ WAVE-1 E2E FAILED'} — ${checks.length - failed.length}/${checks.length} checks\n`);
+  process.exit(failed.length === 0 ? 0 : 1);
+}
+
 const [command, arg] = process.argv.slice(2);
 try {
   if (command === 'driver') await commandDriver();
   else if (command === 'rider') await commandRider(arg);
   else if (command === 'e2e') await commandE2e();
+  else if (command === 'e2e-wave1') await commandE2eWave1();
   else {
     console.log('usage: sim.mjs e2e | driver | rider [offerNgn]');
     process.exit(2);

@@ -53,6 +53,10 @@ export const driverClient = {
         AND d."kycStatus" = 'APPROVED'
         AND d.lat   IS NOT NULL
         AND d.lng   IS NOT NULL
+        -- Liveness: ONLINE in the DB means nothing once the phone goes dark.
+        -- Ghost drivers absorbed candidate slots and swallowed offers into
+        -- dead sockets while live drivers saw silence.
+        AND d."lastSeenAt" > now() - interval '90 seconds'
         AND (
           6371 * acos(
             cos(radians(${lat})) * cos(radians(d.lat)) *

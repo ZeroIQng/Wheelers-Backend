@@ -99,6 +99,10 @@ export class SocketRegistry {
     ]);
   }
 
+  hasUser(userId: string): boolean {
+    return (this.connectionsByUser.get(userId)?.size ?? 0) > 0;
+  }
+
   getAuthContext(socket: WebSocket): GatewayAuthContext | undefined {
     return this.authBySocket.get(socket);
   }

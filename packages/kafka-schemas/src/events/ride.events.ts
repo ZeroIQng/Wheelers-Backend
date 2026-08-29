@@ -99,6 +99,13 @@ export const RideOfferSentEvent = BaseRideEvent.extend({
   pickupDistanceKm:      z.number().optional(),
   pickupEtaSeconds:      z.number().int().optional(),
   expiresAt:             z.string().datetime(),
+  // One auction clock for every surface — apps render it, chat enforces it.
+  bidsCloseAt:           z.string().datetime().optional(),
+  // The person asking: drivers commit a car and half an hour to this request,
+  // so it carries a name and a track record, not just coordinates.
+  riderName:             z.string().optional(),
+  riderRating:           z.number().optional(),
+  riderTripCount:        z.number().int().optional(),
   route:                 RouteGeometry.optional(),
   // Group rides ride the same offer pipeline as solo ones. Without these the
   // driver cannot tell a 17km solo trip from a 17km three-pickup shared trip —
@@ -127,6 +134,9 @@ export const RideCounterOfferEvent = BaseRideEvent.extend({
   riderId:          z.string().uuid(),
   driverId:         z.string().uuid(),
   driverUserId:     z.string().uuid(),
+  // Durable identity of this exact bid (DriverBid.id) — acceptance references
+  // it so a stale price can never be the one that gets paid.
+  bidId:            z.string().uuid().optional(),
   counterOfferNgn:  z.number(),
   driverName:       z.string(),
   driverRating:     z.number(),
@@ -145,6 +155,7 @@ export const RideOfferAcceptedEvent = BaseRideEvent.extend({
   riderId:        z.string().uuid(),
   driverId:       z.string().uuid(),
   driverUserId:   z.string().uuid(),
+  bidId:          z.string().uuid().optional(),
   agreedFareNgn:  z.number(),
   paymentMethod:  PaymentMethod,
 });

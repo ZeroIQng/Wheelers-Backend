@@ -56,6 +56,7 @@
     "sandbox": "node scripts/sandbox/run.mjs",
     "sandbox:seed": "node scripts/sandbox/seed.mjs",
     "sandbox:e2e": "node scripts/sandbox/sim.mjs e2e",
+    "sandbox:e2e:wave1": "node scripts/sandbox/sim.mjs e2e-wave1",
     "sandbox:driver": "node scripts/sandbox/sim.mjs driver",
     "sandbox:rider": "node scripts/sandbox/sim.mjs rider"
   },

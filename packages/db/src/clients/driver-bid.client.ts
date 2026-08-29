@@ -93,6 +93,41 @@ export const driverBidClient = {
       },
     }),
 
+  findById: (bidId: string) =>
+    prisma.driverBid.findUnique({ where: { id: bidId } }),
+
+  findPendingByDriverUser: (driverUserId: string) =>
+    prisma.driverBid.findMany({
+      where: { driverUserId, status: 'PENDING' },
+      select: { id: true, rideId: true, riderId: true, driverId: true },
+    }),
+
+  /**
+   * A driver who just won a ride — or went dark — is off the market: every
+   * other open bid of theirs is withdrawn so no second rider can pay for a
+   * driver who no longer exists to take them. Returns the affected bids so
+   * callers can tell each rider.
+   */
+  withdrawAllPendingForDriver: async (
+    driverUserId: string,
+    exceptRideId?: string,
+  ) => {
+    const affected = await prisma.driverBid.findMany({
+      where: {
+        driverUserId,
+        status: 'PENDING',
+        ...(exceptRideId ? { rideId: { not: exceptRideId } } : {}),
+      },
+      select: { id: true, rideId: true, riderId: true, driverId: true },
+    });
+    if (affected.length === 0) return affected;
+    await prisma.driverBid.updateMany({
+      where: { id: { in: affected.map((bid) => bid.id) } },
+      data: { status: 'WITHDRAWN', resolvedAt: new Date() },
+    });
+    return affected;
+  },
+
   findByRide: (rideId: string) =>
     prisma.driverBid.findMany({
       where: { rideId },

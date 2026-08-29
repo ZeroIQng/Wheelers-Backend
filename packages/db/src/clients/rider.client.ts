@@ -122,6 +122,9 @@ export const rideClient = {
       },
     }),
 
+  countCompletedByRider: (riderId: string) =>
+    prisma.ride.count({ where: { riderId, status: 'COMPLETED' } }),
+
   findRiderHistory: (riderId: string, limit = 20, cursor?: string) =>
     prisma.ride.findMany({
       where:   { riderId, status: { in: ['COMPLETED', 'CANCELLED'] } },

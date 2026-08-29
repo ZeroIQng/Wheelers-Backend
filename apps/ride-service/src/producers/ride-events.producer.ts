@@ -131,6 +131,9 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
           plannedDurationSeconds: rideRequested.plannedDurationSeconds,
           ...pickupProximity(driver, rideRequested.pickup),
           expiresAt: expiresAt.toISOString(),
+          // Same instant as expiresAt — the card and the auction are one
+          // clock now. Sent under its own name so clients state intent.
+          bidsCloseAt: expiresAt.toISOString(),
           route: rideRequested.route,
           timestamp,
           ...(group
@@ -165,6 +168,9 @@ export function createRideEventsProducer(producer: WheelersProducer): RideEvents
             suggestedFareNgn: String(rideRequested.suggestedFareNgn),
             paymentMethod: rideRequested.paymentMethod,
             expiresAt: expiresAt.toISOString(),
+          // Same instant as expiresAt — the card and the auction are one
+          // clock now. Sent under its own name so clients state intent.
+          bidsCloseAt: expiresAt.toISOString(),
           },
           priority: 'high',
           timestamp,

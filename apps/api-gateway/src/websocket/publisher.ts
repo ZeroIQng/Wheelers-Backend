@@ -10,6 +10,7 @@ import {
   type PaymentEvent,
   type RideEvent,
   type UserEvent,
+  WalletEvent,
 } from '@wheleers/kafka-schemas';
 
 export class GatewayPublisher {
@@ -48,6 +49,10 @@ export class GatewayPublisher {
 
   async publishGpsEvent(event: GpsUpdateEvent): Promise<void> {
     await this.producer.send(TOPICS.GPS_STREAM, event, { key: event.driverId });
+  }
+
+  async publishWalletEvent(event: WalletEvent): Promise<void> {
+    await this.producer.send(TOPICS.WALLET_EVENTS, event, { key: event.userId });
   }
 
   async publishComplianceEvent(event: ComplianceEvent): Promise<void> {
