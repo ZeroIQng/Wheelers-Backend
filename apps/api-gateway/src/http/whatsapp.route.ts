@@ -3832,6 +3832,26 @@ export async function handleMetaWhatsappWebhookRoute(
       return;
     }
 
+    // ── Balance questions are MONEY questions — answered from the database,
+    // never by the LLM. The model has old balances sitting in the chat
+    // history and will happily parrot them; a rider who just got a refund
+    // then "sees" their money missing and assumes theft.
+    if (/\b(balance|how much.{0,20}(wallet|money|account)|wallet)\b/i.test(incomingMessage) &&
+        !/withdraw|deposit|top ?up|fund/i.test(incomingMessage)) {
+      const wallet = await walletClient.findByUserId(user.id).catch(() => null);
+      const balance = wallet ? Number(wallet.balanceNgn) : 0;
+      const locked = wallet ? Number(wallet.lockedNgn) : 0;
+      const reply = locked > 0
+        ? `Your wallet balance is ₦${balance.toLocaleString()} (plus ₦${locked.toLocaleString()} held for your current ride). 🚗`
+        : `Your wallet balance is ₦${balance.toLocaleString()}. 🚗`;
+      await appendWhatsappConversation(deps.redisClient, phone, [
+        { role: 'user', content: incomingMessage },
+        { role: 'assistant', content: reply },
+      ]);
+      await sendMetaReply(deps, phone, reply);
+      return;
+    }
+
     // AI response for general messages
     const bot = new WhatsappBotService({
       apiKey: deps.groqApiKey,
