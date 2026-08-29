@@ -41,9 +41,27 @@ async function sendMetaWhatsappMessage(
 
 // ── Build a single message listing all driver bids ────────────────────────
 
-function formatBidList(bids: WhatsappBid[], riderOfferNgn: number): string {
+/** +234-format so WhatsApp renders the number as a tappable link. */
+export function formatTappablePhone(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const digits = phone.replace(/[^0-9+]/g, '');
+  if (digits.startsWith('+')) return digits;
+  if (digits.startsWith('0')) return `+234${digits.slice(1)}`;
+  if (digits.startsWith('234')) return `+${digits}`;
+  return `+${digits}`;
+}
+
+function formatBidList(
+  bids: WhatsappBid[],
+  riderOfferNgn: number,
+  changes?: string[],
+): string {
   const count = bids.length;
-  const header = `🚗 *${count} driver${count === 1 ? '' : 's'} found!*\n\nYour offer: ₦${riderOfferNgn.toLocaleString()}\n`;
+  // An update reads as a change to one conversation, not a fresh fanfare —
+  // "1 driver found!" four times about the same man read as spam.
+  const header = changes && changes.length > 0
+    ? `🔔 *Offer update*\n${changes.map((c) => `• ${c}`).join('\n')}\n\nYour offer: ₦${riderOfferNgn.toLocaleString()}\n`
+    : `🚗 *${count} driver offer${count === 1 ? '' : 's'}*\n\nYour offer: ₦${riderOfferNgn.toLocaleString()}\n`;
 
   const lines = bids.map((bid, i) => {
     const num = i + 1;
@@ -80,8 +98,9 @@ export async function sendBidNotification(
   phone: string,
   bids: WhatsappBid[],
   riderOfferNgn: number,
+  changes?: string[],
 ): Promise<void> {
-  const message = formatBidList(bids, riderOfferNgn);
+  const message = formatBidList(bids, riderOfferNgn, changes);
   await sendMetaWhatsappMessage(deps, phone, message);
 }
 
@@ -94,6 +113,7 @@ export async function sendRideMatchedNotification(
   etaSeconds: number,
   fareNgn: number,
   driverRating: number,
+  driverPhone?: string | null,
 ): Promise<void> {
   const etaMin = Math.ceil(etaSeconds / 60);
   const fees = calculateRideFees(fareNgn);
@@ -104,6 +124,7 @@ export async function sendRideMatchedNotification(
     `Vehicle: ${vehicleModel} (${vehiclePlate})`,
     `Rating: ${driverRating.toFixed(1)}★`,
     `Fare: ₦${fees.totalNgn.toLocaleString()}`,
+    ...(formatTappablePhone(driverPhone) ? [`Call your driver: ${formatTappablePhone(driverPhone)}`] : []),
     ``,
     `🚗 ${driverName} is on the way — they'll be with you in ~${etaMin} min.`,
   ].join('\n');
@@ -114,12 +135,24 @@ export async function sendRideMatchedNotification(
 export async function sendDriverArrivedNotification(
   deps: WhatsappNotifierDeps,
   phone: string,
+  details?: {
+    driverName?: string;
+    vehicleModel?: string;
+    vehiclePlate?: string;
+    driverPhone?: string | null;
+  },
 ): Promise<void> {
-  await sendMetaWhatsappMessage(
-    deps,
-    phone,
-    'Your driver has arrived! 🚗 They are waiting at your pickup point.',
-  );
+  // Chat messages can't be edited, so each one stands alone: the rider must
+  // never scroll back through the auction to learn which car to look for.
+  const car = details?.vehicleModel
+    ? ` — look for the *${details.vehicleModel}*${details.vehiclePlate ? ` (${details.vehiclePlate})` : ''}`
+    : '';
+  const call = formatTappablePhone(details?.driverPhone);
+  const lines = [
+    `✅ *${details?.driverName ?? 'Your driver'} has arrived*${car}.`,
+    ...(call ? [``, `Can't see them? Call: ${call}`] : []),
+  ];
+  await sendMetaWhatsappMessage(deps, phone, lines.join('\n'));
 }
 
 export async function sendRideStartedNotification(
@@ -129,18 +162,26 @@ export async function sendRideStartedNotification(
   await sendMetaWhatsappMessage(deps, phone, 'Your ride has started! Stay safe. 🚗');
 }
 
-export async function sendRideCompletedNotification(
+export { sendRideCompletedNotification };
+
+async function sendRideCompletedNotification(
   deps: WhatsappNotifierDeps,
   phone: string,
   fareNgn: number,
   distanceKm: number,
+  balanceNgn?: number,
 ): Promise<void> {
   const fees = calculateRideFees(fareNgn);
-  await sendMetaWhatsappMessage(
-    deps,
-    phone,
-    `Ride complete! Distance: ${distanceKm.toFixed(1)}km. Fare: ₦${fees.totalNgn.toLocaleString()}. Thanks for riding with Wheelers! 🎉`,
-  );
+  const lines = [
+    `🏁 *Trip complete!*`,
+    ``,
+    `Distance: ${distanceKm.toFixed(1)} km`,
+    `Fare: ₦${fees.totalNgn.toLocaleString()} — paid from your wallet`,
+    ...(balanceNgn !== undefined ? [`Balance: ₦${balanceNgn.toLocaleString()}`] : []),
+    ``,
+    `How was your driver? Reply *1–5* to rate them ⭐`,
+  ];
+  await sendMetaWhatsappMessage(deps, phone, lines.join('\n'));
 }
 
 export async function sendRideCancelledNotification(

@@ -12,6 +12,7 @@ import {
   RideRequestedEvent,
   RideCancelledEvent,
   RideOfferAcceptedEvent,
+  FeedbackLoggedEvent,
 } from '@wheleers/kafka-schemas';
 import type { PayoutCreatedEvent } from '@wheleers/kafka-schemas';
 import { classifyPouchPayoutStatus } from '@wheleers/pouch-client';
@@ -79,6 +80,8 @@ import {
   clearPendingWhatsappWithdrawal,
   storeLastRoute,
   getLastRoute,
+  getLastCompletedRide,
+  clearLastCompletedRide,
 } from '../whatsapp-flows/bid-state';
 import type { WhatsappBid } from '../whatsapp-flows/bid-state';
 import {
@@ -3877,6 +3880,37 @@ export async function handleMetaWhatsappWebhookRoute(
     // Ignore empty messages (stickers, images, etc.) — don't send to LLM
     if (!incomingMessage.trim()) {
       return;
+    }
+
+    // ── The rating reply: after a trip, a bare 1–5 rates the driver. Armed
+    // by the completion receipt ("Reply 1–5 to rate them ⭐"), disarmed once
+    // used — so a lone digit weeks later can't accidentally become a rating.
+    const bareRating = incomingMessage.trim().match(/^([1-5])(\s*⭐*|\s*stars?)?$/i);
+    if (bareRating) {
+      const lastCompleted = await getLastCompletedRide(deps.redisClient, user.id);
+      if (lastCompleted) {
+        const rating = Number(bareRating[1]);
+        await deps.publisher.publishComplianceEvent(FeedbackLoggedEvent.parse({
+          eventType: 'FEEDBACK_LOGGED',
+          feedbackId: randomUUID(),
+          rideId: lastCompleted.rideId,
+          reviewerId: user.id,
+          reviewerRole: 'RIDER',
+          revieweeId: lastCompleted.driverUserId,
+          rating,
+          timestamp: new Date().toISOString(),
+        }));
+        await clearLastCompletedRide(deps.redisClient, user.id);
+        const reply = rating >= 4
+          ? `Thanks! ${'⭐'.repeat(rating)} sent${lastCompleted.driverName ? ` to ${lastCompleted.driverName}` : ''}. 🎉 Book another ride anytime — just send your route.`
+          : `Thanks for the honest ${'⭐'.repeat(rating)}. Sorry that trip wasn't great — tell us what went wrong and we'll look into it.`;
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage },
+          { role: 'assistant', content: reply },
+        ]);
+        await sendMetaReply(deps, phone, reply);
+        return;
+      }
     }
 
     // ── "Search again" is a VERB, not a vibe. It used to fall through to

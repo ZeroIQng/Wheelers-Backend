@@ -33,6 +33,9 @@ import {
   setActiveRide,
   storeGroupSeat,
   storeGroupSeatMembers,
+  getAcceptedBid,
+  storeLastCompletedRide,
+  getLastBatch,
 } from '../whatsapp-flows/bid-state';
 import type { WhatsappBid } from '../whatsapp-flows/bid-state';
 import {
@@ -143,6 +146,21 @@ const pendingBidFlushTimers = new Map<string, NodeJS.Timeout>();
 
 /** Just past the 30s notification debounce, so shouldNotify passes at fire time. */
 const BID_FLUSH_DELAY_MS = 31_000;
+
+/** "Timilehin now ₦4,300 (was ₦5,000)" — the delta, not a re-announcement. */
+function describeBidChanges(previous: WhatsappBid[], current: WhatsappBid[]): string[] {
+  const before = new Map(previous.map((bid) => [bid.driverUserId, bid]));
+  const changes: string[] = [];
+  for (const bid of current) {
+    const prior = before.get(bid.driverUserId);
+    if (!prior) {
+      if (previous.length > 0) changes.push(`${bid.driverName} joined at ₦${bid.counterOfferNgn.toLocaleString()}`);
+    } else if (prior.counterOfferNgn !== bid.counterOfferNgn) {
+      changes.push(`${bid.driverName} now ₦${bid.counterOfferNgn.toLocaleString()} (was ₦${prior.counterOfferNgn.toLocaleString()})`);
+    }
+  }
+  return changes;
+}
 
 /**
  * Who is asking for this ride — name and track record, cached briefly so a
@@ -281,10 +299,13 @@ async function handleRideEvent(
       const meta = await getRideMeta(deps.redisClient, event.rideId);
       if (phone && meta) {
         if (await shouldNotify(deps.redisClient, event.rideId)) {
-          // Fetch ALL bids and send as one batched message
+          // Fetch ALL bids and send as one batched message — naming what
+          // changed since the last message the rider actually saw.
+          const previousBatch = await getLastBatch(deps.redisClient, event.rideId).catch(() => []);
           const allBids = await getBids(deps.redisClient, event.rideId);
+          const changes = describeBidChanges(previousBatch, allBids);
           await storeLastBatch(deps.redisClient, event.rideId, allBids);
-          await sendBidNotification(deps.whatsappNotifier, phone, allBids, meta.offerNgn)
+          await sendBidNotification(deps.whatsappNotifier, phone, allBids, meta.offerNgn, changes)
             .catch((err) => console.warn('[consumer] WhatsApp bid notification failed', err));
         } else {
           // Debounced. The bid is in Redis but the rider has NOT seen it — and
@@ -442,11 +463,13 @@ async function handleRideEvent(
 
       const phone = await lookupPhoneByUserId(deps.redisClient, event.riderId);
       if (phone) {
+        const acceptedBid = await getAcceptedBid(deps.redisClient, event.rideId).catch(() => null);
         await sendRideMatchedNotification(
           deps.whatsappNotifier, phone,
           event.driverName, event.vehicleModel,
           event.vehiclePlate ?? '', event.etaSeconds,
           event.agreedFareNgn, event.driverRating ?? 0,
+          acceptedBid?.driverPhone,
         ).catch(() => {});
       }
     } else {
@@ -563,7 +586,13 @@ async function handleRideEvent(
     if (waRider && deps.whatsappNotifier) {
       const phone = await lookupPhoneByUserId(deps.redisClient, event.riderId);
       if (phone) {
-        await sendDriverArrivedNotification(deps.whatsappNotifier, phone).catch(() => {});
+        const arrivedBid = await getAcceptedBid(deps.redisClient, event.rideId).catch(() => null);
+        await sendDriverArrivedNotification(deps.whatsappNotifier, phone, {
+          driverName: arrivedBid?.driverName,
+          vehicleModel: arrivedBid?.vehicleModel,
+          vehiclePlate: arrivedBid?.vehiclePlate,
+          driverPhone: arrivedBid?.driverPhone,
+        }).catch(() => {});
       }
     } else {
       await registry.sendToUser(event.riderId, 'ride:driver_arrived', {
@@ -614,9 +643,18 @@ async function handleRideEvent(
     if (waRider && deps.whatsappNotifier) {
       const phone = await lookupPhoneByUserId(deps.redisClient, event.riderId);
       if (phone) {
+        const riderWallet = await walletClient.findByUserId(event.riderId).catch(() => null);
         await sendRideCompletedNotification(
           deps.whatsappNotifier, phone, event.fareNgn, event.distanceKm,
+          riderWallet ? Number(riderWallet.balanceNgn) : undefined,
         ).catch(() => {});
+        // Arm the rating reply: a bare 1–5 in the next day rates this driver.
+        const completedBid = await getAcceptedBid(deps.redisClient, event.rideId).catch(() => null);
+        await storeLastCompletedRide(deps.redisClient, event.riderId, {
+          rideId: event.rideId,
+          driverUserId: event.driverUserId,
+          driverName: completedBid?.driverName,
+        }).catch(() => {});
       }
       await clearActiveRide(deps.redisClient, event.riderId);
     } else {

@@ -472,6 +472,36 @@ function pendingAcceptKey(userId: string): string {
   return `whatsapp:user:${userId}:pending_accept`;
 }
 
+export interface LastCompletedRide {
+  rideId: string;
+  driverUserId: string;
+  driverName?: string;
+}
+
+const lastCompletedKey = (userId: string) => `wa:lastcompleted:${userId}`;
+const LAST_COMPLETED_TTL = 24 * 3600; // the rating window
+
+export async function storeLastCompletedRide(
+  redis: RedisClient,
+  userId: string,
+  data: LastCompletedRide,
+): Promise<void> {
+  await redis.set(lastCompletedKey(userId), JSON.stringify(data), LAST_COMPLETED_TTL);
+}
+
+export async function getLastCompletedRide(
+  redis: RedisClient,
+  userId: string,
+): Promise<LastCompletedRide | null> {
+  const raw = await redis.get(lastCompletedKey(userId));
+  if (!raw) return null;
+  try { return JSON.parse(raw) as LastCompletedRide; } catch { return null; }
+}
+
+export async function clearLastCompletedRide(redis: RedisClient, userId: string): Promise<void> {
+  await redis.del(lastCompletedKey(userId));
+}
+
 export interface LastRouteData {
   pickupLat: number;
   pickupLng: number;
