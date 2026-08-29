@@ -606,8 +606,11 @@ async function handleRideEvent(
 
     await driverBidClient.resolvePending(event.rideId, 'CANCELLED').catch(() => {});
 
-    // Release wallet hold so locked funds return to rider's balance
-    await walletClient.cancelRideHold(event.rideId).catch(() => {});
+    // Release wallet hold so locked funds return to rider's balance.
+    // wallet-service releases it too (consumer race) — whichever ran first,
+    // the result still carries the hold amount and the wallet's balance, so
+    // the rider's message can state the refund as a fact, not a hope.
+    const holdRelease = await walletClient.cancelRideHold(event.rideId).catch(() => null);
 
     const releasedReferralCashback = await referralClient.releaseRideCashback(
       event.rideId,
@@ -618,7 +621,12 @@ async function handleRideEvent(
     if (waRider && deps.whatsappNotifier) {
       const phone = await lookupPhoneByUserId(deps.redisClient, event.riderId);
       if (phone) {
-        await sendRideCancelledNotification(deps.whatsappNotifier, phone, event.reason).catch(() => {});
+        await sendRideCancelledNotification(deps.whatsappNotifier, phone, {
+          reason: event.reason,
+          cancelledBy: event.cancelledBy,
+          refundedNgn: holdRelease?.holdAmountNgn,
+          balanceNgn: holdRelease ? Number(holdRelease.wallet.balanceNgn) : undefined,
+        }).catch(() => {});
       }
       await clearActiveRide(deps.redisClient, event.riderId);
     } else {

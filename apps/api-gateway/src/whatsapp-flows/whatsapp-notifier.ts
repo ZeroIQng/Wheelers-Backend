@@ -146,12 +146,37 @@ export async function sendRideCompletedNotification(
 export async function sendRideCancelledNotification(
   deps: WhatsappNotifierDeps,
   phone: string,
-  reason: string | undefined,
+  details: {
+    /** Raw machine reason (e.g. driver_cancelled) — never shown verbatim. */
+    reason?: string;
+    cancelledBy?: 'rider' | 'driver' | 'system';
+    /** Money that was held for this ride and is now back in the wallet. */
+    refundedNgn?: number;
+    balanceNgn?: number;
+  },
 ): Promise<void> {
-  const msg = reason
-    ? `Your ride was cancelled: ${reason}. You can request another ride anytime.`
-    : 'Your ride was cancelled. You can request another ride anytime.';
-  await sendMetaWhatsappMessage(deps, phone, msg);
+  // A rider must never see a raw enum, and after paying they must be told —
+  // in the same breath — that their money is back. "driver_cancelled" with
+  // no refund line reads like a scam.
+  const who =
+    details.cancelledBy === 'driver' || details.reason === 'driver_cancelled' || details.reason === 'rider_no_show'
+      ? 'Your driver had to cancel the trip. Sorry about that!'
+      : details.cancelledBy === 'system'
+        ? 'This ride was cancelled.'
+        : 'Your ride has been cancelled.';
+
+  const lines = [`❌ ${who}`];
+  if (details.refundedNgn && details.refundedNgn > 0) {
+    lines.push(
+      '',
+      `💰 Your ₦${details.refundedNgn.toLocaleString()} is back in your wallet` +
+        (details.balanceNgn !== undefined
+          ? ` — balance: ₦${details.balanceNgn.toLocaleString()}.`
+          : '.'),
+    );
+  }
+  lines.push('', 'Book another ride anytime — just send your route. 🚗');
+  await sendMetaWhatsappMessage(deps, phone, lines.join('\n'));
 }
 
 export async function sendBidTimeoutNotification(
