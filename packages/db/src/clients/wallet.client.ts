@@ -308,8 +308,21 @@ export const walletClient = {
       return await prisma.$transaction(async (tx: TxClient) => {
         const hold = await tx.rideHold.findUnique({ where: { rideId } });
         if (!hold) return null;
-        if (hold.status !== 'ACTIVE') {
-          throw new Error(`Ride hold for ${rideId} is not ACTIVE (status: ${hold.status})`);
+
+        // ATOMIC CLAIM — same race as cancelRideHold: a redelivered or
+        // concurrent RIDE_COMPLETED must not settle (and pay the driver)
+        // twice. Claiming the ACTIVE→CHARGED flip first makes every money
+        // move below exactly-once.
+        const claimed = await tx.rideHold.updateMany({
+          where: { rideId, status: 'ACTIVE' },
+          data: {
+            status: 'CHARGED',
+            settledAmountNgn: fareNgn,
+            settledAt: new Date(),
+          },
+        });
+        if (claimed.count === 0) {
+          throw new Error(`Ride hold for ${rideId} is not ACTIVE (already settled or released)`);
         }
 
         // 1. Unlock rider's hold
@@ -407,16 +420,6 @@ export const walletClient = {
         await tx.ride.update({
           where: { id: rideId },
           data: { platformFeeNgn: platformFeeNgn },
-        });
-
-        // 8. Mark hold as charged
-        await tx.rideHold.update({
-          where: { rideId },
-          data: {
-            status: 'CHARGED',
-            settledAmountNgn: fareNgn,
-            settledAt: new Date(),
-          },
         });
 
         return {
@@ -521,9 +524,20 @@ export const walletClient = {
   cancelRideHold: async (rideId: string): Promise<RideHoldMutationResult | null> => {
     return prisma.$transaction(async (tx: TxClient) => {
       const hold = await tx.rideHold.findUnique({ where: { rideId } });
+      if (!hold) return null;
 
-      if (!hold || hold.status !== 'ACTIVE') {
-        if (!hold) return null;
+      // ATOMIC CLAIM. Both the gateway and wallet-service release holds on
+      // RIDE_CANCELLED, and the old read-then-write check let them race:
+      // both read ACTIVE, both credited the wallet — riders were refunded
+      // TWICE and lockedNgn went negative. The conditional update is the
+      // gate: Postgres row-locks the hold, the loser re-evaluates after the
+      // winner commits, matches zero rows, and moves no money.
+      const claimed = await tx.rideHold.updateMany({
+        where: { rideId, status: 'ACTIVE' },
+        data: { status: 'RELEASED', settledAt: new Date() },
+      });
+
+      if (claimed.count === 0) {
         const wallet = await tx.wallet.findUniqueOrThrow({ where: { id: hold.walletId } });
         return { wallet, holdAmountNgn: Number(hold.amountNgn), applied: false as const };
       }
@@ -533,14 +547,6 @@ export const walletClient = {
         data: {
           lockedNgn: { decrement: hold.amountNgn },
           balanceNgn: { increment: hold.amountNgn },
-        },
-      });
-
-      await tx.rideHold.update({
-        where: { rideId },
-        data: {
-          status: 'RELEASED',
-          settledAt: new Date(),
         },
       });
 
