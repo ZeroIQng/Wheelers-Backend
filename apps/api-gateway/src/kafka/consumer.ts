@@ -296,7 +296,46 @@ async function handleRideEvent(
       await setRideState(deps.redisClient, event.rideId, 'bidding');
 
       const phone = await lookupPhoneByUserId(deps.redisClient, event.riderId);
-      const meta = await getRideMeta(deps.redisClient, event.rideId);
+      let meta = await getRideMeta(deps.redisClient, event.rideId);
+      if (phone && !meta) {
+        // A LATE bid: the bid-timeout cleanup wiped this ride's WhatsApp
+        // state, but a driver has just put money on the table — the request
+        // is not dead until somebody actually takes the rider somewhere.
+        // Rebuild the ride's chat state from the DB (only while the ride is
+        // still winnable) and put the rider back into the bidding flow, so
+        // this offer reaches them and "pay" still works.
+        const ride = await rideClient.findById(event.rideId).catch(() => null);
+        const winnable =
+          ride &&
+          (ride.status === 'REQUESTED' ||
+            ride.status === 'MATCHING' ||
+            (ride.status === 'CANCELLED' && ride.cancelStage === 'BEFORE_MATCH'));
+        if (winnable && ride) {
+          const offerNgn = Number(ride.riderOfferNgn ?? ride.fareEstimateNgn ?? event.counterOfferNgn);
+          meta = {
+            riderId: event.riderId,
+            phone,
+            pickupAddress: ride.pickupAddress,
+            pickupLat: ride.pickupLat ?? undefined,
+            pickupLng: ride.pickupLng ?? undefined,
+            destinationAddress: ride.destAddress,
+            destinationLat: ride.destLat ?? undefined,
+            destinationLng: ride.destLng ?? undefined,
+            distanceKm: ride.distanceKm ?? undefined,
+            durationSeconds: ride.durationSeconds ?? undefined,
+            offerNgn,
+            suggestedFareNgn: Number(ride.fareEstimateNgn ?? offerNgn),
+            paymentMethod: ride.paymentMethod === 'CASH' ? 'CASH' : 'WALLET',
+            createdAt: new Date().toISOString(),
+          };
+          // storeWhatsappRide resets the bid list and state — put this
+          // bid (already added above) and the bidding state back after it.
+          await storeWhatsappRide(deps.redisClient, event.rideId, meta);
+          await addBid(deps.redisClient, event.rideId, bid);
+          await setRideState(deps.redisClient, event.rideId, 'bidding');
+          await setActiveRide(deps.redisClient, event.riderId, event.rideId);
+        }
+      }
       if (phone && meta) {
         if (await shouldNotify(deps.redisClient, event.rideId)) {
           // Fetch ALL bids and send as one batched message — naming what
