@@ -297,6 +297,18 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_BID_TIMEOUT') {
+    // The rider is told "no driver found" — but the DRIVERS who bid were
+    // never told anything, so their apps showed "waiting for rider" forever
+    // over an auction that no longer existed. The bids table knows exactly
+    // who has money on this table; tell each of them before resolving.
+    const openBids = await driverBidClient.findByRide(event.rideId).catch(() => []);
+    for (const bid of openBids) {
+      if (bid.status !== 'PENDING') continue;
+      void registry.sendToUser(bid.driverUserId, 'ride:bid_timeout', {
+        rideId: event.rideId,
+      });
+    }
+
     await driverBidClient.resolvePending(event.rideId, 'EXPIRED').catch(() => {});
 
     // Same money cleanup as a cancellation: the fare hold and any reserved
@@ -579,6 +591,19 @@ async function handleRideEvent(
   }
 
   if (event.eventType === 'RIDE_CANCELLED') {
+    // A rider cancelling BEFORE a match leaves bidders in the same forever-
+    // waiting state as a timeout — the assigned-driver notification below
+    // only fires when there IS an assigned driver. Same message as a
+    // timeout: to a bidder, "request gone" is all that matters.
+    const openBids = await driverBidClient.findByRide(event.rideId).catch(() => []);
+    for (const bid of openBids) {
+      if (bid.status !== 'PENDING') continue;
+      if (event.driverUserId && bid.driverUserId === event.driverUserId) continue;
+      void registry.sendToUser(bid.driverUserId, 'ride:bid_timeout', {
+        rideId: event.rideId,
+      });
+    }
+
     await driverBidClient.resolvePending(event.rideId, 'CANCELLED').catch(() => {});
 
     // Release wallet hold so locked funds return to rider's balance
