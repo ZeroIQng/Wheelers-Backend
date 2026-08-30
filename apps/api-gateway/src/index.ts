@@ -110,6 +110,7 @@ import {
   handleWalletDepositInfoRoute,
 } from "./http/wallet.route";
 import { PouchLiquifiaClient } from "@wheleers/pouch-client";
+import { startTreasurySweep } from "./treasury-sweep";
 import {
   handleListInterstateRoutesRoute,
   handleInterstateCitiesRoute,
@@ -466,6 +467,13 @@ async function bootstrap(): Promise<void> {
     redisClient: redisCommandClient,
     treasuryVirtualAccountId: gatewayEnv.POUCH_TREASURY_VIRTUAL_ACCOUNT_ID,
   };
+
+  // Deposits land in user VAs; withdrawals pay from the treasury VA. This
+  // job continuously bridges the two so float scales with deposits.
+  startTreasurySweep({
+    pouchLiquifiaClient,
+    treasuryVirtualAccountId: gatewayEnv.POUCH_TREASURY_VIRTUAL_ACCOUNT_ID,
+  });
 
   const kycDeps = {
     jwtSecret: gatewayEnv.JWT_SECRET,
