@@ -30,25 +30,31 @@ const fmt = (v) => `₦${v.toLocaleString('en-NG', { maximumFractionDigits: 2 })
 
 const wallets = await prisma.wallet.findMany({
   include: {
-    user: { select: { id: true, name: true, phone: true, email: true } },
+    user: { select: { id: true, name: true, phone: true, email: true, privyDid: true } },
     transactions: { orderBy: { createdAt: 'asc' } },
     rideHolds: { where: { status: 'ACTIVE' } },
     reservations: { where: { status: 'ACTIVE' } },
   },
 });
 
+// seed-demo.mjs tags everything it creates with a `seed:` privyDid prefix —
+// that is the authoritative marker; name heuristics stay as a fallback.
 const isSeed = (u) =>
+  (typeof u.privyDid === 'string' && u.privyDid.startsWith('seed:')) ||
   [u.name, u.phone, u.email].some((f) => typeof f === 'string' && /seed|demo|test/i.test(f));
 
 let liabilitiesReal = 0, liabilitiesSeed = 0;
-let cashIn = 0, cashOutSettled = 0;
+let cashIn = 0, cashOutSettled = 0; // REAL users only — seed cash is fiction
+let realWallets = 0;
 const problems = [];
 
 for (const w of wallets) {
   const who = `${w.user.name ?? w.user.phone ?? w.user.email ?? w.userId} (${w.userId.slice(0, 8)})`;
   const seed = isSeed(w.user);
   const balance = n(w.balanceNgn), locked = n(w.lockedNgn);
-  (seed ? (liabilitiesSeed += balance + locked) : (liabilitiesReal += balance + locked));
+  (seed ? (liabilitiesSeed += balance + locked) : (liabilitiesReal += balance + locked, realWallets += 1));
+  // Seeded wallets are stage scenery — integrity rules apply to real money.
+  if (seed) continue;
 
   // 1. replay the chain
   let running = null, chainBreaks = 0;
@@ -80,22 +86,27 @@ for (const w of wallets) {
   }
 }
 
-// settled withdrawals cross-check
+// settled withdrawals cross-check — real users only
+const realUserIds = wallets.filter((w) => !isSeed(w.user)).map((w) => w.userId);
 const settled = await prisma.withdrawalRequest.aggregate({
-  where: { status: 'SETTLED' }, _sum: { requestedAmountNgn: true }, _count: true,
+  where: { status: 'SETTLED', userId: { in: realUserIds } },
+  _sum: { requestedAmountNgn: true }, _count: true,
 });
 const stuck = await prisma.withdrawalRequest.findMany({
-  where: { status: { in: ['PENDING', 'FUNDS_RESERVED', 'PAYOUT_CREATED', 'PROCESSING'] } },
+  where: {
+    status: { in: ['PENDING', 'FUNDS_RESERVED', 'PAYOUT_CREATED', 'PROCESSING'] },
+    userId: { in: realUserIds },
+  },
   select: { id: true, userId: true, requestedAmountNgn: true, status: true, createdAt: true },
 });
 
 console.log('══════════ WHEELERS MONEY AUDIT ══════════');
-console.log(`wallets: ${wallets.length}`);
+console.log(`wallets: ${wallets.length} (${realWallets} real, ${wallets.length - realWallets} seeded demo)`);
 console.log(`liabilities (REAL users):  ${fmt(liabilitiesReal)}   ← must be covered by cash`);
 console.log(`liabilities (seed/demo):   ${fmt(liabilitiesSeed)}   (not real money)`);
-console.log(`ledger cash-in (deposits): ${fmt(cashIn)}`);
-console.log(`ledger cash-out (withdrawals debited): ${fmt(cashOutSettled)}`);
-console.log(`withdrawals SETTLED: ${settled._count} totalling ${fmt(n(settled._sum.requestedAmountNgn))}`);
+console.log(`REAL cash-in (deposits): ${fmt(cashIn)}`);
+console.log(`REAL cash-out (withdrawals debited): ${fmt(cashOutSettled)}`);
+console.log(`REAL withdrawals SETTLED: ${settled._count} totalling ${fmt(n(settled._sum.requestedAmountNgn))}`);
 if (stuck.length) {
   console.log(`⚠ in-flight/stuck withdrawals: ${stuck.length}`);
   for (const s of stuck) console.log(`   ${s.status} ${fmt(n(s.requestedAmountNgn))} user ${s.userId.slice(0,8)} since ${s.createdAt.toISOString()}`);
