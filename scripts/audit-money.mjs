@@ -43,18 +43,32 @@ const isSeed = (u) =>
   (typeof u.privyDid === 'string' && u.privyDid.startsWith('seed:')) ||
   [u.name, u.phone, u.email].some((f) => typeof f === 'string' && /seed|demo|test/i.test(f));
 
-let liabilitiesReal = 0, liabilitiesSeed = 0;
+let liabilitiesReal = 0, liabilitiesSeed = 0, platformNgn = 0;
 let cashIn = 0, cashOutSettled = 0; // REAL users only — seed cash is fiction
-let realWallets = 0;
+const realRows = [];
 const problems = [];
+
+// The platform's own fee wallet is revenue, not a liability to anyone —
+// and the demo seeder paid its fictional fees into it, so it must be
+// reported separately or it masquerades as millions owed to users.
+const isPlatform = (u) => /wheelers platform/i.test(u.name ?? '') || /^0{8}/.test(u.id);
 
 for (const w of wallets) {
   const who = `${w.user.name ?? w.user.phone ?? w.user.email ?? w.userId} (${w.userId.slice(0, 8)})`;
   const seed = isSeed(w.user);
   const balance = n(w.balanceNgn), locked = n(w.lockedNgn);
-  (seed ? (liabilitiesSeed += balance + locked) : (liabilitiesReal += balance + locked, realWallets += 1));
-  // Seeded wallets are stage scenery — integrity rules apply to real money.
-  if (seed) continue;
+  if (seed) { liabilitiesSeed += balance + locked; continue; }
+  if (isPlatform(w.user)) {
+    platformNgn += balance + locked;
+  } else {
+    liabilitiesReal += balance + locked;
+  }
+  let walletIn = 0, walletOut = 0;
+  for (const t of w.transactions) {
+    if (t.type === 'DEPOSIT' && t.direction === 'CREDIT') walletIn += n(t.amountNgn);
+    if (t.type === 'WITHDRAWAL' && t.direction === 'DEBIT') walletOut += n(t.amountNgn);
+  }
+  realRows.push({ who, platform: isPlatform(w.user), balance, locked, tx: w.transactions.length, walletIn, walletOut });
 
   // 1. replay the chain
   let running = null, chainBreaks = 0;
@@ -101,7 +115,15 @@ const stuck = await prisma.withdrawalRequest.findMany({
 });
 
 console.log('══════════ WHEELERS MONEY AUDIT ══════════');
-console.log(`wallets: ${wallets.length} (${realWallets} real, ${wallets.length - realWallets} seeded demo)`);
+console.log(`wallets: ${wallets.length} (${realRows.length} real + platform, ${wallets.length - realRows.length} seeded demo)`);
+console.log('\n── every real wallet, largest first ──');
+for (const r of realRows.sort((a, b) => (b.balance + b.locked) - (a.balance + a.locked))) {
+  console.log(
+    `  ${r.platform ? '[PLATFORM] ' : ''}${r.who}  balance ${fmt(r.balance)}  locked ${fmt(r.locked)}  ` +
+    `(${r.tx} tx, deposited ${fmt(r.walletIn)}, withdrew ${fmt(r.walletOut)})`,
+  );
+}
+console.log(`platform fee wallet total: ${fmt(platformNgn)} (revenue — mostly fees from the SEEDED fictional rides)`);
 console.log(`liabilities (REAL users):  ${fmt(liabilitiesReal)}   ← must be covered by cash`);
 console.log(`liabilities (seed/demo):   ${fmt(liabilitiesSeed)}   (not real money)`);
 console.log(`REAL cash-in (deposits): ${fmt(cashIn)}`);
