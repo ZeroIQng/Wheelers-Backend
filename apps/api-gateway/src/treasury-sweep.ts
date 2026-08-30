@@ -102,38 +102,55 @@ export function startTreasurySweep(deps: SweepDeps): void {
         }
         if (balanceNgn < Math.max(SWEEP_MIN_NGN, POUCH_PAYOUT_FEE_NGN + 1)) continue;
 
-        const amountNgn = Math.floor(balanceNgn - POUCH_PAYOUT_FEE_NGN);
-        try {
-          const payout = await deps.pouchLiquifiaClient.createPayout({
-            virtualAccountId: account.pouchVirtualAccountId,
-            amount: amountNgn,
-            destinationAccount: TREASURY_ACCOUNT_NUMBER,
-            destinationBankUuid: bankUuid,
-            narration: 'Wheelers treasury float sweep',
-            idempotencyKey: `sweep-${account.pouchVirtualAccountId}-${Date.now()}`,
-          });
-          const status = String(payout.status ?? '').toUpperCase();
-          if (status.includes('FAIL') || status.includes('REJECT')) {
-            console.warn('[treasury-sweep] sweep payout rejected', {
+        // Pouch's payout fee is tiered (₦20 has been seen, so has ₦70) and
+        // undocumented per amount — so sweep, and when the provider answers
+        // "Available: X, Required: Y", learn the true headroom from the
+        // deficit and retry once with exactly that much less.
+        let amountNgn = Math.floor(balanceNgn - POUCH_PAYOUT_FEE_NGN);
+        for (let attempt = 0; attempt < 2 && amountNgn > 0; attempt += 1) {
+          try {
+            const payout = await deps.pouchLiquifiaClient.createPayout({
+              virtualAccountId: account.pouchVirtualAccountId,
+              amount: amountNgn,
+              destinationAccount: TREASURY_ACCOUNT_NUMBER,
+              destinationBankUuid: bankUuid,
+              narration: 'Wheelers treasury float sweep',
+              idempotencyKey: `sweep-${account.pouchVirtualAccountId}-${Date.now()}-${attempt}`,
+            });
+            const status = String(payout.status ?? '').toUpperCase();
+            if (status.includes('FAIL') || status.includes('REJECT')) {
+              console.warn('[treasury-sweep] sweep payout rejected', {
+                va: account.accountNumber,
+                amountNgn,
+                status: payout.status,
+              });
+              break;
+            }
+            sweptNgn += amountNgn;
+            sweptCount += 1;
+            console.info('[treasury-sweep] swept', {
               va: account.accountNumber,
               amountNgn,
               status: payout.status,
             });
-            continue;
+            break;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const short = message.match(/Available:\s*([\d.]+)\s*NGN.*Required:\s*([\d.]+)\s*NGN/i);
+            if (short && attempt === 0) {
+              const deficit = Math.ceil(Number(short[2]) - Number(short[1]));
+              if (Number.isFinite(deficit) && deficit > 0 && deficit < amountNgn) {
+                amountNgn -= deficit;
+                continue; // retry once with the provider's own arithmetic
+              }
+            }
+            console.warn('[treasury-sweep] sweep payout failed', {
+              va: account.accountNumber,
+              amountNgn,
+              error: message.slice(0, 200),
+            });
+            break;
           }
-          sweptNgn += amountNgn;
-          sweptCount += 1;
-          console.info('[treasury-sweep] swept', {
-            va: account.accountNumber,
-            amountNgn,
-            status: payout.status,
-          });
-        } catch (error) {
-          console.warn('[treasury-sweep] sweep payout failed', {
-            va: account.accountNumber,
-            amountNgn,
-            error: error instanceof Error ? error.message : String(error),
-          });
         }
       }
 

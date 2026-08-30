@@ -201,6 +201,16 @@ async function handleVirtualAccountCredited(
     return;
   }
 
+  // The treasury has no user row on purpose — an inbound credit to it is
+  // FLOAT arriving (a sweep landing), not a user deposit to book.
+  if (pouchVaId && pouchVaId === process.env.POUCH_TREASURY_VIRTUAL_ACCOUNT_ID) {
+    console.info('[api-gateway][pouch-webhook] treasury float received', {
+      amountNgn: amount,
+      providerReference,
+    });
+    return;
+  }
+
   const virtualAccount = pouchVaId
     ? await virtualAccountClient.findByPouchVirtualAccountId(pouchVaId)
     : await virtualAccountClient.findByAccountNumber(accountNumber!);
@@ -261,7 +271,9 @@ async function handlePayoutSuccess(
 
   const withdrawal = await withdrawalClient.findByProviderReference(providerReference);
   if (!withdrawal) {
-    console.warn('[api-gateway][pouch-webhook] withdrawal not found for payout.success', {
+    // Not every payout is a user withdrawal — treasury float sweeps succeed
+    // here too, and they have no WithdrawalRequest to settle.
+    console.info('[api-gateway][pouch-webhook] payout.success with no matching withdrawal (treasury sweep or manual payout)', {
       providerReference,
     });
     return;
