@@ -742,13 +742,16 @@ async function submitWhatsappWithdrawal(params: {
       throw new Error('No deposit account found. Please complete wallet setup first.');
     }
 
-    // The ledger says the rider has this money, but the cash actually leaves
-    // the Pouch account — plus a flat payout fee. Check the vault BEFORE
-    // freezing the ledger, and say something honest when they differ
-    // instead of an opaque provider rejection.
-    const vaBalance = await deps.pouchLiquifiaClient
-      .getVirtualAccountBalance(payoutSourceVaId)
-      .catch(() => null);
+    // Only a PERSONAL virtual account is its own vault — with the treasury
+    // configured, Pouch pays out of the merchant settlement wallet and the
+    // treasury VA's ₦0 reading means nothing. Pre-check only the personal
+    // fallback; the provider's own verdict guards the treasury path (a
+    // FAILED payout never touches the ledger).
+    const vaBalance = deps.treasuryVirtualAccountId
+      ? null
+      : await deps.pouchLiquifiaClient
+          .getVirtualAccountBalance(payoutSourceVaId)
+          .catch(() => null);
     const vaBalanceNgn = vaBalance ? Number(vaBalance.balance ?? 0) / 100 : null;
     if (vaBalanceNgn !== null && vaBalanceNgn < amountNgn + POUCH_PAYOUT_FEE_NGN) {
       console.error('[api-gateway][whatsapp-withdrawal] LIQUIDITY MISMATCH — ledger balance not backed by virtual account', {

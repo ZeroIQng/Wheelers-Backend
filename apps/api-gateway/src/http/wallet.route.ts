@@ -578,12 +578,18 @@ export async function handleCreateWalletWithdrawalRoute(
       return;
     }
 
-    // The cash leaves the Pouch virtual account, plus a flat payout fee —
-    // check the vault BEFORE reserving ledger funds so a shortfall fails
-    // fast with an honest message instead of an opaque provider rejection.
-    const vaBalance = await deps.pouchLiquifiaClient
-      .getVirtualAccountBalance(payoutSourceVaId)
-      .catch(() => null);
+    // Only a PERSONAL virtual account is its own vault. When the treasury
+    // is configured, Pouch draws payouts from the merchant settlement
+    // wallet — production proof: successful payouts debit the wallet ledger
+    // while the treasury VA reads ₦0 — so checking the treasury VA's
+    // balance rejects withdrawals the wallet comfortably covers. Skip the
+    // pre-check there and let the provider's own verdict decide; a FAILED
+    // payout is already handled honestly below (ledger untouched).
+    const vaBalance = deps.treasuryVirtualAccountId
+      ? null
+      : await deps.pouchLiquifiaClient
+          .getVirtualAccountBalance(payoutSourceVaId)
+          .catch(() => null);
     const vaBalanceNgn = vaBalance ? Number(vaBalance.balance ?? 0) / 100 : null;
     if (vaBalanceNgn !== null && vaBalanceNgn < requestedAmountNgn + POUCH_PAYOUT_FEE_NGN) {
       console.error("[api-gateway][wallet-withdrawal] LIQUIDITY MISMATCH — ledger balance not backed by virtual account", {
