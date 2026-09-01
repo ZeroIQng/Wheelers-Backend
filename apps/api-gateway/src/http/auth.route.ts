@@ -270,7 +270,7 @@ export async function handleUsernamePasswordSigninRoute(
         sendJson(res, 400, { error: 'Invalid email address.' });
         return;
       }
-      user = await userClient.findByEmail(email);
+      user = await userClient.findByEmailWithPassword(email);
     } else {
       const username = normalizeUsername(identifier);
       user = await userClient.findByUsername(username);

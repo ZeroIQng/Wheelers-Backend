@@ -36,6 +36,16 @@ export const userClient = {
       include: { wallet: true },
     }),
 
+  // Email is not unique: a social-auth or WhatsApp-created row can share the
+  // email of a password account. Password sign-in must only ever see rows that
+  // can actually verify a password, or the hashless row shadows the real one.
+  findByEmailWithPassword: (email: string) =>
+    prisma.user.findFirst({
+      where: { email: email.toLowerCase(), passwordHash: { not: null } },
+      orderBy: { createdAt: 'desc' },
+      include: { wallet: true },
+    }),
+
   // Phone is not unique in the schema (an app account can verify the same
   // number a WhatsApp account was created with), so callers decide precedence.
   findByPhone: (phone: string) =>
