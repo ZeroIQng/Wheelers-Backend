@@ -83,6 +83,7 @@ import {
   getLastCompletedRide,
   clearLastCompletedRide,
 } from '../whatsapp-flows/bid-state';
+import { signFlowToken } from '../whatsapp-flows/encryption';
 import type { WhatsappBid } from '../whatsapp-flows/bid-state';
 import {
   formatBidList,
@@ -110,6 +111,8 @@ export interface MetaWhatsappRouteDeps {
   groupRideFaceStorage?: GroupRideFaceStorage;
   /** Platform treasury VA — payouts draw from this float when configured. */
   treasuryVirtualAccountId?: string;
+  /** Published Meta Flow id for the booking form. Unset = chat-only booking. */
+  whatsappFlowId?: string;
 }
 
 /* ─── Meta Cloud API helpers ─── */
@@ -217,6 +220,59 @@ async function sendMetaReply(
     const payload = await response.text();
     console.error('[whatsapp] Meta reply failed', { status: response.status, payload });
   }
+}
+
+/**
+ * Send the interactive booking FLOW — a tappable form instead of typing.
+ * The flow_token carries `new:<userId>` so the flow endpoint opens on the
+ * RIDE_SETUP screen; everything the form submits runs through the same
+ * guarded handlers as typed bookings.
+ */
+async function sendMetaFlowMessage(
+  deps: MetaWhatsappRouteDeps,
+  to: string,
+  flowToken: string,
+): Promise<boolean> {
+  if (!deps.metaAccessToken || !deps.metaPhoneNumberId || !deps.whatsappFlowId) return false;
+
+  const recipient = to.replace(/^\+/, '');
+  const endpoint = `https://graph.facebook.com/v21.0/${deps.metaPhoneNumberId}/messages`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${deps.metaAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: recipient,
+      type: 'interactive',
+      interactive: {
+        type: 'flow',
+        header: { type: 'text', text: 'Book a ride' },
+        body: { text: 'Fill in your pickup, destination and offer — drivers bid in seconds.' },
+        footer: { text: 'Wheelers' },
+        action: {
+          name: 'flow',
+          parameters: {
+            flow_message_version: '3',
+            flow_id: deps.whatsappFlowId,
+            flow_token: flowToken,
+            flow_cta: 'Book now',
+            flow_action: 'navigate',
+            flow_action_payload: { screen: 'RIDE_SETUP' },
+          },
+        },
+      },
+    }),
+  });
+  if (!response.ok) {
+    const payload = await response.text();
+    console.error('[whatsapp] flow message failed', { status: response.status, payload });
+    return false;
+  }
+  return true;
 }
 
 async function sendMetaImageMessage(
@@ -2097,6 +2153,28 @@ export async function handleMetaWhatsappWebhookRoute(
         ]);
         await sendMetaReply(deps, phone, reply);
         return;
+      }
+
+      // ── Booking opener → send the tappable FLOW form (meta-flows) ──
+      // Only bare openers ("book", "book a ride") — a message that already
+      // carries addresses stays with the chat brain, which handles it fully.
+      if (
+        deps.whatsappFlowId &&
+        /^(book|book a ride|book ride|i want a ride|ride)[.!\s]*$/i.test(incomingMessage.trim())
+      ) {
+        const hasRide = await getActiveRide(deps.redisClient, user.id);
+        if (!hasRide) {
+          const flowToken = signFlowToken(`new:${user.id}`, deps.jwtSecret);
+          const sent = await sendMetaFlowMessage(deps, phone, flowToken);
+          if (sent) {
+            await appendWhatsappConversation(deps.redisClient, phone, [
+              { role: 'user', content: incomingMessage },
+              { role: 'assistant', content: '[sent booking form]' },
+            ]);
+            return;
+          }
+          // Flow failed to send — fall through to the chat brain as always.
+        }
       }
 
       // ── Pay — rider pays to confirm the selected driver ──

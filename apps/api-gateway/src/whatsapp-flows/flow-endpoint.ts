@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { randomUUID } from 'crypto';
 import { GoogleMapsRoutePlanner, validateRiderOffer } from '@wheleers/config';
-import { walletClient, virtualAccountClient, driverClient } from '@wheleers/db';
+import { walletClient, virtualAccountClient, driverClient, rideClient } from '@wheleers/db';
 import { RideOfferAcceptedEvent, RideRequestedEvent } from '@wheleers/kafka-schemas';
 import type { GatewayPublisher } from '../websocket/publisher';
 import type { RedisClient } from '../redis/client';
@@ -170,6 +170,16 @@ async function handleFlowAction(
   // ── INIT — show appropriate screen based on ride state ────────────────
 
   if (body.action === 'INIT') {
+    if (tokenData.rideId === 'new') {
+      return {
+        screen: 'RIDE_SETUP',
+        data: buildRideSetupData({
+          pickupAddress: '',
+          destinationAddress: '',
+          suggestedFareNgn: 0,
+        }),
+      };
+    }
     if (rideId === 'new') {
       return await handleRideSetupInit(userId, deps);
     }
@@ -254,11 +264,64 @@ async function handleAcceptBid(
   deps: WhatsappFlowEndpointDeps,
 ): Promise<{ screen: string; data: Record<string, unknown> }> {
   const bids = await getBids(deps.redisClient, rideId);
-  const bidIndex = parseInt(selectedBid.replace('bid-', ''), 10);
-  const bid = bids[bidIndex];
+  const key = selectedBid.replace('bid-', '');
+  const bid = bids.find((b) => b.driverId === key) ?? bids[parseInt(key, 10)];
 
   if (!bid) {
     return { screen: 'BID_LIST', data: buildBidListData(meta, bids) };
+  }
+
+  // ── The moment of commitment — SAME guards as the chat pay path and the
+  // app's ride:accept_offer. This used to publish the accept blind, which
+  // is exactly the class of bug (driver sold twice, unsecured rides) the
+  // marketplace overhaul removed. The flow must never be a way around it.
+  const driver = await driverClient.findById(bid.driverId).catch(() => null);
+  const driverFresh =
+    driver?.lastSeenAt != null && Date.now() - driver.lastSeenAt.getTime() < 2 * 60_000;
+  const driverBusy = driver
+    ? await rideClient.findActiveByDriver(bid.driverId).catch(() => null)
+    : null;
+  if (!driver || driver.status !== 'ONLINE' || !driverFresh || driverBusy) {
+    const remaining = await removeBid(deps.redisClient, rideId, bid.driverId);
+    if (remaining.length > 0) {
+      return { screen: 'BID_LIST', data: buildBidListData(meta, remaining) };
+    }
+    await setRideState(deps.redisClient, rideId, 'searching');
+    return {
+      screen: 'SUCCESS',
+      data: buildNotifyExitData(`${bid.driverName} just became unavailable — your money has not moved. We'll notify you when new drivers bid.`),
+    };
+  }
+
+  // No hold, no match — the fare is locked before the accept is published.
+  const wallet = await walletClient.findByUserId(userId).catch(() => null);
+  const balanceNgn = wallet ? Number(wallet.balanceNgn) : 0;
+  if (!wallet || balanceNgn < bid.counterOfferNgn) {
+    const { virtualAccount } = await getWalletInfo(userId);
+    const shortage = bid.counterOfferNgn - balanceNgn;
+    const topUp = virtualAccount
+      ? ` Top up via ${virtualAccount.bankName} ${virtualAccount.accountNumber} (${virtualAccount.accountName}), then open the ride again.`
+      : ' Top up your wallet, then open the ride again.';
+    return {
+      screen: 'SUCCESS',
+      data: buildErrorData(
+        `Your wallet holds ₦${balanceNgn.toLocaleString()} but this ride costs ₦${bid.counterOfferNgn.toLocaleString()} — ₦${shortage.toLocaleString()} short.${topUp}`,
+      ),
+    };
+  }
+  try {
+    await walletClient.createRideHold({
+      rideId,
+      walletId: wallet.id,
+      riderId: userId,
+      driverUserId: bid.driverUserId,
+      amountNgn: bid.counterOfferNgn,
+    });
+  } catch {
+    return {
+      screen: 'SUCCESS',
+      data: buildErrorData('Could not lock funds in your wallet. Please try again.'),
+    };
   }
 
   const acceptEvent = RideOfferAcceptedEvent.parse({
@@ -267,7 +330,9 @@ async function handleAcceptBid(
     riderId: userId,
     driverId: bid.driverId,
     driverUserId: bid.driverUserId,
+    bidId: bid.bidId,
     agreedFareNgn: bid.counterOfferNgn,
+    paymentMethod: 'WALLET',
     timestamp: new Date().toISOString(),
   });
   await deps.publisher.publishRideEvent(acceptEvent);
@@ -322,8 +387,8 @@ async function handleDeclineBid(
   deps: WhatsappFlowEndpointDeps,
 ): Promise<{ screen: string; data: Record<string, unknown> }> {
   const bids = await getBids(deps.redisClient, rideId);
-  const bidIndex = parseInt(selectedBid.replace('bid-', ''), 10);
-  const bid = bids[bidIndex];
+  const declineKey = selectedBid.replace('bid-', '');
+  const bid = bids.find((b) => b.driverId === declineKey) ?? bids[parseInt(declineKey, 10)];
 
   if (bid) {
     const remaining = await removeBid(deps.redisClient, rideId, bid.driverId);

@@ -10,7 +10,7 @@ export function buildBidListData(
 ): Record<string, unknown> {
   const capped = bids.slice(0, MAX_FLOW_LIST_ITEMS);
   const bidItems = capped.map((bid, index) => ({
-    id: `bid-${index}`,
+    id: `bid-${bid.driverId}`,
     title: `${bid.driverName} — ₦${bid.counterOfferNgn.toLocaleString()}`,
     description: `${bid.vehicleModel} | ${bid.driverRating.toFixed(1)}★ | ETA ${Math.ceil(bid.etaSeconds / 60)} min`,
   }));
