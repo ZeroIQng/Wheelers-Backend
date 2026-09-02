@@ -17,8 +17,7 @@ function parseFlowPrivateKey(privateKeyPem: string): KeyObject {
       if (decoded.includes('-----BEGIN')) pem = decoded.trim();
     } catch { /* fall through to the error below */ }
   }
-  pem = pem.replace(/\n/g, '
-').replace(//g, '');
+  pem = pem.replace(/\\n/g, '\n').replace(/\r/g, '');
   if (!pem.includes('-----BEGIN')) {
     throw new Error(
       'WHATSAPP_FLOW_PRIVATE_KEY does not look like a PEM key. Paste the full key including the BEGIN/END lines (literal \n for line breaks is fine), or base64-encode the whole file.',
