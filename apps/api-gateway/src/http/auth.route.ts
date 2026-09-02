@@ -153,6 +153,44 @@ export async function handleUsernamePasswordSignupRoute(
         sendJson(res, 409, { error: 'An account with that email already exists.' });
         return;
       }
+      if (existingByEmail) {
+        // The email belongs to a passwordless account (created via Google or
+        // Apple). Signing up used to mint a SECOND user with the same email —
+        // duplicate profiles, restarted onboarding, split wallets. Claim the
+        // existing account instead: attach the password to it, upgrade its
+        // role if the driver app is asking, and sign the person in.
+        const claimed = await userClient.updateAuthIdentity(existingByEmail.id, {
+          passwordHash: await hashPassword(password),
+          username: username ?? undefined,
+          name: existingByEmail.name ? undefined : name,
+          phone: existingByEmail.phone ? undefined : phone,
+        });
+        if (
+          (role === 'DRIVER' || role === 'BOTH') &&
+          existingByEmail.role === 'RIDER'
+        ) {
+          await userClient.updateRole(existingByEmail.id, ROLE_MAP.BOTH);
+        }
+        if (role === 'DRIVER' || role === 'BOTH') {
+          await driverClient.ensure(existingByEmail.id);
+        }
+        await walletClient.create(existingByEmail.id).catch(() => undefined);
+
+        logActivity({
+          userId: existingByEmail.id,
+          eventType: 'auth_signup',
+          metadata: { method: 'password', role, linkedExisting: true },
+        });
+
+        sendJson(res, 200, {
+          created: false,
+          linked: true,
+          accessToken: createLocalAccessToken(existingByEmail.id, deps.jwtSecret),
+          tokenType: 'Bearer',
+          user: serializeUser(claimed),
+        });
+        return;
+      }
     }
 
     const passwordHash = await hashPassword(password);
