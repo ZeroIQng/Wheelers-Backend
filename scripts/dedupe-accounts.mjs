@@ -42,7 +42,7 @@ for (const dup of dups) {
     where: { email: dup.email },
     include: {
       wallet: { include: { _count: { select: { transactions: true } } } },
-      driver: { select: { id: true, kycStatus: true, vehiclePlate: true, completedRides: true } },
+      driver: { select: { id: true, kycStatus: true, vehiclePlate: true, totalRides: true } },
     },
     orderBy: { createdAt: 'asc' },
   });
@@ -56,7 +56,7 @@ for (const dup of dups) {
       ? await prisma.driverBid.count({ where: { driverId: u.driver.id } }).catch(() => 0)
       : 0;
     const driverProgress = Boolean(
-      u.driver && (u.driver.kycStatus !== 'PENDING' || u.driver.vehiclePlate || (u.driver.completedRides ?? 0) > 0),
+      u.driver && (u.driver.kycStatus !== 'PENDING' || u.driver.vehiclePlate || (u.driver.totalRides ?? 0) > 0),
     );
     const active = moneyNgn > 0 || txCount > 0 || rides > 0 || bids > 0 || driverProgress;
     const score =
