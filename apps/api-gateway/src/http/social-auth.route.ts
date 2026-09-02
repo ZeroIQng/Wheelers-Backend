@@ -180,7 +180,7 @@ async function verifyAppleToken(idToken: string, bundleId: string): Promise<{ su
 const GOOGLE_JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
 const GOOGLE_ISSUERS = ['https://accounts.google.com', 'accounts.google.com'];
 
-async function verifyGoogleToken(idToken: string, clientId: string): Promise<{ sub: string; email?: string; name?: string }> {
+async function verifyGoogleToken(idToken: string, clientId: string): Promise<{ sub: string; email?: string; name?: string; emailVerified?: boolean }> {
   const { header, payload, signedPart, signature } = decodeJwt(idToken);
 
   if (header.alg !== 'RS256') {
@@ -235,6 +235,7 @@ async function verifyGoogleToken(idToken: string, clientId: string): Promise<{ s
     sub: payload.sub,
     email: payload.email,
     name: payload.name,
+    emailVerified: payload.email_verified !== false,
   };
 }
 
@@ -247,7 +248,7 @@ async function verifyGoogleToken(idToken: string, clientId: string): Promise<{ s
  * under test is our own find-or-create logic, not someone else's crypto.
  * Always null in production.
  */
-type TokenVerifier = (idToken: string) => Promise<{ sub: string; email?: string; name?: string }>;
+type TokenVerifier = (idToken: string) => Promise<{ sub: string; email?: string; name?: string; emailVerified?: boolean }>;
 let testTokenVerifier: TokenVerifier | null = null;
 
 export function __setTokenVerifierForTests(verifier: TokenVerifier | null): void {
@@ -283,6 +284,7 @@ async function findOrCreateSocialUser(
   sub: string,
   email?: string,
   name?: string,
+  emailVerified = true,
   jwtSecret?: string,
   pouchLiquifiaClient?: PouchLiquifiaClient,
   resendApiKey?: string,
@@ -290,7 +292,16 @@ async function findOrCreateSocialUser(
 ): Promise<{ accessToken: string; user: Record<string, unknown>; userId: string; isNewUser: boolean }> {
   const privyDid = `${provider}:${sub}`;
 
-  const existing = await userClient.findByPrivyDid(privyDid);
+  let existing = await userClient.findByPrivyDid(privyDid);
+  if (!existing && email && emailVerified) {
+    // Same person, different door. An account created with email/password
+    // (or the other provider) has a different privyDid — looking up only by
+    // privyDid minted a DUPLICATE user with an empty driver profile, so
+    // "Continue with Google" restarted onboarding for people who already
+    // had an account. A provider-verified email is the same identity: sign
+    // into the existing account instead of creating a twin.
+    existing = await userClient.findByEmail(email);
+  }
   let isNewUser = false;
   let userId: string;
   let userRecord: { id: string; privyDid: string; email: string | null; role: UserRole; name: string | null; phone: string | null };
@@ -412,6 +423,7 @@ export async function handleAppleAuthRoute(
       verified.sub,
       verified.email,
       clientName ?? verified.name,
+      true,
       deps.jwtSecret,
       deps.pouchLiquifiaClient,
       deps.resendApiKey,
@@ -475,6 +487,7 @@ export async function handleGoogleAuthRoute(
       verified.sub,
       verified.email,
       verified.name,
+      verified.emailVerified ?? true,
       deps.jwtSecret,
       deps.pouchLiquifiaClient,
       deps.resendApiKey,
