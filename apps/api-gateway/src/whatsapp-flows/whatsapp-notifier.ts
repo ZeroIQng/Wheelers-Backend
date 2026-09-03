@@ -1,6 +1,7 @@
 import { signFlowToken } from './encryption';
 import { calculateRideFees } from '@wheleers/config';
-import type { WhatsappBid } from './bid-state';
+import { buildBidListData } from './flow-screens';
+import type { WhatsappBid, WhatsappRideMeta } from './bid-state';
 
 export interface WhatsappNotifierDeps {
   metaAccessToken: string;
@@ -102,12 +103,12 @@ export async function sendFlowOffersMessage(
   deps: WhatsappNotifierDeps,
   to: string,
   riderId: string,
+  meta: WhatsappRideMeta,
   bids: WhatsappBid[],
-  riderOfferNgn: number,
 ): Promise<void> {
   const count = bids.length;
   const lowest = Math.min(...bids.map((b) => b.counterOfferNgn));
-  const body = `🚗 ${count} driver offer${count === 1 ? '' : 's'} on your ₦${riderOfferNgn.toLocaleString()} request!\nLowest: ₦${lowest.toLocaleString()}. Tap below to view and accept.`;
+  const body = `🚗 ${count} driver offer${count === 1 ? '' : 's'} on your ₦${meta.offerNgn.toLocaleString()} request!\nLowest: ₦${lowest.toLocaleString()}. Tap below to view and accept.`;
 
   if (!deps.flowId || !deps.flowTokenSecret) {
     await sendMetaWhatsappMessage(deps, to, body);
@@ -139,7 +140,14 @@ export async function sendFlowOffersMessage(
             flow_id: deps.flowId,
             flow_token: signFlowToken(`new:${riderId}`, deps.flowTokenSecret),
             flow_cta: 'View offers',
-            flow_action: 'data_exchange',
+            // A flow may only OPEN on its entry screen via INIT; navigate is
+            // the sanctioned way to land directly on the offers page. The
+            // bids ride along; Continue re-polls the server for fresh ones.
+            flow_action: 'navigate',
+            flow_action_payload: {
+              screen: 'BID_LIST',
+              data: buildBidListData(meta, bids),
+            },
           },
         },
       },

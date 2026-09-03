@@ -310,6 +310,14 @@ async function handleAcceptBid(
     ? await rideClient.findActiveByDriver(bid.driverId).catch(() => null)
     : null;
   if (!driver || driver.status !== 'ONLINE' || !driverFresh || driverBusy) {
+    console.info('[whatsapp-flow] accept blocked: driver unavailable', {
+      rideId,
+      driverId: bid.driverId,
+      found: !!driver,
+      status: driver?.status ?? null,
+      fresh: driverFresh,
+      busyRideId: driverBusy?.id ?? null,
+    });
     const remaining = await removeBid(deps.redisClient, rideId, bid.driverId);
     if (remaining.length > 0) {
       return { screen: 'BID_LIST', data: buildBidListData(meta, remaining) };
@@ -325,6 +333,11 @@ async function handleAcceptBid(
   const wallet = await walletClient.findByUserId(userId).catch(() => null);
   const balanceNgn = wallet ? Number(wallet.balanceNgn) : 0;
   if (!wallet || balanceNgn < bid.counterOfferNgn) {
+    console.info('[whatsapp-flow] accept blocked: wallet short', {
+      rideId,
+      balanceNgn,
+      fareNgn: bid.counterOfferNgn,
+    });
     const { virtualAccount } = await getWalletInfo(userId);
     const shortage = bid.counterOfferNgn - balanceNgn;
     const topUp = virtualAccount
@@ -345,7 +358,11 @@ async function handleAcceptBid(
       driverUserId: bid.driverUserId,
       amountNgn: bid.counterOfferNgn,
     });
-  } catch {
+  } catch (holdError) {
+    console.warn('[whatsapp-flow] accept blocked: hold failed', {
+      rideId,
+      error: holdError instanceof Error ? holdError.message : String(holdError),
+    });
     return {
       screen: 'SUCCESS',
       data: buildErrorData('Could not lock funds in your wallet. Please try again.'),
@@ -365,6 +382,7 @@ async function handleAcceptBid(
   });
   await deps.publisher.publishRideEvent(acceptEvent);
   await setRideState(deps.redisClient, rideId, 'confirmed');
+  console.info('[whatsapp-flow] accept confirmed', { rideId, driverId: bid.driverId, fareNgn: bid.counterOfferNgn });
 
   // Fetch driver details for profile flow
   let driverPhone = '';
@@ -513,12 +531,23 @@ async function handleRideSetupInit(
 ): Promise<{ screen: string; data: Record<string, unknown> }> {
   const existingRideId = await getActiveRide(deps.redisClient, userId);
   if (existingRideId) {
-    // A pointer to a ride whose data expired must not terminal-close the
-    // form — clear it and let the rider book fresh.
     const existingMeta = await getRideMeta(deps.redisClient, existingRideId);
     if (existingMeta) {
-      return await resolveScreen(existingRideId, userId, deps);
+      // Meta only allows a flow to OPEN on the entry screen — answering
+      // INIT with BID_LIST is rejected client-side as an invalid screen
+      // transition. Offers are reachable through the 'View offers'
+      // message (which navigates directly); here we can only inform.
+      return {
+        screen: 'RIDE_SETUP',
+        data: buildRideSetupData({
+          pickupAddress: existingMeta.pickupAddress,
+          destinationAddress: existingMeta.destinationAddress,
+          error:
+            "You have a ride in progress — driver offers arrive as 'View offers' messages in this chat. Say 'cancel ride' in the chat to start over.",
+        }),
+      };
     }
+    // A pointer to a ride whose data expired must not block booking.
     await clearActiveRide(deps.redisClient, userId);
   }
 

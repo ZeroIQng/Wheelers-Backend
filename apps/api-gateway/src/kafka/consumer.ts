@@ -223,7 +223,7 @@ function scheduleBidFlush(
 
       await storeLastBatch(deps.redisClient, rideId, allBids);
       if (meta.source === 'flow') {
-        await sendFlowOffersMessage(deps.whatsappNotifier, phone, riderId, allBids, meta.offerNgn)
+        await sendFlowOffersMessage(deps.whatsappNotifier, phone, riderId, meta, allBids)
           .catch((err) => console.warn('[consumer] WhatsApp flow offers message failed', err));
       } else {
         await sendBidNotification(deps.whatsappNotifier, phone, allBids, meta.offerNgn)
@@ -375,7 +375,7 @@ async function handleRideEvent(
             // Bidding lives on the offers screen; each debounced batch sends
             // a 'View offers' button that re-opens the flow on current bids.
             console.info('[consumer] sending flow offers message', { rideId: event.rideId, bids: allBids.length });
-            await sendFlowOffersMessage(deps.whatsappNotifier, phone, event.riderId, allBids, meta.offerNgn)
+            await sendFlowOffersMessage(deps.whatsappNotifier, phone, event.riderId, meta, allBids)
               .catch((err) => console.warn('[consumer] WhatsApp flow offers message failed', err));
           } else {
             await sendBidNotification(deps.whatsappNotifier, phone, allBids, meta.offerNgn, changes)
