@@ -1,12 +1,13 @@
-// COMMENTED OUT: Flow-based encryption imports — using pure chat-based messaging
-// import { signFlowToken } from './encryption';
-
+import { signFlowToken } from './encryption';
 import { calculateRideFees } from '@wheleers/config';
 import type { WhatsappBid } from './bid-state';
 
 export interface WhatsappNotifierDeps {
   metaAccessToken: string;
   metaPhoneNumberId: string;
+  /** When set, bid updates for flow rides go out as a tappable flow message. */
+  flowId?: string;
+  flowTokenSecret?: string;
 }
 
 async function sendMetaWhatsappMessage(
@@ -92,19 +93,64 @@ function formatBidList(
 export { formatBidList };
 
 /**
- * Flow-booked rides keep bidding on the screen — the chat only gets a single
- * nudge when the first offer lands, pointing back at the form.
+ * Flow-booked rides keep bidding on the screen. WhatsApp cannot push into an
+ * open flow, so each debounced bid batch sends a message with a 'View offers'
+ * button — tapping it re-opens the flow, whose INIT loads the CURRENT bids.
+ * Chat-text fallback when the flow id/secret are not wired.
  */
-export async function sendFlowBidNudge(
+export async function sendFlowOffersMessage(
   deps: WhatsappNotifierDeps,
   to: string,
-  count: number,
+  riderId: string,
+  bids: WhatsappBid[],
+  riderOfferNgn: number,
 ): Promise<void> {
-  await sendMetaWhatsappMessage(
-    deps,
-    to,
-    `🚗 ${count} driver offer${count === 1 ? '' : 's'} just came in!\n\nOpen the *Book a Ride* form (tap *Book now* above) and press *Continue* to view and accept.`,
-  );
+  const count = bids.length;
+  const lowest = Math.min(...bids.map((b) => b.counterOfferNgn));
+  const body = `🚗 ${count} driver offer${count === 1 ? '' : 's'} on your ₦${riderOfferNgn.toLocaleString()} request!\nLowest: ₦${lowest.toLocaleString()}. Tap below to view and accept.`;
+
+  if (!deps.flowId || !deps.flowTokenSecret) {
+    await sendMetaWhatsappMessage(deps, to, body);
+    return;
+  }
+
+  const recipient = to.replace(/^\+/, '');
+  const endpoint = `https://graph.facebook.com/v21.0/${deps.metaPhoneNumberId}/messages`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${deps.metaAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: recipient,
+      type: 'interactive',
+      interactive: {
+        type: 'flow',
+        header: { type: 'text', text: 'Driver offers 🚗' },
+        body: { text: body },
+        footer: { text: 'Wheelers' },
+        action: {
+          name: 'flow',
+          parameters: {
+            flow_message_version: '3',
+            flow_id: deps.flowId,
+            flow_token: signFlowToken(`new:${riderId}`, deps.flowTokenSecret),
+            flow_cta: 'View offers',
+            flow_action: 'data_exchange',
+          },
+        },
+      },
+    }),
+  });
+  if (!response.ok) {
+    const payload = await response.text();
+    console.error('[whatsapp-notifier] flow offers message failed', { status: response.status, payload });
+    // Never leave the rider unaware of money on the table.
+    await sendMetaWhatsappMessage(deps, to, body);
+  }
 }
 
 // ── Send batched bid notification (1 message with all drivers) ────────────

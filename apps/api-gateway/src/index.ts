@@ -2024,6 +2024,8 @@ async function bootstrap(): Promise<void> {
         ? {
             metaAccessToken: gatewayEnv.META_ACCESS_TOKEN,
             metaPhoneNumberId: gatewayEnv.META_PHONE_NUMBER_ID,
+            flowId: gatewayEnv.WHATSAPP_FLOW_ID,
+            flowTokenSecret: gatewayEnv.JWT_SECRET,
           }
         : undefined,
   });
