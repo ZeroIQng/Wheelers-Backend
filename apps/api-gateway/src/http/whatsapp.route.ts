@@ -250,8 +250,8 @@ async function sendMetaFlowMessage(
       type: 'interactive',
       interactive: {
         type: 'flow',
-        header: { type: 'text', text: 'Book a ride' },
-        body: { text: 'Fill in your pickup, destination and offer — drivers bid in seconds.' },
+        header: { type: 'text', text: 'Wheelers 🚗' },
+        body: { text: 'Welcome! Tap below to book a ride — set your pickup, destination and your price, and nearby drivers bid in seconds.' },
         footer: { text: 'Wheelers' },
         action: {
           name: 'flow',
@@ -2160,7 +2160,7 @@ export async function handleMetaWhatsappWebhookRoute(
       // carries addresses stays with the chat brain, which handles it fully.
       if (
         deps.whatsappFlowId &&
-        /^(book|book a ride|book ride|i want a ride|ride)[.!\s]*$/i.test(incomingMessage.trim())
+        /^(book|book a ride|book ride|i want a ride|ride|hi|hello|hey|hiya|yo|good\s?(morning|afternoon|evening)|how far|start)[.!,\s]*$/i.test(incomingMessage.trim())
       ) {
         const hasRide = await getActiveRide(deps.redisClient, user.id);
         if (!hasRide) {
