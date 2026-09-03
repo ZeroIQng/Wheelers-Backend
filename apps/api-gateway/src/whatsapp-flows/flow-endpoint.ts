@@ -195,7 +195,15 @@ async function handleFlowAction(
 
   if (body.action === 'data_exchange') {
     const data = body.data ?? {};
-    const action = data.action as string | undefined;
+    let action = data.action as string | undefined;
+
+    // Phones cache flow JSON aggressively: an old cached screen submits the
+    // form fields without our `action` tag. Infer the intent instead of
+    // falling through to a terminal screen (which reads as a crash).
+    if (!action && typeof data.pickup_address === 'string') {
+      action = data.offer_amount !== undefined && data.offer_amount !== '' ? 'find_drivers' : 'estimate_fare';
+      console.info('[whatsapp-flow] inferred action for legacy payload', { action });
+    }
 
     // ── RIDE_SETUP: estimate fare, show FARE_CONFIRM ────────────────────
     if (action === 'estimate_fare') {
