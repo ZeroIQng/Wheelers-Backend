@@ -91,6 +91,22 @@ function formatBidList(
 
 export { formatBidList };
 
+/**
+ * Flow-booked rides keep bidding on the screen — the chat only gets a single
+ * nudge when the first offer lands, pointing back at the form.
+ */
+export async function sendFlowBidNudge(
+  deps: WhatsappNotifierDeps,
+  to: string,
+  count: number,
+): Promise<void> {
+  await sendMetaWhatsappMessage(
+    deps,
+    to,
+    `🚗 ${count} driver offer${count === 1 ? '' : 's'} just came in!\n\nOpen the *Book a Ride* form (tap *Book now* above) and press *Continue* to view and accept.`,
+  );
+}
+
 // ── Send batched bid notification (1 message with all drivers) ────────────
 
 export async function sendBidNotification(

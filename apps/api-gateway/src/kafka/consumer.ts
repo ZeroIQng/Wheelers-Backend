@@ -40,6 +40,7 @@ import {
 import type { WhatsappBid } from '../whatsapp-flows/bid-state';
 import {
   sendBidNotification,
+  sendFlowBidNudge,
   sendRideMatchedNotification,
   sendDriverArrivedNotification,
   sendRideStartedNotification,
@@ -220,9 +221,17 @@ function scheduleBidFlush(
       const allBids = await getBids(deps.redisClient, rideId);
       if (allBids.length === 0) return;
 
+      const previousBatch = await getLastBatch(deps.redisClient, rideId).catch(() => []);
       await storeLastBatch(deps.redisClient, rideId, allBids);
-      await sendBidNotification(deps.whatsappNotifier, phone, allBids, meta.offerNgn)
-        .catch((err) => console.warn('[consumer] WhatsApp bid flush failed', err));
+      if (meta.source === 'flow') {
+        if (previousBatch.length === 0) {
+          await sendFlowBidNudge(deps.whatsappNotifier, phone, allBids.length)
+            .catch((err) => console.warn('[consumer] WhatsApp flow nudge failed', err));
+        }
+      } else {
+        await sendBidNotification(deps.whatsappNotifier, phone, allBids, meta.offerNgn)
+          .catch((err) => console.warn('[consumer] WhatsApp bid flush failed', err));
+      }
     })();
   }, BID_FLUSH_DELAY_MS);
   timer.unref();
@@ -352,8 +361,17 @@ async function handleRideEvent(
           const allBids = await getBids(deps.redisClient, event.rideId);
           const changes = describeBidChanges(previousBatch, allBids);
           await storeLastBatch(deps.redisClient, event.rideId, allBids);
-          await sendBidNotification(deps.whatsappNotifier, phone, allBids, meta.offerNgn, changes)
-            .catch((err) => console.warn('[consumer] WhatsApp bid notification failed', err));
+          if (meta.source === 'flow') {
+            // Bidding lives on the form's offers screen; chat gets exactly
+            // one nudge, when the first offer arrives.
+            if (previousBatch.length === 0 && allBids.length > 0) {
+              await sendFlowBidNudge(deps.whatsappNotifier, phone, allBids.length)
+                .catch((err) => console.warn('[consumer] WhatsApp flow nudge failed', err));
+            }
+          } else {
+            await sendBidNotification(deps.whatsappNotifier, phone, allBids, meta.offerNgn, changes)
+              .catch((err) => console.warn('[consumer] WhatsApp bid notification failed', err));
+          }
         } else {
           // Debounced. The bid is in Redis but the rider has NOT seen it — and
           // acceptance reads getLastBatch (what was actually sent), so a bid

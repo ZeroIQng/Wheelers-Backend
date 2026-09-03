@@ -12,6 +12,8 @@ export interface PendingLocation {
 export interface WhatsappRideMeta {
   riderId: string;
   phone: string;
+  /** 'flow' = booked inside the WhatsApp form; bid chat spam is suppressed. */
+  source?: 'chat' | 'flow';
   pickupAddress: string;
   pickupLat?: number;
   pickupLng?: number;

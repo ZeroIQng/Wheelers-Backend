@@ -789,6 +789,7 @@ async function handleFindDrivers(
   await storeWhatsappRide(deps.redisClient, rideId, {
     riderId: userId,
     phone,
+    source: 'flow',
     pickupAddress: route.pickupAddress,
     pickupLat: route.pickupLat,
     pickupLng: route.pickupLng,

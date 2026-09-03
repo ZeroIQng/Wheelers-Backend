@@ -29,7 +29,7 @@ export function buildBidListData(
     has_bids: hasBids,
     has_no_bids: !hasBids,
     waiting_line:
-      'No offers yet — drivers around you are seeing your request right now. Tap the button below to check for new offers.',
+      '⏳ No offers yet — drivers around you are seeing your request right now. Tap Continue below to check for new offers.',
     bid_actions: [
       { id: 'accept', title: 'Accept' },
       { id: 'decline', title: 'Decline' },
@@ -121,14 +121,14 @@ export function buildFareConfirmData(params: {
 }): Record<string, unknown> {
   const tripLine =
     params.distanceKm && params.durationSeconds
-      ? `${params.distanceKm.toFixed(1)} km · ~${Math.ceil(params.durationSeconds / 60)} min`
+      ? `📍 ${params.distanceKm.toFixed(1)} km · ~${Math.ceil(params.durationSeconds / 60)} min`
       : '';
 
   return {
     route_line: `${params.pickupAddress} → ${params.destinationAddress}`,
     trip_line: tripLine,
     has_trip_line: tripLine.length > 0,
-    suggested_fare_line: `Suggested fare: ₦${params.suggestedFareNgn.toLocaleString()}`,
+    suggested_fare_line: `💰 Suggested fare: ₦${params.suggestedFareNgn.toLocaleString()}`,
     min_fare_line: params.minOfferNgn
       ? `Minimum offer: ₦${params.minOfferNgn.toLocaleString()}`
       : '',
