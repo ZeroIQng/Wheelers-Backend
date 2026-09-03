@@ -98,8 +98,9 @@ export function buildRideSetupData(params: {
   return {
     pickup_address: params.pickupAddress,
     destination_address: params.destinationAddress,
-    suggested_fare: `₦${params.suggestedFareNgn.toLocaleString()}`,
-    suggested_fare_value: String(params.suggestedFareNgn),
+    suggested_fare:
+      params.suggestedFareNgn > 0 ? `₦${params.suggestedFareNgn.toLocaleString()}` : '—',
+    suggested_fare_value: params.suggestedFareNgn > 0 ? String(params.suggestedFareNgn) : '',
     route_info: routeInfo,
     has_route_info: routeInfo.length > 0,
     payment_options: [

@@ -282,8 +282,10 @@ async function sendMetaFlowMessage(
             flow_id: deps.whatsappFlowId,
             flow_token: flowToken,
             flow_cta: 'Book now',
-            flow_action: 'navigate',
-            flow_action_payload: { screen: 'RIDE_SETUP' },
+            // data_exchange: opening the flow calls our endpoint's INIT, so
+            // the screen renders with real data. 'navigate' skipped the
+            // endpoint and left ${data...} placeholders literally on screen.
+            flow_action: 'data_exchange',
           },
         },
       },
