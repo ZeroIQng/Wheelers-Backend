@@ -222,6 +222,28 @@ async function sendMetaReply(
   }
 }
 
+const OPENER_WORDS = new Set([
+  'hi', 'hello', 'hey', 'hiya', 'yo', 'sup', 'wassup', 'whatsup', 'whats', 'up',
+  'good', 'morning', 'afternoon', 'evening', 'day', 'how', 'far', 'you', 'dey',
+  'there', 'wheelers', 'start', 'menu', 'book', 'ride', 'a', 'i', 'want', 'my',
+  'need', 'abeg', 'please', 'o', 'oo', 'now', 'wanna',
+]);
+
+/**
+ * "Hi", "Hi wassup", "good morning o", "book a ride abeg" — all openers that
+ * deserve the greeting + Book Ride button. "Hi, take me to Lekki" is NOT:
+ * 'take'/'lekki' are content words, so the chat brain handles it fully.
+ */
+function isBookingOpener(message: string): boolean {
+  const words = message
+    .toLowerCase()
+    .replace(/[^a-z\s']/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0 || words.length > 6) return false;
+  return words.every((word) => OPENER_WORDS.has(word.replace(/'/g, '')));
+}
+
 /**
  * Send the interactive booking FLOW — a tappable form instead of typing.
  * The flow_token carries `new:<userId>` so the flow endpoint opens on the
@@ -2158,10 +2180,7 @@ export async function handleMetaWhatsappWebhookRoute(
       // ── Booking opener → send the tappable FLOW form (meta-flows) ──
       // Only bare openers ("book", "book a ride") — a message that already
       // carries addresses stays with the chat brain, which handles it fully.
-      if (
-        deps.whatsappFlowId &&
-        /^(book|book a ride|book ride|i want a ride|ride|hi|hello|hey|hiya|yo|good\s?(morning|afternoon|evening)|how far|start)[.!,\s]*$/i.test(incomingMessage.trim())
-      ) {
+      if (deps.whatsappFlowId && isBookingOpener(incomingMessage)) {
         const hasRide = await getActiveRide(deps.redisClient, user.id);
         if (!hasRide) {
           const flowToken = signFlowToken(`new:${user.id}`, deps.jwtSecret);
