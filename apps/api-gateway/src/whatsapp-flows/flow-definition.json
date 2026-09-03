@@ -138,6 +138,14 @@
         "has_error": {
           "type": "boolean",
           "__example__": false
+        },
+        "min_fare_line": {
+          "type": "string",
+          "__example__": "Minimum offer: ₦3,744"
+        },
+        "has_min_fare_line": {
+          "type": "boolean",
+          "__example__": true
         }
       },
       "layout": {
@@ -155,6 +163,11 @@
           {
             "type": "TextSubheading",
             "text": "${data.suggested_fare_line}"
+          },
+          {
+            "type": "TextCaption",
+            "text": "${data.min_fare_line}",
+            "visible": "${data.has_min_fare_line}"
           },
           {
             "type": "TextCaption",
