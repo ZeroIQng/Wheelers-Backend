@@ -254,7 +254,19 @@ export async function handleRideSearchFlowEndpoint(
     const rawBody = await readRawBody(req);
     const envelope = JSON.parse(rawBody.toString('utf8'));
 
-    const { decryptedBody, aesKey, iv } = decryptFlowRequest(envelope, deps.privateKeyPem);
+    let decryptedParts;
+    try {
+      decryptedParts = decryptFlowRequest(envelope, deps.privateKeyPem);
+    } catch (error) {
+      // Meta spec: 421 = "re-fetch my public key and retry" — never 500.
+      console.warn('[whatsapp-ride-search-flow] could not decrypt — 421 so Meta refreshes the key', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.statusCode = 421;
+      res.end();
+      return;
+    }
+    const { decryptedBody, aesKey, iv } = decryptedParts;
 
     const response = await handleFlowAction(decryptedBody, deps);
 

@@ -7,6 +7,7 @@ import type { GatewayPublisher } from '../websocket/publisher';
 import type { RedisClient } from '../redis/client';
 import { readRawBody, sendJson } from '../http/utils';
 import { decryptFlowRequest, encryptFlowResponse, verifyFlowToken } from './encryption';
+import type { DecryptedFlowRequest } from './encryption';
 import type { FlowRequestBody } from './encryption';
 import { geocodeAddress } from '../LLM/geocoding';
 import {
@@ -690,15 +691,27 @@ export async function handleWhatsappFlowEndpoint(
   res: ServerResponse,
   deps: WhatsappFlowEndpointDeps,
 ): Promise<void> {
+  let decrypted: DecryptedFlowRequest;
   try {
     const rawBody = await readRawBody(req);
     const envelope = JSON.parse(rawBody.toString('utf8'));
+    decrypted = decryptFlowRequest(envelope, deps.privateKeyPem);
+  } catch (error) {
+    // Meta's spec: a 421 tells WhatsApp our public key changed — it
+    // re-fetches the key and re-encrypts. A 500 here leaves Meta stuck on
+    // a stale cached key forever (exactly the health-check OAEP failure).
+    console.warn('[whatsapp-flow] could not decrypt request — answering 421 so Meta refreshes the key', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.statusCode = 421;
+    res.end();
+    return;
+  }
 
-    const { decryptedBody, aesKey, iv } = decryptFlowRequest(envelope, deps.privateKeyPem);
+  try {
+    const response = await handleFlowAction(decrypted.decryptedBody, deps);
 
-    const response = await handleFlowAction(decryptedBody, deps);
-
-    const encrypted = encryptFlowResponse(response, aesKey, iv);
+    const encrypted = encryptFlowResponse(response, decrypted.aesKey, decrypted.iv);
     res.statusCode = 200;
     res.setHeader('content-type', 'text/plain');
     res.end(encrypted);
