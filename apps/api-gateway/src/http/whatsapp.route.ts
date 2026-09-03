@@ -2180,11 +2180,19 @@ export async function handleMetaWhatsappWebhookRoute(
       // ── Booking opener → send the tappable FLOW form (meta-flows) ──
       // Only bare openers ("book", "book a ride") — a message that already
       // carries addresses stays with the chat brain, which handles it fully.
-      if (deps.whatsappFlowId && isBookingOpener(incomingMessage)) {
+      const openerMatch = isBookingOpener(incomingMessage);
+      console.info('[whatsapp] opener check', {
+        message: incomingMessage.slice(0, 40),
+        openerMatch,
+        flowIdConfigured: Boolean(deps.whatsappFlowId),
+      });
+      if (deps.whatsappFlowId && openerMatch) {
         const hasRide = await getActiveRide(deps.redisClient, user.id);
+        console.info('[whatsapp] opener gate', { hasRide: Boolean(hasRide) });
         if (!hasRide) {
           const flowToken = signFlowToken(`new:${user.id}`, deps.jwtSecret);
           const sent = await sendMetaFlowMessage(deps, phone, flowToken);
+          console.info('[whatsapp] flow send result', { sent });
           if (sent) {
             await appendWhatsappConversation(deps.redisClient, phone, [
               { role: 'user', content: incomingMessage },
