@@ -869,3 +869,50 @@ export async function getGroupSeatMembers(
     return [];
   }
 }
+
+// ── Flow fare estimate (RIDE_SETUP -> FARE_CONFIRM handoff) ───────────────
+// The estimate step geocodes and plans the route; Find Drivers reuses that
+// work instead of paying for a second geocode + route call.
+
+export interface FlowEstimate {
+  pickupAddress: string;
+  pickupLat: number;
+  pickupLng: number;
+  destinationAddress: string;
+  destinationLat: number;
+  destinationLng: number;
+  distanceKm: number;
+  durationSeconds: number;
+  suggestedFareNgn: number;
+  minOfferNgn: number;
+  ratePerKmNgn: number;
+  geometry: unknown;
+}
+
+const flowEstimateKey = (userId: string) => `whatsapp:flow:estimate:${userId}`;
+const FLOW_ESTIMATE_TTL = 15 * 60;
+
+export async function storeFlowEstimate(
+  redis: RedisClient,
+  userId: string,
+  estimate: FlowEstimate,
+): Promise<void> {
+  await redis.set(flowEstimateKey(userId), JSON.stringify(estimate), FLOW_ESTIMATE_TTL);
+}
+
+export async function getFlowEstimate(
+  redis: RedisClient,
+  userId: string,
+): Promise<FlowEstimate | null> {
+  const raw = await redis.get(flowEstimateKey(userId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as FlowEstimate;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearFlowEstimate(redis: RedisClient, userId: string): Promise<void> {
+  await redis.del(flowEstimateKey(userId));
+}

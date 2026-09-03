@@ -19,6 +19,9 @@ import {
   setActiveRide,
   storeWhatsappRide,
   getPendingLocation,
+  storeFlowEstimate,
+  getFlowEstimate,
+  clearFlowEstimate,
   clearPendingLocation,
   clearBids,
   removeBid,
@@ -26,7 +29,7 @@ import {
   storeAcceptedBid,
   getAcceptedBid,
 } from './bid-state';
-import type { WhatsappBid } from './bid-state';
+import type { FlowEstimate, WhatsappBid } from './bid-state';
 import {
   buildBidListData,
   buildConfirmationData,
@@ -34,6 +37,7 @@ import {
   buildPaymentData,
   buildErrorData,
   buildRideSetupData,
+  buildFareConfirmData,
   buildNotifyExitData,
 } from './flow-screens';
 import type { DriverKycStorage } from '../storage/driver-kyc-storage';
@@ -171,16 +175,6 @@ async function handleFlowAction(
   // ── INIT — show appropriate screen based on ride state ────────────────
 
   if (body.action === 'INIT') {
-    if (tokenData.rideId === 'new') {
-      return {
-        screen: 'RIDE_SETUP',
-        data: buildRideSetupData({
-          pickupAddress: '',
-          destinationAddress: '',
-          suggestedFareNgn: 0,
-        }),
-      };
-    }
     if (rideId === 'new') {
       return await handleRideSetupInit(userId, deps);
     }
@@ -202,7 +196,12 @@ async function handleFlowAction(
     const data = body.data ?? {};
     const action = data.action as string | undefined;
 
-    // ── RIDE_SETUP: find drivers ────────────────────────────────────────
+    // ── RIDE_SETUP: estimate fare, show FARE_CONFIRM ────────────────────
+    if (action === 'estimate_fare') {
+      return await handleEstimateFare(userId, data, deps);
+    }
+
+    // ── FARE_CONFIRM: find drivers ──────────────────────────────────────
     if (action === 'find_drivers') {
       return await handleFindDrivers(userId, data, deps);
     }
@@ -496,22 +495,19 @@ async function handleRideSetupInit(
     data: buildRideSetupData({
       pickupAddress: pendingLocation?.address ?? '',
       destinationAddress: '',
-      suggestedFareNgn: 0,
     }),
   };
 }
 
-// ── Find drivers — geocode, plan route, create ride ─────────────────────
+// ── Estimate fare — geocode + plan route, hand off to FARE_CONFIRM ──────
 
-async function handleFindDrivers(
+async function handleEstimateFare(
   userId: string,
   data: Record<string, unknown>,
   deps: WhatsappFlowEndpointDeps,
 ): Promise<{ screen: string; data: Record<string, unknown> }> {
   const pickupAddress = (data.pickup_address as string)?.trim();
   const destinationAddress = (data.destination_address as string)?.trim();
-  const offerAmount = Number(data.offer_amount);
-  const paymentMethod = 'WALLET' as const;
 
   if (!pickupAddress || pickupAddress.length < 3) {
     return {
@@ -519,7 +515,6 @@ async function handleFindDrivers(
       data: buildRideSetupData({
         pickupAddress: pickupAddress ?? '',
         destinationAddress: destinationAddress ?? '',
-        suggestedFareNgn: offerAmount || 0,
         error: 'Enter a more specific pickup (street, landmark, bus stop)',
       }),
     };
@@ -531,7 +526,6 @@ async function handleFindDrivers(
       data: buildRideSetupData({
         pickupAddress,
         destinationAddress: destinationAddress ?? '',
-        suggestedFareNgn: offerAmount || 0,
         error: 'Enter a more specific destination (street, landmark, bus stop)',
       }),
     };
@@ -544,16 +538,16 @@ async function handleFindDrivers(
       data: buildRideSetupData({
         pickupAddress,
         destinationAddress,
-        suggestedFareNgn: offerAmount || 0,
         error: "You have an active ride. Say 'cancel ride' on WhatsApp first.",
       }),
     };
   }
 
+  // A location pin shared in chat pre-fills pickup; only trust its coordinates
+  // when the rider kept that exact address.
   const pendingLocation = await getPendingLocation(deps.redisClient, userId);
   let pickupGeo: { lat: number; lng: number; formattedAddress: string } | null = null;
-
-  if (pendingLocation) {
+  if (pendingLocation && pendingLocation.address === pickupAddress) {
     pickupGeo = { lat: pendingLocation.lat, lng: pendingLocation.lng, formattedAddress: pendingLocation.address };
     await clearPendingLocation(deps.redisClient, userId);
   } else {
@@ -566,7 +560,6 @@ async function handleFindDrivers(
       data: buildRideSetupData({
         pickupAddress,
         destinationAddress,
-        suggestedFareNgn: offerAmount || 0,
         error: `Could not find "${pickupAddress}". Try a landmark, bus stop, or street name.`,
       }),
     };
@@ -579,7 +572,6 @@ async function handleFindDrivers(
       data: buildRideSetupData({
         pickupAddress,
         destinationAddress,
-        suggestedFareNgn: offerAmount || 0,
         error: `Could not find "${destinationAddress}". Try a landmark, bus stop, or street name.`,
       }),
     };
@@ -602,44 +594,12 @@ async function handleFindDrivers(
       data: buildRideSetupData({
         pickupAddress,
         destinationAddress,
-        suggestedFareNgn: offerAmount || 0,
         error: 'Could not find a driving route between those two points. Please check the addresses.',
       }),
     };
   }
 
-  const suggestedFareNgn = plannedRoute.suggestedFareNgn;
-  const riderOfferNgn = offerAmount > 0 ? offerAmount : suggestedFareNgn;
-  const validation = validateRiderOffer(riderOfferNgn, suggestedFareNgn);
-  const finalOffer = validation.valid ? riderOfferNgn : suggestedFareNgn;
-
-  const rideId = randomUUID();
-  const phone = await lookupPhoneByUserId(deps.redisClient, userId) ?? '';
-
-  const event = RideRequestedEvent.parse({
-    eventType: 'RIDE_REQUESTED',
-    rideId,
-    riderId: userId,
-    pickup: { lat: pickupGeo.lat, lng: pickupGeo.lng, address: pickupGeo.formattedAddress },
-    destination: { lat: destGeo.lat, lng: destGeo.lng, address: destGeo.formattedAddress },
-    stops: [],
-    plannedDistanceKm: plannedRoute.distanceKm,
-    plannedDurationSeconds: plannedRoute.durationSeconds,
-    fareEstimateNgn: suggestedFareNgn,
-    paymentMethod,
-    riderOfferNgn: finalOffer,
-    suggestedFareNgn,
-    minOfferNgn: plannedRoute.minOfferNgn,
-    ratePerKmNgn: plannedRoute.ratePerKmNgn,
-    route: plannedRoute.geometry,
-    timestamp: new Date().toISOString(),
-  });
-
-  await deps.publisher.publishRideEvent(event);
-
-  await storeWhatsappRide(deps.redisClient, rideId, {
-    riderId: userId,
-    phone,
+  await storeFlowEstimate(deps.redisClient, userId, {
     pickupAddress: pickupGeo.formattedAddress,
     pickupLat: pickupGeo.lat,
     pickupLng: pickupGeo.lng,
@@ -648,12 +608,190 @@ async function handleFindDrivers(
     destinationLng: destGeo.lng,
     distanceKm: plannedRoute.distanceKm,
     durationSeconds: plannedRoute.durationSeconds,
+    suggestedFareNgn: plannedRoute.suggestedFareNgn,
+    minOfferNgn: plannedRoute.minOfferNgn,
+    ratePerKmNgn: plannedRoute.ratePerKmNgn,
+    geometry: plannedRoute.geometry,
+  });
+
+  return {
+    screen: 'FARE_CONFIRM',
+    data: buildFareConfirmData({
+      pickupAddress: pickupGeo.formattedAddress,
+      destinationAddress: destGeo.formattedAddress,
+      suggestedFareNgn: plannedRoute.suggestedFareNgn,
+      distanceKm: plannedRoute.distanceKm,
+      durationSeconds: plannedRoute.durationSeconds,
+    }),
+  };
+}
+
+// ── Find drivers — create the ride from the confirmed estimate ──────────
+
+async function handleFindDrivers(
+  userId: string,
+  data: Record<string, unknown>,
+  deps: WhatsappFlowEndpointDeps,
+): Promise<{ screen: string; data: Record<string, unknown> }> {
+  const pickupAddress = (data.pickup_address as string)?.trim();
+  const destinationAddress = (data.destination_address as string)?.trim();
+  const offerAmount = Number(data.offer_amount);
+  const paymentMethod = 'WALLET' as const;
+
+  if (!pickupAddress || !destinationAddress) {
+    return {
+      screen: 'RIDE_SETUP',
+      data: buildRideSetupData({
+        pickupAddress: pickupAddress ?? '',
+        destinationAddress: destinationAddress ?? '',
+        error: 'Enter pickup and destination first.',
+      }),
+    };
+  }
+
+  const existingRide = await getActiveRide(deps.redisClient, userId);
+  if (existingRide) {
+    return {
+      screen: 'RIDE_SETUP',
+      data: buildRideSetupData({
+        pickupAddress,
+        destinationAddress,
+        error: "You have an active ride. Say 'cancel ride' on WhatsApp first.",
+      }),
+    };
+  }
+
+  // Reuse the geocode + route from the estimate step; recompute only when the
+  // cached estimate expired or no longer matches the addresses on screen.
+  let route: FlowEstimate | null = await getFlowEstimate(deps.redisClient, userId);
+  if (route && (route.pickupAddress !== pickupAddress || route.destinationAddress !== destinationAddress)) {
+    route = null;
+  }
+
+  if (!route) {
+    const pickupGeo = await geocodeAddress(deps.googleMapsApiKey, `${pickupAddress}, Lagos, Nigeria`);
+    if (!pickupGeo) {
+      return {
+        screen: 'RIDE_SETUP',
+        data: buildRideSetupData({
+          pickupAddress,
+          destinationAddress,
+          error: `Could not find "${pickupAddress}". Try a landmark, bus stop, or street name.`,
+        }),
+      };
+    }
+
+    const destGeo = await geocodeAddress(deps.googleMapsApiKey, `${destinationAddress}, Lagos, Nigeria`);
+    if (!destGeo) {
+      return {
+        screen: 'RIDE_SETUP',
+        data: buildRideSetupData({
+          pickupAddress,
+          destinationAddress,
+          error: `Could not find "${destinationAddress}". Try a landmark, bus stop, or street name.`,
+        }),
+      };
+    }
+
+    let plannedRoute: Awaited<ReturnType<typeof deps.routePlanner.planRoute>>;
+    try {
+      plannedRoute = await deps.routePlanner.planRoute({
+        origin: pickupGeo,
+        destination: destGeo,
+      });
+    } catch (error) {
+      console.warn('[whatsapp-flow] route planning failed', {
+        pickup: pickupGeo.formattedAddress,
+        destination: destGeo.formattedAddress,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        screen: 'RIDE_SETUP',
+        data: buildRideSetupData({
+          pickupAddress,
+          destinationAddress,
+          error: 'Could not find a driving route between those two points. Please check the addresses.',
+        }),
+      };
+    }
+
+    route = {
+      pickupAddress: pickupGeo.formattedAddress,
+      pickupLat: pickupGeo.lat,
+      pickupLng: pickupGeo.lng,
+      destinationAddress: destGeo.formattedAddress,
+      destinationLat: destGeo.lat,
+      destinationLng: destGeo.lng,
+      distanceKm: plannedRoute.distanceKm,
+      durationSeconds: plannedRoute.durationSeconds,
+      suggestedFareNgn: plannedRoute.suggestedFareNgn,
+      minOfferNgn: plannedRoute.minOfferNgn,
+      ratePerKmNgn: plannedRoute.ratePerKmNgn,
+      geometry: plannedRoute.geometry,
+    };
+  }
+
+  const suggestedFareNgn = route.suggestedFareNgn;
+  const riderOfferNgn = offerAmount > 0 ? offerAmount : suggestedFareNgn;
+  const validation = validateRiderOffer(riderOfferNgn, suggestedFareNgn);
+  if (!validation.valid) {
+    return {
+      screen: 'FARE_CONFIRM',
+      data: buildFareConfirmData({
+        pickupAddress: route.pickupAddress,
+        destinationAddress: route.destinationAddress,
+        suggestedFareNgn,
+        distanceKm: route.distanceKm,
+        durationSeconds: route.durationSeconds,
+        error: validation.reason ?? 'That offer is too low. Try again.',
+      }),
+    };
+  }
+  const finalOffer = riderOfferNgn;
+
+  const rideId = randomUUID();
+  const phone = await lookupPhoneByUserId(deps.redisClient, userId) ?? '';
+
+  const event = RideRequestedEvent.parse({
+    eventType: 'RIDE_REQUESTED',
+    rideId,
+    riderId: userId,
+    pickup: { lat: route.pickupLat, lng: route.pickupLng, address: route.pickupAddress },
+    destination: { lat: route.destinationLat, lng: route.destinationLng, address: route.destinationAddress },
+    stops: [],
+    plannedDistanceKm: route.distanceKm,
+    plannedDurationSeconds: route.durationSeconds,
+    fareEstimateNgn: suggestedFareNgn,
+    paymentMethod,
+    riderOfferNgn: finalOffer,
+    suggestedFareNgn,
+    minOfferNgn: route.minOfferNgn,
+    ratePerKmNgn: route.ratePerKmNgn,
+    route: route.geometry,
+    timestamp: new Date().toISOString(),
+  });
+
+  await deps.publisher.publishRideEvent(event);
+
+  await storeWhatsappRide(deps.redisClient, rideId, {
+    riderId: userId,
+    phone,
+    pickupAddress: route.pickupAddress,
+    pickupLat: route.pickupLat,
+    pickupLng: route.pickupLng,
+    destinationAddress: route.destinationAddress,
+    destinationLat: route.destinationLat,
+    destinationLng: route.destinationLng,
+    distanceKm: route.distanceKm,
+    durationSeconds: route.durationSeconds,
     offerNgn: finalOffer,
     suggestedFareNgn,
     paymentMethod,
     createdAt: new Date().toISOString(),
   });
   await setActiveRide(deps.redisClient, userId, rideId);
+  await clearFlowEstimate(deps.redisClient, userId);
+  await clearPendingLocation(deps.redisClient, userId).catch(() => undefined);
 
   // Poll briefly — Meta shows a loading spinner while we wait
   const bids = await pollForBids(deps.redisClient, rideId, 0);
@@ -666,8 +804,8 @@ async function handleFindDrivers(
         {
           riderId: userId,
           phone,
-          pickupAddress: pickupGeo.formattedAddress,
-          destinationAddress: destGeo.formattedAddress,
+          pickupAddress: route.pickupAddress,
+          destinationAddress: route.destinationAddress,
           offerNgn: finalOffer,
           suggestedFareNgn,
           paymentMethod,

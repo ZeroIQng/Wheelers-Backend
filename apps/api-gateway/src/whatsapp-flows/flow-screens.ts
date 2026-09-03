@@ -95,30 +95,38 @@ export function buildPaymentData(params: {
 export function buildRideSetupData(params: {
   pickupAddress: string;
   destinationAddress: string;
+  error?: string;
+}): Record<string, unknown> {
+  return {
+    pickup_address: params.pickupAddress,
+    destination_address: params.destinationAddress,
+    error: params.error ?? '',
+    has_error: !!params.error,
+  };
+}
+
+export function buildFareConfirmData(params: {
+  pickupAddress: string;
+  destinationAddress: string;
   suggestedFareNgn: number;
   distanceKm?: number;
   durationSeconds?: number;
   error?: string;
 }): Record<string, unknown> {
-  const routeInfo = params.distanceKm && params.durationSeconds
-    ? `${params.distanceKm.toFixed(1)} km · ~${Math.ceil(params.durationSeconds / 60)} min`
-    : '';
+  const tripLine =
+    params.distanceKm && params.durationSeconds
+      ? `${params.distanceKm.toFixed(1)} km · ~${Math.ceil(params.durationSeconds / 60)} min`
+      : '';
 
   return {
+    route_line: `${params.pickupAddress} → ${params.destinationAddress}`,
+    trip_line: tripLine,
+    has_trip_line: tripLine.length > 0,
+    suggested_fare_line: `Suggested fare: ₦${params.suggestedFareNgn.toLocaleString()}`,
+    suggested_fare_value: String(params.suggestedFareNgn),
     pickup_address: params.pickupAddress,
     destination_address: params.destinationAddress,
-    suggested_fare:
-      params.suggestedFareNgn > 0 ? `₦${params.suggestedFareNgn.toLocaleString()}` : '—',
-    suggested_fare_line:
-      params.suggestedFareNgn > 0
-        ? `Suggested fare: ₦${params.suggestedFareNgn.toLocaleString()}`
-        : 'Suggested fare: —',
-    suggested_fare_value: params.suggestedFareNgn > 0 ? String(params.suggestedFareNgn) : '',
-    route_info: routeInfo,
-    has_route_info: routeInfo.length > 0,
-    payment_options: [
-      { id: 'WALLET', title: 'Wallet' },
-    ],
+    payment_options: [{ id: 'WALLET', title: 'Wallet' }],
     error: params.error ?? '',
     has_error: !!params.error,
   };
