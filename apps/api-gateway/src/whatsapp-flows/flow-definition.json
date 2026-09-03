@@ -279,6 +279,18 @@
         "offer_line": {
           "type": "string",
           "__example__": "Your offer: ₦3,700"
+        },
+        "has_bids": {
+          "type": "boolean",
+          "__example__": true
+        },
+        "has_no_bids": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "waiting_line": {
+          "type": "string",
+          "__example__": "No offers yet — tap below to check again."
         }
       },
       "layout": {
@@ -298,28 +310,37 @@
               },
               {
                 "type": "TextBody",
-                "text": "${data.bid_count}"
+                "text": "${data.bid_count}",
+                "visible": "${data.has_bids}"
+              },
+              {
+                "type": "TextBody",
+                "text": "${data.waiting_line}",
+                "visible": "${data.has_no_bids}"
               },
               {
                 "type": "RadioButtonsGroup",
                 "name": "selected_bid",
                 "label": "Select a driver",
                 "required": true,
-                "data-source": "${data.bids}"
+                "data-source": "${data.bids}",
+                "visible": "${data.has_bids}"
               },
               {
                 "type": "RadioButtonsGroup",
                 "name": "bid_action",
                 "label": "Accept or decline",
                 "required": true,
-                "data-source": "${data.bid_actions}"
+                "data-source": "${data.bid_actions}",
+                "visible": "${data.has_bids}"
               },
               {
                 "type": "TextInput",
                 "name": "adjust_amount",
                 "label": "Adjust amount (₦)",
                 "input-type": "number",
-                "required": false
+                "required": false,
+                "visible": "${data.has_bids}"
               },
               {
                 "type": "Footer",

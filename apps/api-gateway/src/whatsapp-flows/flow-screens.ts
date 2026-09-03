@@ -18,6 +18,7 @@ export function buildBidListData(
   const countLabel = bids.length > MAX_FLOW_LIST_ITEMS
     ? `Showing ${MAX_FLOW_LIST_ITEMS} of ${bids.length} offers`
     : `${bids.length} offer${bids.length === 1 ? '' : 's'}`;
+  const hasBids = bidItems.length > 0;
 
   return {
     route_summary: `${meta.pickupAddress} → ${meta.destinationAddress}`,
@@ -25,6 +26,10 @@ export function buildBidListData(
     offer_line: `Your offer: ₦${meta.offerNgn.toLocaleString()}`,
     bids: bidItems,
     bid_count: countLabel,
+    has_bids: hasBids,
+    has_no_bids: !hasBids,
+    waiting_line:
+      'No offers yet — drivers around you are seeing your request right now. Tap the button below to check for new offers.',
     bid_actions: [
       { id: 'accept', title: 'Accept' },
       { id: 'decline', title: 'Decline' },

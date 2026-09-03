@@ -64,8 +64,9 @@ async function pollForBids(
   redis: RedisClient,
   rideId: string,
   knownCount: number,
+  maxMs: number = POLL_MAX_MS,
 ): Promise<WhatsappBid[]> {
-  const deadline = Date.now() + POLL_MAX_MS;
+  const deadline = Date.now() + maxMs;
 
   while (Date.now() < deadline) {
     const bids = await getBids(redis, rideId);
@@ -215,9 +216,12 @@ async function handleFlowAction(
       return await handleFindDrivers(userId, data, deps);
     }
 
-    // Need a valid ride from here on
-    const meta = await getRideMeta(deps.redisClient, rideId);
-    if (!meta) {
+    // Need a valid ride from here on. The booking flow runs on a
+    // 'new:<user>' token — the ride it created is only reachable through
+    // the active-ride pointer, never through the token itself.
+    const sessionRideId = rideId === 'new' ? await getActiveRide(deps.redisClient, userId) : rideId;
+    const meta = sessionRideId ? await getRideMeta(deps.redisClient, sessionRideId) : null;
+    if (!sessionRideId || !meta) {
       return { screen: 'SUCCESS', data: buildErrorData('This ride request has expired. Send a new message to book a ride.') };
     }
 
@@ -227,28 +231,35 @@ async function handleFlowAction(
       const selectedBid = data.selected_bid as string | undefined;
       const adjustAmount = Number(data.adjust_amount);
 
+      // Empty selections mean the rider is on the no-offers-yet screen and
+      // tapped the button to refresh — wait briefly for fresh bids.
+      if (!selectedBid || !bidAction) {
+        const bids = await pollForBids(deps.redisClient, sessionRideId, 0);
+        return { screen: 'BID_LIST', data: buildBidListData(meta, bids) };
+      }
+
       // If rider filled in adjust amount, update their offer in Redis
       if (!isNaN(adjustAmount) && adjustAmount >= 100) {
         meta.offerNgn = adjustAmount;
         await deps.redisClient.set(
-          `whatsapp:ride:${rideId}:meta`,
+          `whatsapp:ride:${sessionRideId}:meta`,
           JSON.stringify(meta),
           900,
         );
       }
 
-      if (bidAction === 'accept' && selectedBid) {
-        return await handleAcceptBid(rideId, userId, selectedBid, meta, deps);
+      if (bidAction === 'accept') {
+        return await handleAcceptBid(sessionRideId, userId, selectedBid, meta, deps);
       }
 
-      if (bidAction === 'decline' && selectedBid) {
-        return await handleDeclineBid(rideId, userId, selectedBid, meta, deps);
+      if (bidAction === 'decline') {
+        return await handleDeclineBid(sessionRideId, userId, selectedBid, meta, deps);
       }
     }
 
     // ── RIDE_CONFIRMED: view driver profile ─────────────────────────
     if (action === 'view_driver_profile') {
-      return await handleViewDriverProfile(rideId, deps);
+      return await handleViewDriverProfile(sessionRideId, deps);
     }
 
     // ── DRIVER_PROFILE: view payment ─────────────────────────────────
@@ -257,7 +268,7 @@ async function handleFlowAction(
     }
 
     // Default: resolve based on state
-    return await resolveScreen(rideId, userId, deps);
+    return await resolveScreen(sessionRideId, userId, deps);
   }
 
   return { screen: 'SUCCESS', data: buildErrorData('Something went wrong. Please try again.') };
@@ -795,32 +806,26 @@ async function handleFindDrivers(
   await clearFlowEstimate(deps.redisClient, userId);
   await clearPendingLocation(deps.redisClient, userId).catch(() => undefined);
 
-  // Poll briefly — Meta shows a loading spinner while we wait
-  const bids = await pollForBids(deps.redisClient, rideId, 0);
-
-  if (bids.length > 0) {
-    await setRideState(deps.redisClient, rideId, 'bidding');
-    return {
-      screen: 'BID_LIST',
-      data: buildBidListData(
-        {
-          riderId: userId,
-          phone,
-          pickupAddress: route.pickupAddress,
-          destinationAddress: route.destinationAddress,
-          offerNgn: finalOffer,
-          suggestedFareNgn,
-          paymentMethod,
-          createdAt: new Date().toISOString(),
-        },
-        bids,
-      ),
-    };
-  }
+  // Stay in the flow: wait up to 8s (Meta cuts us off after ~10), then land
+  // on the offers page either way — empty state has its own refresh button.
+  await setRideState(deps.redisClient, rideId, 'bidding');
+  const bids = await pollForBids(deps.redisClient, rideId, 0, 8_000);
 
   return {
-    screen: 'SUCCESS',
-    data: buildNotifyExitData("We're finding drivers near you! You'll get a notification as soon as someone is interested."),
+    screen: 'BID_LIST',
+    data: buildBidListData(
+      {
+        riderId: userId,
+        phone,
+        pickupAddress: route.pickupAddress,
+        destinationAddress: route.destinationAddress,
+        offerNgn: finalOffer,
+        suggestedFareNgn,
+        paymentMethod,
+        createdAt: new Date().toISOString(),
+      },
+      bids,
+    ),
   };
 }
 
