@@ -126,7 +126,6 @@ export function buildFareConfirmData(params: {
     suggested_fare_value: String(params.suggestedFareNgn),
     pickup_address: params.pickupAddress,
     destination_address: params.destinationAddress,
-    payment_options: [{ id: 'WALLET', title: 'Wallet' }],
     error: params.error ?? '',
     has_error: !!params.error,
   };

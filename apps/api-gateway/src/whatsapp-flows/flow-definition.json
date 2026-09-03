@@ -131,26 +131,6 @@
           "type": "string",
           "__example__": "Adeola Odeku, VI"
         },
-        "payment_options": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "title": {
-                "type": "string"
-              }
-            }
-          },
-          "__example__": [
-            {
-              "id": "WALLET",
-              "title": "Wallet"
-            }
-          ]
-        },
         "error": {
           "type": "string",
           "__example__": ""
@@ -185,8 +165,7 @@
             "type": "Form",
             "name": "fare_form",
             "init-values": {
-              "offer_amount": "${data.suggested_fare_value}",
-              "payment_method": "WALLET"
+              "offer_amount": "${data.suggested_fare_value}"
             },
             "children": [
               {
@@ -197,11 +176,8 @@
                 "required": true
               },
               {
-                "type": "Dropdown",
-                "name": "payment_method",
-                "label": "Payment method",
-                "required": true,
-                "data-source": "${data.payment_options}"
+                "type": "TextCaption",
+                "text": "Payment method: Wallet"
               },
               {
                 "type": "Footer",
@@ -213,7 +189,7 @@
                     "pickup_address": "${data.pickup_address}",
                     "destination_address": "${data.destination_address}",
                     "offer_amount": "${form.offer_amount}",
-                    "payment_method": "${form.payment_method}"
+                    "payment_method": "WALLET"
                   }
                 }
               }
