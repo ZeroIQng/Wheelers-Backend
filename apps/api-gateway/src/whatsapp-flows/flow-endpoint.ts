@@ -17,6 +17,7 @@ import {
   setRideState,
   getActiveRide,
   setActiveRide,
+  clearActiveRide,
   storeWhatsappRide,
   getPendingLocation,
   storeFlowEstimate,
@@ -485,7 +486,13 @@ async function handleRideSetupInit(
 ): Promise<{ screen: string; data: Record<string, unknown> }> {
   const existingRideId = await getActiveRide(deps.redisClient, userId);
   if (existingRideId) {
-    return await resolveScreen(existingRideId, userId, deps);
+    // A pointer to a ride whose data expired must not terminal-close the
+    // form — clear it and let the rider book fresh.
+    const existingMeta = await getRideMeta(deps.redisClient, existingRideId);
+    if (existingMeta) {
+      return await resolveScreen(existingRideId, userId, deps);
+    }
+    await clearActiveRide(deps.redisClient, userId);
   }
 
   const pendingLocation = await getPendingLocation(deps.redisClient, userId);
@@ -533,14 +540,18 @@ async function handleEstimateFare(
 
   const existingRide = await getActiveRide(deps.redisClient, userId);
   if (existingRide) {
-    return {
-      screen: 'RIDE_SETUP',
-      data: buildRideSetupData({
-        pickupAddress,
-        destinationAddress,
-        error: "You have an active ride. Say 'cancel ride' on WhatsApp first.",
-      }),
-    };
+    const existingMeta = await getRideMeta(deps.redisClient, existingRide);
+    if (existingMeta) {
+      return {
+        screen: 'RIDE_SETUP',
+        data: buildRideSetupData({
+          pickupAddress,
+          destinationAddress,
+          error: "You have an active ride. Say 'cancel ride' on WhatsApp first.",
+        }),
+      };
+    }
+    await clearActiveRide(deps.redisClient, userId);
   }
 
   // A location pin shared in chat pre-fills pickup; only trust its coordinates
@@ -649,10 +660,14 @@ async function handleFindDrivers(
 
   const existingRide = await getActiveRide(deps.redisClient, userId);
   if (existingRide) {
-    return {
-      screen: 'SUCCESS',
-      data: buildNotifyExitData("You already have an active ride. Say 'cancel ride' in the chat first if you want to rebook."),
-    };
+    const existingMeta = await getRideMeta(deps.redisClient, existingRide);
+    if (existingMeta) {
+      return {
+        screen: 'SUCCESS',
+        data: buildNotifyExitData("You already have an active ride. Say 'cancel ride' in the chat first if you want to rebook."),
+      };
+    }
+    await clearActiveRide(deps.redisClient, userId);
   }
 
   // Reuse the geocode + route from the estimate step; recompute only when the
@@ -824,7 +839,25 @@ export async function handleWhatsappFlowEndpoint(
   }
 
   try {
-    const response = await handleFlowAction(decrypted.decryptedBody, deps);
+    const started = Date.now();
+    const body = decrypted.decryptedBody;
+    if (body.action !== 'ping') {
+      console.info('[whatsapp-flow] request', {
+        action: body.action,
+        screen: body.screen ?? null,
+        dataAction: (body.data?.action as string) ?? null,
+        flowToken: body.flow_token?.slice(0, 24),
+      });
+    }
+    const response = await handleFlowAction(body, deps);
+    if (body.action !== 'ping') {
+      console.info('[whatsapp-flow] response', {
+        action: body.action,
+        dataAction: (body.data?.action as string) ?? null,
+        screen: response.screen,
+        durationMs: Date.now() - started,
+      });
+    }
 
     const encrypted = encryptFlowResponse(response, decrypted.aesKey, decrypted.iv);
     res.statusCode = 200;
