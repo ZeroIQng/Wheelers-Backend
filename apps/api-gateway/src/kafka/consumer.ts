@@ -292,6 +292,13 @@ async function handleRideEvent(
       // WhatsApp rider, active-ride key or not.
       waRider = (await lookupPhoneByUserId(deps.redisClient, event.riderId)) !== null;
     }
+    console.info('[consumer] counter-offer', {
+      rideId: event.rideId,
+      driver: event.driverName,
+      offerNgn: event.counterOfferNgn,
+      waRider,
+      hasNotifier: !!deps.whatsappNotifier,
+    });
     if (waRider && deps.whatsappNotifier) {
       const bid: WhatsappBid = {
         bidId: event.bidId,
@@ -350,6 +357,12 @@ async function handleRideEvent(
           await setActiveRide(deps.redisClient, event.riderId, event.rideId);
         }
       }
+      console.info('[consumer] counter-offer state', {
+        rideId: event.rideId,
+        hasPhone: !!phone,
+        hasMeta: !!meta,
+        source: meta?.source ?? null,
+      });
       if (phone && meta) {
         if (await shouldNotify(deps.redisClient, event.rideId)) {
           // Fetch ALL bids and send as one batched message — naming what
@@ -361,6 +374,7 @@ async function handleRideEvent(
           if (meta.source === 'flow') {
             // Bidding lives on the offers screen; each debounced batch sends
             // a 'View offers' button that re-opens the flow on current bids.
+            console.info('[consumer] sending flow offers message', { rideId: event.rideId, bids: allBids.length });
             await sendFlowOffersMessage(deps.whatsappNotifier, phone, event.riderId, allBids, meta.offerNgn)
               .catch((err) => console.warn('[consumer] WhatsApp flow offers message failed', err));
           } else {

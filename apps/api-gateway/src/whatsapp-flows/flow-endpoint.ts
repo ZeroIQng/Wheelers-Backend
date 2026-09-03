@@ -203,7 +203,15 @@ async function handleFlowAction(
     // falling through to a terminal screen (which reads as a crash).
     if (!action && typeof data.pickup_address === 'string') {
       action = data.offer_amount !== undefined && data.offer_amount !== '' ? 'find_drivers' : 'estimate_fare';
-      console.info('[whatsapp-flow] inferred action for legacy payload', { action });
+    } else if (!action && body.screen === 'BID_LIST') {
+      action = 'bid_action';
+    } else if (!action && body.screen === 'RIDE_CONFIRMED') {
+      action = 'view_driver_profile';
+    } else if (!action && body.screen === 'DRIVER_PROFILE') {
+      action = 'view_payment';
+    }
+    if (!(data.action as string | undefined) && action) {
+      console.info('[whatsapp-flow] inferred action', { screen: body.screen ?? null, action });
     }
 
     // ── RIDE_SETUP: estimate fare, show FARE_CONFIRM ────────────────────
@@ -862,6 +870,7 @@ export async function handleWhatsappFlowEndpoint(
         action: body.action,
         screen: body.screen ?? null,
         dataAction: (body.data?.action as string) ?? null,
+        data: JSON.stringify(body.data ?? {}).slice(0, 400),
         flowToken: body.flow_token?.slice(0, 24),
       });
     }
