@@ -66,7 +66,24 @@ function scheduleDriverOffline(
   cancelPendingDriverOffline(auth.driverId);
   const timer = setTimeout(() => {
     pendingDriverOffline.delete(auth.driverId);
+    void (async () => {
     if (deps.registry.hasUser(auth.userId)) return; // reconnected in time
+
+    // The socket is not the only heartbeat: driver apps POST their location
+    // every few seconds over HTTP. A driver whose lastSeenAt is fresh is
+    // sitting right there behind a flapping WebSocket — do NOT pull their
+    // bids mid-negotiation; give them another grace window instead.
+    const driver = await driverClient.findById(auth.driverId).catch(() => null);
+    const seenMsAgo = driver?.lastSeenAt ? Date.now() - driver.lastSeenAt.getTime() : Infinity;
+    if (seenMsAgo < 90_000) {
+      console.info('[ws] socket gone but driver alive via HTTP — keeping online', {
+        driverId: auth.driverId,
+        seenMsAgo,
+      });
+      scheduleDriverOffline(deps, auth);
+      return;
+    }
+
     console.info('[ws] driver offline after disconnect grace', {
       driverId: auth.driverId,
       userId: auth.userId,
@@ -82,6 +99,7 @@ function scheduleDriverOffline(
       )
       .catch(() => undefined);
     void withdrawDriverFromMarket(deps, auth.userId);
+    })();
   }, DRIVER_OFFLINE_GRACE_MS);
   timer.unref?.();
   pendingDriverOffline.set(auth.driverId, timer);
