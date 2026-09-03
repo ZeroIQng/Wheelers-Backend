@@ -638,26 +638,20 @@ async function handleFindDrivers(
   const offerAmount = Number(data.offer_amount);
   const paymentMethod = 'WALLET' as const;
 
+  // Meta's routing model is forward-only, so a failure here cannot send the
+  // rider back to RIDE_SETUP — redisplay FARE_CONFIRM or exit via SUCCESS.
   if (!pickupAddress || !destinationAddress) {
     return {
-      screen: 'RIDE_SETUP',
-      data: buildRideSetupData({
-        pickupAddress: pickupAddress ?? '',
-        destinationAddress: destinationAddress ?? '',
-        error: 'Enter pickup and destination first.',
-      }),
+      screen: 'SUCCESS',
+      data: buildNotifyExitData("Something went wrong with that booking. Send 'hi' to start again."),
     };
   }
 
   const existingRide = await getActiveRide(deps.redisClient, userId);
   if (existingRide) {
     return {
-      screen: 'RIDE_SETUP',
-      data: buildRideSetupData({
-        pickupAddress,
-        destinationAddress,
-        error: "You have an active ride. Say 'cancel ride' on WhatsApp first.",
-      }),
+      screen: 'SUCCESS',
+      data: buildNotifyExitData("You already have an active ride. Say 'cancel ride' in the chat first if you want to rebook."),
     };
   }
 
@@ -670,26 +664,13 @@ async function handleFindDrivers(
 
   if (!route) {
     const pickupGeo = await geocodeAddress(deps.googleMapsApiKey, `${pickupAddress}, Lagos, Nigeria`);
-    if (!pickupGeo) {
+    const destGeo = pickupGeo
+      ? await geocodeAddress(deps.googleMapsApiKey, `${destinationAddress}, Lagos, Nigeria`)
+      : null;
+    if (!pickupGeo || !destGeo) {
       return {
-        screen: 'RIDE_SETUP',
-        data: buildRideSetupData({
-          pickupAddress,
-          destinationAddress,
-          error: `Could not find "${pickupAddress}". Try a landmark, bus stop, or street name.`,
-        }),
-      };
-    }
-
-    const destGeo = await geocodeAddress(deps.googleMapsApiKey, `${destinationAddress}, Lagos, Nigeria`);
-    if (!destGeo) {
-      return {
-        screen: 'RIDE_SETUP',
-        data: buildRideSetupData({
-          pickupAddress,
-          destinationAddress,
-          error: `Could not find "${destinationAddress}". Try a landmark, bus stop, or street name.`,
-        }),
+        screen: 'SUCCESS',
+        data: buildNotifyExitData("Your fare estimate expired and we couldn't confirm the route. Send 'hi' to start again."),
       };
     }
 
@@ -706,12 +687,8 @@ async function handleFindDrivers(
         error: error instanceof Error ? error.message : String(error),
       });
       return {
-        screen: 'RIDE_SETUP',
-        data: buildRideSetupData({
-          pickupAddress,
-          destinationAddress,
-          error: 'Could not find a driving route between those two points. Please check the addresses.',
-        }),
+        screen: 'SUCCESS',
+        data: buildNotifyExitData("We couldn't map a driving route for that trip. Send 'hi' to try again."),
       };
     }
 
