@@ -918,3 +918,38 @@ export async function getFlowEstimate(
 export async function clearFlowEstimate(redis: RedisClient, userId: string): Promise<void> {
   await redis.del(flowEstimateKey(userId));
 }
+
+// ── Flow pending accept (BID_LIST -> TOP_UP -> re-check handoff) ──────────
+
+export interface FlowPendingAccept {
+  rideId: string;
+  driverId: string;
+}
+
+const flowPendingAcceptKey = (userId: string) => `whatsapp:flow:pendingaccept:${userId}`;
+const FLOW_PENDING_ACCEPT_TTL = 30 * 60;
+
+export async function storeFlowPendingAccept(
+  redis: RedisClient,
+  userId: string,
+  pending: FlowPendingAccept,
+): Promise<void> {
+  await redis.set(flowPendingAcceptKey(userId), JSON.stringify(pending), FLOW_PENDING_ACCEPT_TTL);
+}
+
+export async function getFlowPendingAccept(
+  redis: RedisClient,
+  userId: string,
+): Promise<FlowPendingAccept | null> {
+  const raw = await redis.get(flowPendingAcceptKey(userId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as FlowPendingAccept;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearFlowPendingAccept(redis: RedisClient, userId: string): Promise<void> {
+  await redis.del(flowPendingAcceptKey(userId));
+}

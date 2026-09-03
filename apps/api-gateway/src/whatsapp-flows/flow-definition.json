@@ -11,6 +11,11 @@
       "SUCCESS"
     ],
     "BID_LIST": [
+      "TOP_UP",
+      "RIDE_CONFIRMED",
+      "SUCCESS"
+    ],
+    "TOP_UP": [
       "RIDE_CONFIRMED",
       "SUCCESS"
     ],
@@ -369,6 +374,95 @@
                     "selected_bid": "${form.selected_bid}",
                     "bid_action": "${form.bid_action}",
                     "adjust_amount": "${form.adjust_amount}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "TOP_UP",
+      "title": "Top Up to Book",
+      "terminal": false,
+      "data": {
+        "fare_line": {
+          "type": "string",
+          "__example__": "Ride fare: ₦5,000"
+        },
+        "balance_line": {
+          "type": "string",
+          "__example__": "Wallet: ₦520 — ₦4,480 short"
+        },
+        "bank_line": {
+          "type": "string",
+          "__example__": "Bank: Rubies MFB"
+        },
+        "account_line": {
+          "type": "string",
+          "__example__": "Account: 8881695342"
+        },
+        "name_line": {
+          "type": "string",
+          "__example__": "Name: Timi Olowu"
+        },
+        "note_line": {
+          "type": "string",
+          "__example__": "Transfer the shortfall, then tap below."
+        },
+        "status_line": {
+          "type": "string",
+          "__example__": ""
+        },
+        "has_status": {
+          "type": "boolean",
+          "__example__": false
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextBody",
+            "text": "${data.fare_line}"
+          },
+          {
+            "type": "TextBody",
+            "text": "${data.balance_line}"
+          },
+          {
+            "type": "TextSubheading",
+            "text": "${data.bank_line}"
+          },
+          {
+            "type": "TextSubheading",
+            "text": "${data.account_line}"
+          },
+          {
+            "type": "TextBody",
+            "text": "${data.name_line}"
+          },
+          {
+            "type": "TextCaption",
+            "text": "${data.note_line}"
+          },
+          {
+            "type": "TextCaption",
+            "text": "${data.status_line}",
+            "visible": "${data.has_status}"
+          },
+          {
+            "type": "Form",
+            "name": "topup_form",
+            "children": [
+              {
+                "type": "Footer",
+                "label": "I've paid — Continue",
+                "on-click-action": {
+                  "name": "data_exchange",
+                  "payload": {
+                    "action": "topup_check"
                   }
                 }
               }

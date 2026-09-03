@@ -40,6 +40,30 @@ export function buildBidListData(
   };
 }
 
+// ── TOP_UP screen — wallet short at accept; VA details + re-check ────────
+
+export function buildTopUpData(params: {
+  fareNgn: number;
+  balanceNgn: number;
+  virtualAccount?: { bankName: string; accountNumber: string; accountName: string } | null;
+  status?: string;
+}): Record<string, unknown> {
+  const shortNgn = Math.max(0, params.fareNgn - params.balanceNgn);
+  return {
+    fare_line: `Ride fare: ₦${params.fareNgn.toLocaleString()}`,
+    balance_line: `Wallet: ₦${params.balanceNgn.toLocaleString()} — ₦${shortNgn.toLocaleString()} short`,
+    bank_line: params.virtualAccount ? `Bank: ${params.virtualAccount.bankName}` : 'Bank: —',
+    account_line: params.virtualAccount
+      ? `Account: ${params.virtualAccount.accountNumber}`
+      : 'Account: not set up yet — type "balance" in the chat',
+    name_line: params.virtualAccount ? `Name: ${params.virtualAccount.accountName}` : '',
+    note_line:
+      'Transfer at least the shortfall to this account (it credits your wallet in seconds), then tap the button below to book your driver.',
+    status_line: params.status ?? '',
+    has_status: !!params.status,
+  };
+}
+
 // ── RIDE_CONFIRMED screen (driver info only) ─────────────────────────────
 
 export function buildConfirmationData(params: {

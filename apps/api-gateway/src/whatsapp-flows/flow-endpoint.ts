@@ -23,6 +23,9 @@ import {
   storeFlowEstimate,
   getFlowEstimate,
   clearFlowEstimate,
+  storeFlowPendingAccept,
+  getFlowPendingAccept,
+  clearFlowPendingAccept,
   clearPendingLocation,
   clearBids,
   removeBid,
@@ -39,6 +42,7 @@ import {
   buildErrorData,
   buildRideSetupData,
   buildFareConfirmData,
+  buildTopUpData,
   buildNotifyExitData,
 } from './flow-screens';
 import type { DriverKycStorage } from '../storage/driver-kyc-storage';
@@ -211,6 +215,8 @@ async function handleFlowAction(
       action = data.offer_amount !== undefined && data.offer_amount !== '' ? 'find_drivers' : 'estimate_fare';
     } else if (!action && body.screen === 'BID_LIST') {
       action = 'bid_action';
+    } else if (!action && body.screen === 'TOP_UP') {
+      action = 'topup_check';
     } else if (!action && body.screen === 'RIDE_CONFIRMED') {
       action = 'view_driver_profile';
     } else if (!action && body.screen === 'DRIVER_PROFILE') {
@@ -292,6 +298,11 @@ async function handleFlowAction(
       }
     }
 
+    // ── TOP_UP: rider says they've transferred — re-check and book ──
+    if (action === 'topup_check') {
+      return await handleTopUpCheck(sessionRideId, userId, meta, deps);
+    }
+
     // ── RIDE_CONFIRMED: view driver profile ─────────────────────────
     if (action === 'view_driver_profile') {
       return await handleViewDriverProfile(sessionRideId, deps);
@@ -370,17 +381,14 @@ async function handleAcceptBid(
       fareNgn: bid.counterOfferNgn,
     });
     const { virtualAccount } = await getWalletInfo(userId);
-    const shortage = bid.counterOfferNgn - balanceNgn;
-    const topUp = virtualAccount
-      ? ` Top up via ${virtualAccount.bankName} ${virtualAccount.accountNumber} (${virtualAccount.accountName}), then tap Continue.`
-      : ' Top up your wallet, then tap Continue.';
+    await storeFlowPendingAccept(deps.redisClient, userId, { rideId, driverId: bid.driverId });
     return {
-      screen: 'BID_LIST',
-      data: buildBidListData(
-        meta,
-        bids,
-        `Wallet too low: ₦${balanceNgn.toLocaleString()} vs ₦${bid.counterOfferNgn.toLocaleString()} fare — ₦${shortage.toLocaleString()} short.${topUp}`,
-      ),
+      screen: 'TOP_UP',
+      data: buildTopUpData({
+        fareNgn: bid.counterOfferNgn,
+        balanceNgn,
+        virtualAccount,
+      }),
     };
   }
   try {
@@ -415,6 +423,7 @@ async function handleAcceptBid(
   });
   await deps.publisher.publishRideEvent(acceptEvent);
   await setRideState(deps.redisClient, rideId, 'confirmed');
+  await clearFlowPendingAccept(deps.redisClient, userId).catch(() => undefined);
   console.info('[whatsapp-flow] accept confirmed', { rideId, driverId: bid.driverId, fareNgn: bid.counterOfferNgn });
 
   // Fetch driver details for profile flow
@@ -454,6 +463,60 @@ async function handleAcceptBid(
       driverRating: bid.driverRating,
     }),
   };
+}
+
+// ── TOP_UP re-check — book the reserved driver once money landed ────────
+
+async function handleTopUpCheck(
+  rideId: string,
+  userId: string,
+  meta: NonNullable<Awaited<ReturnType<typeof getRideMeta>>>,
+  deps: WhatsappFlowEndpointDeps,
+): Promise<{ screen: string; data: Record<string, unknown> }> {
+  const pending = await getFlowPendingAccept(deps.redisClient, userId);
+  if (!pending || pending.rideId !== rideId) {
+    return {
+      screen: 'SUCCESS',
+      data: buildNotifyExitData("This booking session has expired. Send 'hi' to book again — your money has not moved."),
+    };
+  }
+
+  const bids = await getBids(deps.redisClient, rideId);
+  const bid = bids.find((b) => b.driverId === pending.driverId);
+  if (!bid) {
+    await clearFlowPendingAccept(deps.redisClient, userId);
+    return {
+      screen: 'SUCCESS',
+      data: buildNotifyExitData('That driver became unavailable — your money has not moved. New offers will arrive as messages in the chat.'),
+    };
+  }
+
+  const wallet = await walletClient.findByUserId(userId).catch(() => null);
+  const balanceNgn = wallet ? Number(wallet.balanceNgn) : 0;
+  if (balanceNgn < bid.counterOfferNgn) {
+    const { virtualAccount } = await getWalletInfo(userId);
+    return {
+      screen: 'TOP_UP',
+      data: buildTopUpData({
+        fareNgn: bid.counterOfferNgn,
+        balanceNgn,
+        virtualAccount,
+        status: `No new credit yet (wallet: ₦${balanceNgn.toLocaleString()}). Transfers usually land within a minute — tap again shortly.`,
+      }),
+    };
+  }
+
+  // Funded — run the same guarded accept. From TOP_UP the routing model
+  // cannot go back to BID_LIST, so a driver-side failure exits via SUCCESS.
+  const result = await handleAcceptBid(rideId, userId, `bid-${pending.driverId}`, meta, deps);
+  if (result.screen === 'BID_LIST') {
+    await clearFlowPendingAccept(deps.redisClient, userId);
+    return {
+      screen: 'SUCCESS',
+      data: buildNotifyExitData('That driver became unavailable — your money has not moved. New offers will arrive as messages in the chat.'),
+    };
+  }
+  return result;
 }
 
 // ── Decline selected driver ─────────────────────────────────────────────
