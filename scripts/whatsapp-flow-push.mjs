@@ -116,11 +116,38 @@ if (!meta.ok) {
   console.log('endpoint_uri set ✅');
 }
 
-// 3) Publish.
-const published = await api(`/${targetId}/publish`, { method: 'POST' });
+// 3) Wait for the endpoint to answer (a pm2 restart right before this
+// script leaves the gateway booting; Meta's health check then fails).
+// A garbage POST getting 421 proves the flow endpoint is alive.
+process.stdout.write('waiting for endpoint');
+let ready = false;
+for (let i = 0; i < 24 && !ready; i++) {
+  try {
+    const probe = await fetch(ENDPOINT_URI, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    ready = probe.status === 421 || probe.status === 200;
+  } catch { /* not up yet */ }
+  if (!ready) {
+    process.stdout.write('.');
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+}
+console.log(ready ? ' alive ✅' : ' still down after 2 min — publishing anyway');
+
+// 4) Publish — retry, Meta sometimes needs a couple of health probes.
+let published;
+for (let attempt = 1; attempt <= 4; attempt++) {
+  published = await api(`/${targetId}/publish`, { method: 'POST' });
+  if (published.ok) break;
+  console.log(`publish attempt ${attempt} failed: ${published.body?.error?.error_user_title ?? published.body?.error?.message ?? 'unknown'}${attempt < 4 ? ' — retrying in 15s…' : ''}`);
+  if (attempt < 4) await new Promise((r) => setTimeout(r, 15000));
+}
 if (!published.ok) {
   console.error('publish failed:', JSON.stringify(published.body));
-  console.error('(health check must be green — is the api-gateway up?)');
+  console.error('(is https://app.wheelersng.com/webhooks/whatsapp-flow reachable from outside?)');
   process.exit(1);
 }
 console.log('published ✅');
