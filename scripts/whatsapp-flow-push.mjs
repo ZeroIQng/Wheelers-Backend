@@ -42,6 +42,9 @@ const BASE = 'https://graph.facebook.com/v21.0';
 const jsonPath = resolve(root, 'apps/api-gateway/src/whatsapp-flows/flow-definition.json');
 const flowJson = readFileSync(jsonPath, 'utf8');
 JSON.parse(flowJson); // fail fast on malformed JSON
+const offersJsonPath = resolve(root, 'apps/api-gateway/src/whatsapp-flows/offers-flow-definition.json');
+const offersJson = readFileSync(offersJsonPath, 'utf8');
+JSON.parse(offersJson);
 
 async function api(path, init = {}) {
   const res = await fetch(`${BASE}${path}`, {
@@ -52,11 +55,11 @@ async function api(path, init = {}) {
   return { ok: res.ok, status: res.status, body };
 }
 
-function uploadAsset(flowId) {
+function uploadAsset(flowId, content = flowJson) {
   const form = new FormData();
   form.append('name', 'flow.json');
   form.append('asset_type', 'FLOW_JSON');
-  form.append('file', new Blob([flowJson], { type: 'application/json' }), 'flow.json');
+  form.append('file', new Blob([content], { type: 'application/json' }), 'flow.json');
   return api(`/${flowId}/assets`, { method: 'POST', body: form });
 }
 
@@ -161,3 +164,53 @@ if (targetId !== FLOW_ID) {
 } else {
   console.log('\nSame flow id — no restart needed. Send "hi" and open the form.');
 }
+
+// ── OFFERS flow: entry screen IS the bid list ('View offers' opens it) ──
+let offersId = env.WHATSAPP_OFFERS_FLOW_ID;
+if (!offersId) {
+  const created = await api(`/${WABA_ID}/flows`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Wheelers Driver Offers', categories: ['OTHER'] }),
+  });
+  if (!created.ok) {
+    console.error('offers flow creation failed:', JSON.stringify(created.body));
+    process.exit(1);
+  }
+  offersId = created.body.id;
+  const envRaw = readFileSync(envPath, 'utf8');
+  writeFileSync(envPath, envRaw.trimEnd() + `\nWHATSAPP_OFFERS_FLOW_ID=${offersId}\n`);
+  console.log(`\noffers flow created: ${offersId} (written to .env)`);
+  console.log('NOW RUN:  pm2 restart ecosystem.config.cjs --update-env');
+}
+
+const offersUpload = await uploadAsset(offersId, offersJson);
+if (!offersUpload.ok) {
+  console.error('offers flow upload failed:', JSON.stringify(offersUpload.body));
+  process.exit(1);
+}
+if (reportValidation(offersUpload.body) > 0) {
+  console.error('offers flow JSON has validation errors');
+  process.exit(1);
+}
+console.log('offers flow.json uploaded ✅');
+
+const offersMeta = await api(`/${offersId}`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ endpoint_uri: ENDPOINT_URI }),
+});
+if (offersMeta.ok) console.log('offers endpoint_uri set ✅');
+
+let offersPublished;
+for (let attempt = 1; attempt <= 4; attempt++) {
+  offersPublished = await api(`/${offersId}/publish`, { method: 'POST' });
+  if (offersPublished.ok) break;
+  console.log(`offers publish attempt ${attempt} failed: ${offersPublished.body?.error?.error_user_title ?? offersPublished.body?.error?.message ?? 'unknown'}${attempt < 4 ? ' — retrying in 15s…' : ''}`);
+  if (attempt < 4) await new Promise((r) => setTimeout(r, 15000));
+}
+if (!offersPublished.ok) {
+  console.error('offers publish failed:', JSON.stringify(offersPublished.body));
+  process.exit(1);
+}
+console.log('offers flow published ✅');

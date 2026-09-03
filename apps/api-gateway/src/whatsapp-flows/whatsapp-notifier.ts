@@ -1,13 +1,12 @@
 import { signFlowToken } from './encryption';
 import { calculateRideFees } from '@wheleers/config';
-import { buildBidListData } from './flow-screens';
 import type { WhatsappBid, WhatsappRideMeta } from './bid-state';
 
 export interface WhatsappNotifierDeps {
   metaAccessToken: string;
   metaPhoneNumberId: string;
   /** When set, bid updates for flow rides go out as a tappable flow message. */
-  flowId?: string;
+  offersFlowId?: string;
   flowTokenSecret?: string;
 }
 
@@ -110,7 +109,7 @@ export async function sendFlowOffersMessage(
   const lowest = Math.min(...bids.map((b) => b.counterOfferNgn));
   const body = `🚗 ${count} driver offer${count === 1 ? '' : 's'} on your ₦${meta.offerNgn.toLocaleString()} request!\nLowest: ₦${lowest.toLocaleString()}. Tap below to view and accept.`;
 
-  if (!deps.flowId || !deps.flowTokenSecret) {
+  if (!deps.offersFlowId || !deps.flowTokenSecret) {
     await sendMetaWhatsappMessage(deps, to, body);
     return;
   }
@@ -137,17 +136,13 @@ export async function sendFlowOffersMessage(
           name: 'flow',
           parameters: {
             flow_message_version: '3',
-            flow_id: deps.flowId,
-            flow_token: signFlowToken(`new:${riderId}`, deps.flowTokenSecret),
+            // The OFFERS flow's entry screen IS the bid list — the booking
+            // flow may only open on RIDE_SETUP, so it cannot show offers on
+            // open. INIT here loads the live bid list every time.
+            flow_id: deps.offersFlowId,
+            flow_token: signFlowToken(`offers:${riderId}`, deps.flowTokenSecret),
             flow_cta: 'View offers',
-            // A flow may only OPEN on its entry screen via INIT; navigate is
-            // the sanctioned way to land directly on the offers page. The
-            // bids ride along; Continue re-polls the server for fresh ones.
-            flow_action: 'navigate',
-            flow_action_payload: {
-              screen: 'BID_LIST',
-              data: buildBidListData(meta, bids),
-            },
+            flow_action: 'data_exchange',
           },
         },
       },

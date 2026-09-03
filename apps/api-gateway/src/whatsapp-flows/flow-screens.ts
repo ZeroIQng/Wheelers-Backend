@@ -7,6 +7,7 @@ const MAX_FLOW_LIST_ITEMS = 10;
 export function buildBidListData(
   meta: WhatsappRideMeta,
   bids: WhatsappBid[],
+  error?: string,
 ): Record<string, unknown> {
   const capped = bids.slice(0, MAX_FLOW_LIST_ITEMS);
   const bidItems = capped.map((bid, index) => ({
@@ -34,6 +35,8 @@ export function buildBidListData(
       { id: 'accept', title: 'Accept' },
       { id: 'decline', title: 'Decline' },
     ],
+    error: error ?? '',
+    has_error: !!error,
   };
 }
 

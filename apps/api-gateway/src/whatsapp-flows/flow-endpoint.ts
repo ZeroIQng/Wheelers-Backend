@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { randomUUID } from 'crypto';
 import { GoogleMapsRoutePlanner, validateRiderOffer } from '@wheleers/config';
 import { walletClient, virtualAccountClient, driverClient, rideClient } from '@wheleers/db';
-import { RideOfferAcceptedEvent, RideRequestedEvent } from '@wheleers/kafka-schemas';
+import { RideOfferAcceptedEvent, RideRequestedEvent, RideRiderCounterOfferEvent } from '@wheleers/kafka-schemas';
 import type { GatewayPublisher } from '../websocket/publisher';
 import type { RedisClient } from '../redis/client';
 import { readRawBody, sendJson } from '../http/utils';
@@ -177,6 +177,9 @@ async function handleFlowAction(
   // ── INIT — show appropriate screen based on ride state ────────────────
 
   if (body.action === 'INIT') {
+    if (rideId === 'offers') {
+      return await handleOffersInit(userId, deps);
+    }
     if (rideId === 'new') {
       return await handleRideSetupInit(userId, deps);
     }
@@ -186,6 +189,9 @@ async function handleFlowAction(
   // ── BACK — return to appropriate screen ───────────────────────────────
 
   if (body.action === 'BACK') {
+    if (rideId === 'offers') {
+      return await handleOffersInit(userId, deps);
+    }
     if (rideId === 'new') {
       return await handleRideSetupInit(userId, deps);
     }
@@ -227,7 +233,8 @@ async function handleFlowAction(
     // Need a valid ride from here on. The booking flow runs on a
     // 'new:<user>' token — the ride it created is only reachable through
     // the active-ride pointer, never through the token itself.
-    const sessionRideId = rideId === 'new' ? await getActiveRide(deps.redisClient, userId) : rideId;
+    const sessionRideId =
+      rideId === 'new' || rideId === 'offers' ? await getActiveRide(deps.redisClient, userId) : rideId;
     const meta = sessionRideId ? await getRideMeta(deps.redisClient, sessionRideId) : null;
     if (!sessionRideId || !meta) {
       return { screen: 'SUCCESS', data: buildErrorData('This ride request has expired. Send a new message to book a ride.') };
@@ -246,14 +253,34 @@ async function handleFlowAction(
         return { screen: 'BID_LIST', data: buildBidListData(meta, bids) };
       }
 
-      // If rider filled in adjust amount, update their offer in Redis
-      if (!isNaN(adjustAmount) && adjustAmount >= 100) {
+      // A changed adjust amount is a COUNTER-OFFER, not an accept at the
+      // driver's price — publish it so every candidate driver sees the new
+      // number, and keep the rider on the offers page.
+      if (!isNaN(adjustAmount) && adjustAmount >= 100 && adjustAmount !== meta.offerNgn) {
         meta.offerNgn = adjustAmount;
         await deps.redisClient.set(
           `whatsapp:ride:${sessionRideId}:meta`,
           JSON.stringify(meta),
           900,
         );
+        const counterEvent = RideRiderCounterOfferEvent.parse({
+          eventType: 'RIDE_RIDER_COUNTER_OFFER',
+          rideId: sessionRideId,
+          riderId: userId,
+          counterOfferNgn: adjustAmount,
+          timestamp: new Date().toISOString(),
+        });
+        await deps.publisher.publishRideEvent(counterEvent);
+        console.info('[whatsapp-flow] rider counter-offer sent', { rideId: sessionRideId, counterOfferNgn: adjustAmount });
+        const bids = await getBids(deps.redisClient, sessionRideId);
+        return {
+          screen: 'BID_LIST',
+          data: buildBidListData(
+            meta,
+            bids,
+            `Your new offer of ₦${adjustAmount.toLocaleString()} was sent to the drivers — updated responses will arrive shortly.`,
+          ),
+        };
       }
 
       if (bidAction === 'accept') {
@@ -324,8 +351,12 @@ async function handleAcceptBid(
     }
     await setRideState(deps.redisClient, rideId, 'searching');
     return {
-      screen: 'SUCCESS',
-      data: buildNotifyExitData(`${bid.driverName} just became unavailable — your money has not moved. We'll notify you when new drivers bid.`),
+      screen: 'BID_LIST',
+      data: buildBidListData(
+        meta,
+        remaining,
+        `${bid.driverName} just became unavailable — your money has not moved. New offers will arrive here.`,
+      ),
     };
   }
 
@@ -341,12 +372,14 @@ async function handleAcceptBid(
     const { virtualAccount } = await getWalletInfo(userId);
     const shortage = bid.counterOfferNgn - balanceNgn;
     const topUp = virtualAccount
-      ? ` Top up via ${virtualAccount.bankName} ${virtualAccount.accountNumber} (${virtualAccount.accountName}), then open the ride again.`
-      : ' Top up your wallet, then open the ride again.';
+      ? ` Top up via ${virtualAccount.bankName} ${virtualAccount.accountNumber} (${virtualAccount.accountName}), then tap Continue.`
+      : ' Top up your wallet, then tap Continue.';
     return {
-      screen: 'SUCCESS',
-      data: buildErrorData(
-        `Your wallet holds ₦${balanceNgn.toLocaleString()} but this ride costs ₦${bid.counterOfferNgn.toLocaleString()} — ₦${shortage.toLocaleString()} short.${topUp}`,
+      screen: 'BID_LIST',
+      data: buildBidListData(
+        meta,
+        bids,
+        `Wallet too low: ₦${balanceNgn.toLocaleString()} vs ₦${bid.counterOfferNgn.toLocaleString()} fare — ₦${shortage.toLocaleString()} short.${topUp}`,
       ),
     };
   }
@@ -364,8 +397,8 @@ async function handleAcceptBid(
       error: holdError instanceof Error ? holdError.message : String(holdError),
     });
     return {
-      screen: 'SUCCESS',
-      data: buildErrorData('Could not lock funds in your wallet. Please try again.'),
+      screen: 'BID_LIST',
+      data: buildBidListData(meta, bids, 'Could not lock funds in your wallet. Please try again.'),
     };
   }
 
@@ -560,6 +593,32 @@ async function handleRideSetupInit(
       destinationAddress: '',
     }),
   };
+}
+
+// ── Offers flow INIT — entry screen IS the bid list ─────────────────────
+
+async function handleOffersInit(
+  userId: string,
+  deps: WhatsappFlowEndpointDeps,
+): Promise<{ screen: string; data: Record<string, unknown> }> {
+  const rideId = await getActiveRide(deps.redisClient, userId);
+  const meta = rideId ? await getRideMeta(deps.redisClient, rideId) : null;
+  if (!rideId || !meta) {
+    return {
+      screen: 'BID_LIST',
+      data: buildBidListData(
+        { riderId: userId, phone: '', pickupAddress: '—', destinationAddress: '—', offerNgn: 0, suggestedFareNgn: 0, paymentMethod: 'WALLET', createdAt: new Date().toISOString() },
+        [],
+        "This request has ended. Send 'hi' in the chat to book a new ride.",
+      ),
+    };
+  }
+  const state = await getRideState(deps.redisClient, rideId);
+  if (state === 'confirmed' || state === 'in_progress' || state === 'completed') {
+    return await resolveScreen(rideId, userId, deps);
+  }
+  const bids = await getBids(deps.redisClient, rideId);
+  return { screen: 'BID_LIST', data: buildBidListData(meta, bids) };
 }
 
 // ── Estimate fare — geocode + plan route, hand off to FARE_CONFIRM ──────
