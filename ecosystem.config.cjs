@@ -87,14 +87,5 @@ module.exports = {
         mergedEnv.MCP_GATEWAY_BASE_URL ||
         `http://127.0.0.1:${mergedEnv.PORT || "3000"}`,
     }),
-    app("whatsapp-gateway", "run start:whatsapp-gateway", {
-      WHATSAPP_GATEWAY_PORT: mergedEnv.WHATSAPP_GATEWAY_PORT || "3010",
-      WHATSAPP_SESSION_PATH:
-        mergedEnv.WHATSAPP_SESSION_PATH ||
-        "/var/lib/wheelers-whatsapp/.wwebjs_auth",
-      WHATSAPP_HEADLESS: mergedEnv.WHATSAPP_HEADLESS || "true",
-      WHATSAPP_CHROME_EXECUTABLE_PATH:
-        mergedEnv.WHATSAPP_CHROME_EXECUTABLE_PATH || "/usr/bin/google-chrome",
-    }),
   ],
 };
