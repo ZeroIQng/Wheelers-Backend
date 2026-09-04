@@ -248,6 +248,17 @@ export const walletClient = {
 
     try {
       return await prisma.$transaction(async (tx: TxClient) => {
+        // Duplicate-hold check MUST come before the balance check: the first
+        // hold locks the funds, so a second attempt (gateway pre-holds, the
+        // wallet-service consumer re-holds on RIDE_OFFER_ACCEPTED) fails the
+        // balance check and throws before the unique constraint could catch
+        // it — surfacing as a fake CRITICAL 'ride running unsecured'.
+        const existing = await tx.rideHold.findUnique({ where: { rideId } });
+        if (existing) {
+          const wallet = await tx.wallet.findUniqueOrThrow({ where: { id: walletId } });
+          return { wallet, holdAmountNgn: Number(existing.amountNgn), applied: false as const };
+        }
+
         const current = await tx.wallet.findUniqueOrThrow({
           where: { id: walletId },
         });
