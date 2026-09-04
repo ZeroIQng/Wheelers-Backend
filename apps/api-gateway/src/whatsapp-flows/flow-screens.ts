@@ -191,6 +191,7 @@ export function buildDriverProfileData(params: {
     fare: params.fare,
     plate_line: `Plate: ${params.vehiclePlate}`,
     fare_line: `Fare: ${params.fare}`,
+    paid_line: 'Fare secured from your wallet ✓ — released to the driver when your trip completes.',
     eta_line: `ETA: ${params.eta}`,
     phone_line: `Call: ${params.phoneNumber || 'Not available'}`,
     driver_photo: params.driverPhoto,

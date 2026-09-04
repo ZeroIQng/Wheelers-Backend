@@ -13,16 +13,9 @@
     ],
     "RIDE_CONFIRMED": [
       "DRIVER_PROFILE",
-      "PAYMENT",
       "SUCCESS"
     ],
-    "DRIVER_PROFILE": [
-      "PAYMENT",
-      "SUCCESS"
-    ],
-    "PAYMENT": [
-      "SUCCESS"
-    ],
+    "DRIVER_PROFILE": [],
     "SUCCESS": []
   },
   "screens": [
@@ -368,7 +361,7 @@
     {
       "id": "DRIVER_PROFILE",
       "title": "Your Driver",
-      "terminal": false,
+      "terminal": true,
       "data": {
         "driver_name": {
           "type": "string",
@@ -429,6 +422,10 @@
         "phone_line": {
           "type": "string",
           "__example__": "Call: +2348012345678"
+        },
+        "paid_line": {
+          "type": "string",
+          "__example__": "Fare secured from your wallet ✓"
         }
       },
       "layout": {
@@ -475,6 +472,10 @@
                 "text": "${data.fare_line}"
               },
               {
+                "type": "TextCaption",
+                "text": "${data.paid_line}"
+              },
+              {
                 "type": "TextBody",
                 "text": "${data.eta_line}"
               },
@@ -484,125 +485,10 @@
               },
               {
                 "type": "Footer",
-                "label": "Pay Now",
-                "on-click-action": {
-                  "name": "data_exchange",
-                  "payload": {
-                    "action": "view_payment"
-                  }
-                }
-              }
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "id": "PAYMENT",
-      "title": "Payment",
-      "terminal": false,
-      "data": {
-        "wallet_balance": {
-          "type": "string",
-          "__example__": "Wallet: ₦5,200"
-        },
-        "fare": {
-          "type": "string",
-          "__example__": "Ride fare: ₦3,500"
-        },
-        "status": {
-          "type": "string",
-          "__example__": "Your wallet has enough funds."
-        },
-        "bank_name": {
-          "type": "string",
-          "__example__": "Wema Bank"
-        },
-        "account_number": {
-          "type": "string",
-          "__example__": "7825463910"
-        },
-        "account_name": {
-          "type": "string",
-          "__example__": "Wheelers/Timi"
-        },
-        "has_virtual_account": {
-          "type": "boolean",
-          "__example__": true
-        },
-        "transfer_note": {
-          "type": "string",
-          "__example__": "Transfer to this account to fund your wallet"
-        },
-        "bank_line": {
-          "type": "string",
-          "__example__": "Bank: Rubies MFB"
-        },
-        "account_line": {
-          "type": "string",
-          "__example__": "Account: 8881695342"
-        },
-        "name_line": {
-          "type": "string",
-          "__example__": "Name: Timi Olowu"
-        }
-      },
-      "layout": {
-        "type": "SingleColumnLayout",
-        "children": [
-          {
-            "type": "Form",
-            "name": "payment_form",
-            "children": [
-              {
-                "type": "TextSubheading",
-                "text": "${data.fare}"
-              },
-              {
-                "type": "TextSubheading",
-                "text": "${data.wallet_balance}"
-              },
-              {
-                "type": "TextBody",
-                "text": "${data.status}"
-              },
-              {
-                "type": "TextSubheading",
-                "text": "Bank Transfer",
-                "visible": "${data.has_virtual_account}"
-              },
-              {
-                "type": "TextBody",
-                "text": "${data.bank_line}",
-                "visible": "${data.has_virtual_account}"
-              },
-              {
-                "type": "TextBody",
-                "text": "${data.account_line}",
-                "visible": "${data.has_virtual_account}"
-              },
-              {
-                "type": "TextBody",
-                "text": "${data.name_line}",
-                "visible": "${data.has_virtual_account}"
-              },
-              {
-                "type": "TextCaption",
-                "text": "${data.transfer_note}",
-                "visible": "${data.has_virtual_account}"
-              },
-              {
-                "type": "Footer",
                 "label": "Done",
                 "on-click-action": {
-                  "name": "navigate",
-                  "next": {
-                    "type": "screen",
-                    "name": "SUCCESS"
-                  },
-                  "payload": {
-                    "message": "Your driver will be notified once payment is received."
-                  }
+                  "name": "complete",
+                  "payload": {}
                 }
               }
             ]

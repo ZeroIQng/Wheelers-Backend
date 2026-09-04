@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import Jimp from 'jimp';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -50,6 +51,11 @@ export class DriverKycStorage {
     return getSignedUrl(this.s3, command, { expiresIn: expiresInSeconds });
   }
 
+  /**
+   * WhatsApp Flow Image components take RAW base64 (a data: URI renders as a
+   * broken placeholder) and reject large images (~300KB cap per screen), so
+   * camera-sized KYC photos must be downscaled before embedding.
+   */
   async getImageAsBase64(key: string): Promise<string | null> {
     try {
       const command = new GetObjectCommand({
@@ -63,9 +69,21 @@ export class DriverKycStorage {
       for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
         chunks.push(chunk);
       }
-      const buffer = Buffer.concat(chunks);
-      const mimeType = key.endsWith('.png') ? 'image/png' : 'image/jpeg';
-      return `data:${mimeType};base64,${buffer.toString('base64')}`;
+      let buffer: Buffer = Buffer.concat(chunks);
+
+      try {
+        const image = await Jimp.read(buffer);
+        if (image.getWidth() > 640) {
+          image.resize(640, Jimp.AUTO);
+        }
+        buffer = (await image.quality(70).getBufferAsync(Jimp.MIME_JPEG)) as Buffer;
+      } catch {
+        // Not decodable — fall through with the original bytes
+      }
+
+      const base64 = buffer.toString('base64');
+      if (base64.length > 280_000) return null; // still too big for a Flow screen
+      return base64;
     } catch {
       return null;
     }
