@@ -1040,7 +1040,24 @@ export async function handleWhatsappFlowEndpoint(
     res.setHeader('content-type', 'text/plain');
     res.end(encrypted);
   } catch (error) {
+    // A 500 shows the rider a hard error banner and kills the flow. Whatever
+    // broke server-side, hand back a graceful terminal screen instead — the
+    // money paths are guarded transactionally, so exiting is always safe.
     console.error('[whatsapp-flow] Endpoint error', error);
-    sendJson(res, 500, { error: 'Internal error' });
+    try {
+      const fallback = encryptFlowResponse(
+        {
+          screen: 'SUCCESS',
+          data: buildNotifyExitData("Something went wrong on our side — nothing was charged. Send 'hi' to try again."),
+        },
+        decrypted.aesKey,
+        decrypted.iv,
+      );
+      res.statusCode = 200;
+      res.setHeader('content-type', 'text/plain');
+      res.end(fallback);
+    } catch {
+      sendJson(res, 500, { error: 'Internal error' });
+    }
   }
 }

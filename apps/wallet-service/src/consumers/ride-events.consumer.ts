@@ -208,17 +208,12 @@ export function createRideEventsConsumer(params: {
             driverBalanceAfterNgn: Number(result.driverWallet.balanceNgn),
           });
 
-          // Ledger settled — release the driver's cut from escrow (or the
-          // rider's VA in direct mode) into the driver's own account. The
-          // platform fee stays in the treasury. Never throws.
-          if (cashEscrow) {
-            await cashEscrow.releaseToDriver({
-              rideId: event.rideId,
-              riderId: event.riderId,
-              driverUserId: event.driverUserId,
-              driverPayoutNgn: completionFees.driverPayoutNgn,
-            });
-          }
+          // NOTE deliberately NO physical transfer here. The ledger credit
+          // above IS the driver's payment; real money stays in the treasury
+          // until the driver withdraws. The old releaseToDriver call pushed
+          // treasury cash to the driver's VA, which bounced back through the
+          // deposit webhook and credited the driver's wallet a SECOND time
+          // (driver earned N3,840, wallet showed N7,680).
 
           // Publish rider debit event (total including tax + levy)
           await walletEventsProducer.publishDebited({
