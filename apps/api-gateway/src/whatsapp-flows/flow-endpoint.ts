@@ -7,6 +7,8 @@ import type { GatewayPublisher } from '../websocket/publisher';
 import type { RedisClient } from '../redis/client';
 import { readRawBody, sendJson } from '../http/utils';
 import { decryptFlowRequest, encryptFlowResponse, verifyFlowToken } from './encryption';
+import { sendFlowOffersMessage } from './whatsapp-notifier';
+import type { WhatsappNotifierDeps } from './whatsapp-notifier';
 import type { DecryptedFlowRequest } from './encryption';
 import type { FlowRequestBody } from './encryption';
 import { geocodeAddress } from '../LLM/geocoding';
@@ -55,6 +57,8 @@ export interface WhatsappFlowEndpointDeps {
   googleMapsApiKey: string;
   routePlanner: GoogleMapsRoutePlanner;
   kycStorage?: DriverKycStorage;
+  /** When set, Find Drivers drops a 'Check offers' re-entry button in chat. */
+  notifier?: WhatsappNotifierDeps;
 }
 
 const POLL_INTERVAL_MS = 1_000;
@@ -965,11 +969,31 @@ async function handleFindDrivers(
   await setActiveRide(deps.redisClient, userId, rideId);
   await clearFlowEstimate(deps.redisClient, userId);
   await clearPendingLocation(deps.redisClient, userId).catch(() => undefined);
-
-  // Stay in the flow: wait up to 8s (Meta cuts us off after ~10), then land
-  // on the offers page either way — empty state has its own refresh button.
   await setRideState(deps.redisClient, rideId, 'bidding');
-  const bids = await pollForBids(deps.redisClient, rideId, 0, 8_000);
+
+  // Drop a re-entry button in the chat right away: if the rider closes the
+  // form while we search, tapping it re-opens the offers page any time —
+  // they are never stranded waiting for the first bid.
+  if (deps.notifier && phone) {
+    const entryMeta = {
+      riderId: userId,
+      phone,
+      pickupAddress: route.pickupAddress,
+      destinationAddress: route.destinationAddress,
+      offerNgn: finalOffer,
+      suggestedFareNgn,
+      paymentMethod,
+      createdAt: new Date().toISOString(),
+      source: 'flow' as const,
+    };
+    void sendFlowOffersMessage(deps.notifier, phone, userId, entryMeta, []).catch((err) =>
+      console.warn('[whatsapp-flow] re-entry message failed', err),
+    );
+  }
+
+  // Stay in the flow: hold up to 8.5s (Meta cuts us off around 10), then land
+  // on the offers page either way — empty state has its own refresh button.
+  const bids = await pollForBids(deps.redisClient, rideId, 0, 8_500);
 
   return {
     screen: 'BID_LIST',

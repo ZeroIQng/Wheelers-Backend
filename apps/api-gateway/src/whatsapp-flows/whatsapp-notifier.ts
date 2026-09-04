@@ -106,8 +106,10 @@ export async function sendFlowOffersMessage(
   bids: WhatsappBid[],
 ): Promise<void> {
   const count = bids.length;
-  const lowest = Math.min(...bids.map((b) => b.counterOfferNgn));
-  const body = `🚗 ${count} driver offer${count === 1 ? '' : 's'} on your ₦${meta.offerNgn.toLocaleString()} request!\nLowest: ₦${lowest.toLocaleString()}. Tap below to view and accept.`;
+  const body =
+    count > 0
+      ? `🚗 ${count} driver offer${count === 1 ? '' : 's'} on your ₦${meta.offerNgn.toLocaleString()} request!\nLowest: ₦${Math.min(...bids.map((b) => b.counterOfferNgn)).toLocaleString()}. Tap below to view and accept.`
+      : `🔎 We're finding drivers for your ₦${meta.offerNgn.toLocaleString()} request!\nOffers land right here — tap below anytime to check them.`;
 
   if (!deps.offersFlowId || !deps.flowTokenSecret) {
     await sendMetaWhatsappMessage(deps, to, body);
@@ -141,7 +143,7 @@ export async function sendFlowOffersMessage(
             // open. INIT here loads the live bid list every time.
             flow_id: deps.offersFlowId,
             flow_token: signFlowToken(`offers:${riderId}`, deps.flowTokenSecret),
-            flow_cta: 'View offers',
+            flow_cta: count > 0 ? 'View offers' : 'Check offers',
             flow_action: 'data_exchange',
           },
         },

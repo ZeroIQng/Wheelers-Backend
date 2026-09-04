@@ -85,6 +85,7 @@ import {
 } from '../whatsapp-flows/bid-state';
 import { signFlowToken } from '../whatsapp-flows/encryption';
 import type { WhatsappBid } from '../whatsapp-flows/bid-state';
+import { sendFlowOffersMessage } from '../whatsapp-flows/whatsapp-notifier';
 import {
   formatBidList,
 } from '../whatsapp-flows/whatsapp-notifier';
@@ -113,6 +114,7 @@ export interface MetaWhatsappRouteDeps {
   treasuryVirtualAccountId?: string;
   /** Published Meta Flow id for the booking form. Unset = chat-only booking. */
   whatsappFlowId?: string;
+  whatsappOffersFlowId?: string;
 }
 
 /* ─── Meta Cloud API helpers ─── */
@@ -1666,6 +1668,38 @@ export async function handleMetaWhatsappWebhookRoute(
     // machine on purpose: a stale "awaiting pickup" stage from an abandoned
     // conversation used to swallow greetings forever. Greeting with no live
     // ride = fresh start — clear the stale stage and offer the form.
+    // A greeting while a flow-booked ride is live re-sends the offers button
+    // — the booking form would only dead-end on 'you have a ride in progress'.
+    if (
+      deps.whatsappOffersFlowId &&
+      deps.metaAccessToken &&
+      deps.metaPhoneNumberId &&
+      activeRideId &&
+      isBookingOpener(incomingMessage)
+    ) {
+      const flowMeta = await getRideMeta(deps.redisClient, activeRideId);
+      if (flowMeta?.source === 'flow') {
+        const flowBids = await getBids(deps.redisClient, activeRideId);
+        await sendFlowOffersMessage(
+          {
+            metaAccessToken: deps.metaAccessToken,
+            metaPhoneNumberId: deps.metaPhoneNumberId,
+            offersFlowId: deps.whatsappOffersFlowId,
+            flowTokenSecret: deps.jwtSecret,
+          },
+          phone,
+          user.id,
+          flowMeta,
+          flowBids,
+        ).catch((err) => console.warn('[whatsapp] offers re-entry failed', err));
+        await appendWhatsappConversation(deps.redisClient, phone, [
+          { role: 'user', content: incomingMessage },
+          { role: 'assistant', content: '[sent offers button]' },
+        ]);
+        return;
+      }
+    }
+
     if (deps.whatsappFlowId && !activeRideId && isBookingOpener(incomingMessage)) {
       const flowToken = signFlowToken(`new:${user.id}`, deps.jwtSecret);
       const sent = await sendMetaFlowMessage(deps, phone, flowToken);

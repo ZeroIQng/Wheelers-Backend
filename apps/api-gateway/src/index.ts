@@ -835,6 +835,7 @@ async function bootstrap(): Promise<void> {
         driverKycStorage: driverKycStorage ?? undefined,
         groupRideFaceStorage: groupRideFaceStorage ?? undefined,
         whatsappFlowId: gatewayEnv.WHATSAPP_FLOW_ID,
+        whatsappOffersFlowId: gatewayEnv.WHATSAPP_OFFERS_FLOW_ID,
         treasuryVirtualAccountId: gatewayEnv.POUCH_TREASURY_VIRTUAL_ACCOUNT_ID,
       };
 
@@ -869,6 +870,15 @@ async function bootstrap(): Promise<void> {
         googleMapsApiKey: gatewayEnv.GOOGLE_MAPS_API_KEY,
         routePlanner,
         kycStorage: driverKycStorage ?? undefined,
+        notifier:
+          gatewayEnv.META_ACCESS_TOKEN && gatewayEnv.META_PHONE_NUMBER_ID
+            ? {
+                metaAccessToken: gatewayEnv.META_ACCESS_TOKEN,
+                metaPhoneNumberId: gatewayEnv.META_PHONE_NUMBER_ID,
+                offersFlowId: gatewayEnv.WHATSAPP_OFFERS_FLOW_ID,
+                flowTokenSecret: gatewayEnv.JWT_SECRET,
+              }
+            : undefined,
       });
       return;
     }
