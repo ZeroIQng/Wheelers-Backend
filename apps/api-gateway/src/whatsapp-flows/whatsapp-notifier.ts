@@ -1,4 +1,5 @@
 import { signFlowToken } from './encryption';
+import { META_FLOWS_ENABLED } from './flow-toggle';
 import { calculateRideFees } from '@wheleers/config';
 import type { WhatsappBid, WhatsappRideMeta } from './bid-state';
 
@@ -111,7 +112,7 @@ export async function sendFlowOffersMessage(
       ? `🚗 ${count} driver offer${count === 1 ? '' : 's'} on your ₦${meta.offerNgn.toLocaleString()} request!\nLowest: ₦${Math.min(...bids.map((b) => b.counterOfferNgn)).toLocaleString()}. Tap below to view and accept.`
       : `🔎 We're finding drivers for your ₦${meta.offerNgn.toLocaleString()} request!\nOffers land right here — tap below anytime to check them.`;
 
-  if (!deps.offersFlowId || !deps.flowTokenSecret) {
+  if (!META_FLOWS_ENABLED || !deps.offersFlowId || !deps.flowTokenSecret) {
     await sendMetaWhatsappMessage(deps, to, body);
     return;
   }

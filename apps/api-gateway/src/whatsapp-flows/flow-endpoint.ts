@@ -8,6 +8,7 @@ import type { RedisClient } from '../redis/client';
 import { readRawBody, sendJson } from '../http/utils';
 import { decryptFlowRequest, encryptFlowResponse, verifyFlowToken } from './encryption';
 import { sendFlowOffersMessage } from './whatsapp-notifier';
+import { META_FLOWS_ENABLED } from './flow-toggle';
 import type { WhatsappNotifierDeps } from './whatsapp-notifier';
 import type { DecryptedFlowRequest } from './encryption';
 import type { FlowRequestBody } from './encryption';
@@ -974,7 +975,7 @@ async function handleFindDrivers(
   // Drop a re-entry button in the chat right away: if the rider closes the
   // form while we search, tapping it re-opens the offers page any time —
   // they are never stranded waiting for the first bid.
-  if (deps.notifier && phone) {
+  if (META_FLOWS_ENABLED && deps.notifier && phone) {
     const entryMeta = {
       riderId: userId,
       phone,

@@ -86,6 +86,7 @@ import {
 import { signFlowToken } from '../whatsapp-flows/encryption';
 import type { WhatsappBid } from '../whatsapp-flows/bid-state';
 import { sendFlowOffersMessage } from '../whatsapp-flows/whatsapp-notifier';
+import { META_FLOWS_ENABLED } from '../whatsapp-flows/flow-toggle';
 import {
   formatBidList,
 } from '../whatsapp-flows/whatsapp-notifier';
@@ -1671,6 +1672,7 @@ export async function handleMetaWhatsappWebhookRoute(
     // A greeting while a flow-booked ride is live re-sends the offers button
     // — the booking form would only dead-end on 'you have a ride in progress'.
     if (
+      META_FLOWS_ENABLED &&
       deps.whatsappOffersFlowId &&
       deps.metaAccessToken &&
       deps.metaPhoneNumberId &&
@@ -1700,7 +1702,7 @@ export async function handleMetaWhatsappWebhookRoute(
       }
     }
 
-    if (deps.whatsappFlowId && !activeRideId && isBookingOpener(incomingMessage)) {
+    if (META_FLOWS_ENABLED && deps.whatsappFlowId && !activeRideId && isBookingOpener(incomingMessage)) {
       const flowToken = signFlowToken(`new:${user.id}`, deps.jwtSecret);
       const sent = await sendMetaFlowMessage(deps, phone, flowToken);
       console.info('[whatsapp] booking opener', {
