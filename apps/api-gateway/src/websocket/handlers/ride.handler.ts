@@ -1,5 +1,11 @@
 import { randomUUID } from 'crypto';
-import { GoogleMapsRoutePlanner, RIDE, validateRiderOffer, calculateSuggestedFare } from '@wheleers/config';
+import {
+  GoogleMapsRoutePlanner,
+  RIDE,
+  calculateSuggestedFare,
+  validateDriverOffer,
+  validateRiderOffer,
+} from '@wheleers/config';
 import { chatClient, driverClient, groupRideClient, referralClient, rideClient, driverBidClient, walletClient } from '@wheleers/db';
 import {
   ChatMessageSentEvent,
@@ -42,16 +48,19 @@ function requireString(payload: Record<string, unknown>, key: string): string {
  * Counter-offers re-open the price after the initial offer was validated, so
  * they have to clear the same bar — otherwise either side can haggle a ride
  * below the minimum fare and the floor only applies to the first offer.
+ *
+ * A driver additionally has a CEILING (₦500/km): the rider names the price on
+ * Wheelers, so a driver may haggle upward but not without limit.
  */
-async function assertOfferMeetsMinimum(
+async function assertOfferWithinBand(
   rideId: string,
   offerNgn: number,
   who: 'rider' | 'driver',
 ): Promise<void> {
-  const suggestedFareNgn = await resolveSuggestedFareNgn(rideId);
+  const context = await resolveFareContext(rideId);
 
   // Unknown ride: bidding must not be blocked by a lookup we could not resolve.
-  if (suggestedFareNgn === null) {
+  if (context === null) {
     console.warn('[api-gateway][ride] could not resolve a fare to validate the counter-offer against', {
       rideId,
       who,
@@ -60,14 +69,21 @@ async function assertOfferMeetsMinimum(
     return;
   }
 
-  const validation = validateRiderOffer(offerNgn, suggestedFareNgn);
+  const { suggestedFareNgn, distanceKm } = context;
+  const validation =
+    who === 'driver'
+      ? validateDriverOffer(offerNgn, suggestedFareNgn, distanceKm)
+      : validateRiderOffer(offerNgn, suggestedFareNgn);
+
   if (!validation.valid) {
-    console.warn('[api-gateway][ride] counter-offer rejected below minimum', {
+    console.warn('[api-gateway][ride] counter-offer rejected outside the fare band', {
       rideId,
       who,
       offerNgn,
       minOfferNgn: validation.minOfferNgn,
+      maxOfferNgn: 'maxOfferNgn' in validation ? validation.maxOfferNgn : undefined,
       suggestedFareNgn,
+      distanceKm,
     });
     throw new Error(validation.reason ?? `Offer must be at least ${validation.minOfferNgn} NGN.`);
   }
@@ -78,12 +94,21 @@ async function assertOfferMeetsMinimum(
  * row exists for it, so looking only in `Ride` throws and kills bidding on
  * every group ride. Check both, and return null when neither knows the ride.
  */
-async function resolveSuggestedFareNgn(rideId: string): Promise<number | null> {
+async function resolveFareContext(
+  rideId: string,
+): Promise<{ suggestedFareNgn: number; distanceKm?: number } | null> {
   const ride = await rideClient.findById(rideId).catch(() => null);
   if (ride) {
-    return ride.fareEstimateNgn !== null && ride.fareEstimateNgn !== undefined
-      ? Number(ride.fareEstimateNgn)
-      : 0;
+    return {
+      suggestedFareNgn:
+        ride.fareEstimateNgn !== null && ride.fareEstimateNgn !== undefined
+          ? Number(ride.fareEstimateNgn)
+          : 0,
+      distanceKm:
+        ride.distanceKm !== null && ride.distanceKm !== undefined
+          ? Number(ride.distanceKm)
+          : undefined,
+    };
   }
 
   const groupRequest = await groupRideClient.findMatchRequestById(rideId).catch(() => null);
@@ -96,12 +121,16 @@ async function resolveSuggestedFareNgn(rideId: string): Promise<number | null> {
       groupRequest.fareEstimateNgn !== null && groupRequest.fareEstimateNgn !== undefined
         ? Number(groupRequest.fareEstimateNgn)
         : 0;
-    if (seatOfferNgn > 0) return seatOfferNgn;
+    // A seat's share of one leg is not the leg itself, so the per-km ceiling
+    // does not apply to seat bids — distance stays undefined here.
+    if (seatOfferNgn > 0) return { suggestedFareNgn: seatOfferNgn };
 
     if (groupRequest.plannedDistanceKm) {
-      return calculateSuggestedFare(groupRequest.plannedDistanceKm).suggestedFareNgn;
+      return {
+        suggestedFareNgn: calculateSuggestedFare(groupRequest.plannedDistanceKm).suggestedFareNgn,
+      };
     }
-    return 0;
+    return { suggestedFareNgn: 0 };
   }
 
   return null;
@@ -362,7 +391,7 @@ export async function handleRideMessage(
       timestamp,
     });
 
-    await assertOfferMeetsMinimum(event.rideId, event.counterOfferNgn, 'driver');
+    await assertOfferWithinBand(event.rideId, event.counterOfferNgn, 'driver');
 
     await publisher.publishRideEvent(event);
 
@@ -509,7 +538,7 @@ export async function handleRideMessage(
       timestamp,
     });
 
-    await assertOfferMeetsMinimum(event.rideId, event.counterOfferNgn, 'rider');
+    await assertOfferWithinBand(event.rideId, event.counterOfferNgn, 'rider');
 
     await publisher.publishRideEvent(event);
 

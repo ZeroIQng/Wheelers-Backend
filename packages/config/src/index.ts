@@ -26,6 +26,7 @@ export { GPS }                         from './constants/gps';
 export { RIDE }                        from './constants/ride';
 export {
   RATE_PER_KM_NGN,
+  MAX_RATE_PER_KM_NGN,
   PLATFORM_FEE_NGN,
   MIN_OFFER_DISCOUNT,
   MIN_FARE_NGN,
@@ -34,7 +35,9 @@ export {
   LAGOS_STATE_FEE_NGN,
   SERVICE_FEE_NGN,
   calculateSuggestedFare,
+  resolveMaxOfferNgn,
   validateRiderOffer,
+  validateDriverOffer,
   calculateRideFees,
 } from './pricing';
 export type { SuggestedFare, RidePriceBreakdown, RideFeeBreakdown } from './pricing';

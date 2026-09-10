@@ -1,13 +1,19 @@
-export const RATE_PER_KM_NGN = 300;
+export const RATE_PER_KM_NGN = 375;
+/**
+ * Ceiling on the per-km rate a driver may counter-offer. It doubles as the
+ * surge ceiling: 500/375 = 1.33x is the most any fare can move above the
+ * suggested price, by construction.
+ */
+export const MAX_RATE_PER_KM_NGN = 500;
 export const PLATFORM_FEE_NGN = 0;
-export const MIN_OFFER_DISCOUNT = 0.28;
+export const MIN_OFFER_DISCOUNT = 0.17;
 /**
  * Hard floor on what any ride can cost, regardless of distance. Nothing —
  * neither the suggested fare nor the lowest offer a rider may haggle down to —
  * goes below this. Short trips would otherwise price under the flat fees
  * (₦200 service + ₦30 levy), leaving the driver nothing for their time.
  */
-export const MIN_FARE_NGN = 3000;
+export const MIN_FARE_NGN = 2500;
 export const FARE_ROUNDING_INCREMENT = 100;
 export const VAT_RATE = 0.075; // 7.5% VAT
 export const LAGOS_STATE_FEE_NGN = 30; // ₦30 flat per ride
@@ -17,6 +23,7 @@ export type SuggestedFare = {
   distanceKm: number;
   suggestedFareNgn: number;
   minOfferNgn: number;
+  maxOfferNgn: number;
   ratePerKmNgn: number;
 };
 
@@ -43,6 +50,7 @@ export function calculateSuggestedFare(distanceKm: number): SuggestedFare {
     distanceKm,
     suggestedFareNgn,
     minOfferNgn,
+    maxOfferNgn: resolveMaxOfferNgn(distanceKm),
     ratePerKmNgn: RATE_PER_KM_NGN,
   };
 }
@@ -73,9 +81,61 @@ export function validateRiderOffer(
   return { valid: true, minOfferNgn };
 }
 
-/** Lowest offer we accept: the haggling discount, but never below the floor. */
+/**
+ * Lowest offer we accept: the haggling discount, but never below the floor.
+ * Rounded UP to the fare increment so riders see ₦3,200, not ₦3,154.
+ */
 function resolveMinOfferNgn(suggestedFareNgn: number): number {
-  return Math.max(MIN_FARE_NGN, round2(suggestedFareNgn * (1 - MIN_OFFER_DISCOUNT)));
+  return Math.max(
+    MIN_FARE_NGN,
+    roundUpToIncrement(suggestedFareNgn * (1 - MIN_OFFER_DISCOUNT), FARE_ROUNDING_INCREMENT),
+  );
+}
+
+/**
+ * Highest offer we accept on a trip: MAX_RATE_PER_KM_NGN per km, never below
+ * the minimum fare — on a 3 km hop ₦500/km is ₦1,500, which would sit UNDER
+ * the ₦2,500 floor and make the ride unbookable.
+ *
+ * Distance is not always resolvable (a group seat, a ride row without a
+ * planned distance). Callers get Infinity there: an unknown trip length must
+ * not block a bid, exactly as an unresolvable fare does not.
+ */
+export function resolveMaxOfferNgn(distanceKm: number | undefined): number {
+  if (distanceKm === undefined || !Number.isFinite(distanceKm) || distanceKm <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Math.max(
+    MIN_FARE_NGN,
+    roundUpToIncrement(MAX_RATE_PER_KM_NGN * distanceKm, FARE_ROUNDING_INCREMENT),
+  );
+}
+
+/**
+ * A driver's bid clears the same floor as a rider's offer AND a ceiling of
+ * ₦500/km, so a driver cannot answer a ₦3,800 request with ₦20,000.
+ */
+export function validateDriverOffer(
+  offerNgn: number,
+  suggestedFareNgn: number,
+  distanceKm?: number,
+): { valid: boolean; minOfferNgn: number; maxOfferNgn: number; reason?: string } {
+  const maxOfferNgn = resolveMaxOfferNgn(distanceKm);
+  const floor = validateRiderOffer(offerNgn, suggestedFareNgn);
+  if (!floor.valid) {
+    return { valid: false, minOfferNgn: floor.minOfferNgn, maxOfferNgn, reason: floor.reason };
+  }
+
+  if (offerNgn > maxOfferNgn) {
+    return {
+      valid: false,
+      minOfferNgn: floor.minOfferNgn,
+      maxOfferNgn,
+      reason: `Maximum bid for this trip is ${maxOfferNgn.toLocaleString('en-NG')} NGN (${MAX_RATE_PER_KM_NGN} NGN per km).`,
+    };
+  }
+
+  return { valid: true, minOfferNgn: floor.minOfferNgn, maxOfferNgn };
 }
 
 export type RideFeeBreakdown = {
