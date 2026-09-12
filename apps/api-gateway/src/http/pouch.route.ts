@@ -216,15 +216,16 @@ async function handleVirtualAccountCredited(
     : await virtualAccountClient.findByAccountNumber(accountNumber!);
 
   // A user whose account was re-issued (see scripts/reissue-virtual-account.mjs)
-  // may still receive money on the old number. Both accounts belong to the
-  // same Pouch customer, so the customer on the payload still names the user.
+  // may still receive money on the old number. Every Pouch customer reference
+  // for a user is their id, optionally suffixed "-rN", so the payload's
+  // customer still names the user.
   if (!virtualAccount) {
     const customerId = pickString(data, ['customerId', 'customer_id', 'customer.id', 'data.customerId']);
     const customerReference = pickString(data, ['customerReference', 'customer_reference', 'customer.customer_reference']);
     const user = customerId
       ? await userClient.findByPouchCustomerId(customerId)
       : customerReference
-        ? await userClient.findById(customerReference.split(':')[0]).catch(() => null)
+        ? await userClient.findById(customerReference.replace(/-r\d+$/, '')).catch(() => null)
         : null;
     if (user) {
       virtualAccount = await virtualAccountClient.findByUserId(user.id);

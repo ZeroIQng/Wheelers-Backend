@@ -12,15 +12,16 @@
  *   … --name="Ola Adeyemi"   override the bank-facing name (default: sanitized display name)
  *
  * What it does, in order:
- *   1. Renames the Pouch customer to the clean name.
- *   2. Opens a NEW virtual account for that customer (a new account number).
- *   3. If the new account's name still comes back garbled, opens a fresh Pouch
- *      customer (reference "<userId>:2") and a virtual account under it.
- *   4. Points the user's VirtualAccount row at the new account.
+ *   1. Opens a fresh Pouch customer under the clean name (reference
+ *      "<userId>-r2", then -r3 …). Pouch gives each customer exactly one
+ *      virtual account and prints the name it had at creation, so renaming
+ *      the old customer changes nothing — a new customer is the only way.
+ *   2. Opens a virtual account under it and checks the name came back clean.
+ *   3. Points the user's VirtualAccount row (and pouchCustomerId) at it.
  *
  * The old number is not closed. Money sent to it still reaches the user: the
- * credit webhook falls back to the Pouch customer when it can't match the
- * account, and both accounts belong to the same customer.
+ * credit webhook falls back to the customer reference on the payload, and
+ * every reference for this user starts with their user id.
  *
  * Needs a built tree (`npm run build`).
  */
@@ -101,31 +102,20 @@ if (!CONFIRM) {
   process.exit(0);
 }
 
-let customerId = user.pouchCustomerId;
-
-// 1. Rename the existing customer. Pouch may or may not honour a name change —
-//    if it refuses, step 3 opens a fresh customer instead.
-try {
-  await pouch.updateCustomer(customerId, { firstName, lastName });
-  console.log(`\n✓ customer ${customerId} renamed`);
-} catch (error) {
-  console.log(`\n… could not rename customer (${error instanceof Error ? error.message : error}); will try a new one if needed`);
-}
-
-// 2. New virtual account under the (renamed) customer.
-let fresh = await pouch.createVirtualAccount(customerId, {
-  country: 'NG',
-  currency: 'NGN',
-  idempotencyKey: `va-reissue-${user.id}-${Date.now()}`,
-});
-console.log(`✓ new account ${fresh.bank_name} ${fresh.account_number}  "${fresh.account_name}"`);
-
-// 3. Still garbled → the customer's stored name is what the bank prints, and
-//    it cannot be fixed in place. Open a new customer with a suffixed reference.
-if (!isClean(fresh.account_name)) {
-  const attempt = 2;
-  const reference = `${user.id}:${attempt}`;
-  console.log(`… account name still not clean; opening a fresh customer (${reference})`);
+// 1. A fresh customer. Pouch keys customers by reference and the user id is
+//    taken, so suffix it: -r2, then -r3 if a previous run already made -r2
+//    (a reference that exists is reused, never duplicated).
+let customerId = null;
+let fresh = null;
+for (let attempt = 2; attempt <= 5 && !customerId; attempt += 1) {
+  const reference = `${user.id}-r${attempt}`;
+  const existing = await pouch.findCustomerByReference(reference).catch(() => null);
+  if (existing) {
+    if (existing.id === user.pouchCustomerId) continue; // this one is the garbled account
+    console.log(`… reusing customer ${reference} from an earlier run`);
+    customerId = existing.id;
+    break;
+  }
   const customer = await pouch.createCustomer({
     customerReference: reference,
     firstName,
@@ -133,21 +123,35 @@ if (!isClean(fresh.account_name)) {
     phoneNumber: user.phone ?? undefined,
     email: user.email ?? undefined,
   });
+  console.log(`\n✓ customer ${customer.id} opened as ${reference} (${firstName} ${lastName})`);
   customerId = customer.id;
-  fresh = await pouch.createVirtualAccount(customerId, {
-    country: 'NG',
-    currency: 'NGN',
-    idempotencyKey: `va-reissue-${user.id}-${attempt}-${Date.now()}`,
-  });
-  console.log(`✓ new account ${fresh.bank_name} ${fresh.account_number}  "${fresh.account_name}"`);
-  if (!isClean(fresh.account_name)) {
-    console.error('\n✗ Pouch still returned a garbled account name. Nothing was changed in our database.\n');
-    await prisma.$disconnect();
-    process.exit(1);
-  }
+}
+if (!customerId) {
+  console.error('\n✗ could not open a new Pouch customer. Nothing was changed in our database.\n');
+  await prisma.$disconnect();
+  process.exit(1);
 }
 
-// 4. Point the user at the new account.
+// 2. One virtual account under it. If the customer already had one (re-run),
+//    Pouch hands the same account back, which is what we want.
+fresh = await pouch.createVirtualAccount(customerId, {
+  country: 'NG',
+  currency: 'NGN',
+  idempotencyKey: `va-reissue-${user.id}-${customerId}`,
+});
+console.log(`✓ account ${fresh.bank_name} ${fresh.account_number}  "${fresh.account_name}"`);
+if (!isClean(fresh.account_name)) {
+  console.error('\n✗ Pouch still returned a garbled account name. Nothing was changed in our database.\n');
+  await prisma.$disconnect();
+  process.exit(1);
+}
+if (va && fresh.account_number === va.accountNumber) {
+  console.error('\n✗ Pouch returned the same account number. Nothing was changed in our database.\n');
+  await prisma.$disconnect();
+  process.exit(1);
+}
+
+// 3. Point the user at the new account.
 await prisma.$transaction(async (tx) => {
   if (customerId !== user.pouchCustomerId) {
     await tx.user.update({ where: { id: user.id }, data: { pouchCustomerId: customerId } });
