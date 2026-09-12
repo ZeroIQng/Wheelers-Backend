@@ -1,6 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'http';
-import { withdrawalClient, virtualAccountClient } from '@wheleers/db';
+import { userClient, withdrawalClient, virtualAccountClient } from '@wheleers/db';
 import type {
   VirtualAccountCreditedEvent,
   PayoutCompletedEvent,
@@ -211,9 +211,32 @@ async function handleVirtualAccountCredited(
     return;
   }
 
-  const virtualAccount = pouchVaId
+  let virtualAccount = pouchVaId
     ? await virtualAccountClient.findByPouchVirtualAccountId(pouchVaId)
     : await virtualAccountClient.findByAccountNumber(accountNumber!);
+
+  // A user whose account was re-issued (see scripts/reissue-virtual-account.mjs)
+  // may still receive money on the old number. Both accounts belong to the
+  // same Pouch customer, so the customer on the payload still names the user.
+  if (!virtualAccount) {
+    const customerId = pickString(data, ['customerId', 'customer_id', 'customer.id', 'data.customerId']);
+    const customerReference = pickString(data, ['customerReference', 'customer_reference', 'customer.customer_reference']);
+    const user = customerId
+      ? await userClient.findByPouchCustomerId(customerId)
+      : customerReference
+        ? await userClient.findById(customerReference.split(':')[0]).catch(() => null)
+        : null;
+    if (user) {
+      virtualAccount = await virtualAccountClient.findByUserId(user.id);
+      if (virtualAccount) {
+        console.info('[api-gateway][pouch-webhook] credit to a retired account number, resolved via customer', {
+          userId: user.id,
+          pouchVaId: pouchVaId ?? null,
+          accountNumber: accountNumber ?? null,
+        });
+      }
+    }
+  }
   if (!virtualAccount) {
     console.warn('[api-gateway][pouch-webhook] virtual account not found', {
       pouchVaId: pouchVaId ?? null,

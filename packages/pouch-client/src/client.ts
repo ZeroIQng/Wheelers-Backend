@@ -67,10 +67,14 @@ export class PouchLiquifiaClient {
   async updateCustomer(customerId: string, params: {
     email?: string;
     phoneNumber?: string;
+    firstName?: string;
+    lastName?: string;
   }): Promise<PouchCustomer> {
     const body: Record<string, unknown> = {};
     if (params.email) body.email = params.email;
     if (params.phoneNumber) body.phone_number = params.phoneNumber;
+    if (params.firstName) body.first_name = params.firstName;
+    if (params.lastName) body.last_name = params.lastName;
     const res = await this.patch<PouchCustomer>(`/customers/${customerId}`, body);
     return res.data;
   }

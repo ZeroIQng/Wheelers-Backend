@@ -34,6 +34,19 @@ export const virtualAccountClient = {
       },
     }),
 
+  /** Swap a user's account for a freshly issued one (same row, new bank details). */
+  replace: (userId: string, data: {
+    pouchCustomerId: string;
+    pouchVirtualAccountId: string;
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+  }) =>
+    prisma.virtualAccount.update({
+      where: { userId },
+      data: { ...data, status: 'active' },
+    }),
+
   updateStatus: (userId: string, status: string) =>
     prisma.virtualAccount.update({
       where: { userId },

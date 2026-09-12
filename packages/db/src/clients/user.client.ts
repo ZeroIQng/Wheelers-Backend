@@ -48,6 +48,9 @@ export const userClient = {
 
   // Phone is not unique in the schema (an app account can verify the same
   // number a WhatsApp account was created with), so callers decide precedence.
+  findByPouchCustomerId: (pouchCustomerId: string) =>
+    prisma.user.findUnique({ where: { pouchCustomerId } }),
+
   findByPhone: (phone: string) =>
     prisma.user.findFirst({
       where: { phone },
