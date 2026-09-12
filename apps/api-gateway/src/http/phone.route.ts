@@ -6,6 +6,8 @@ import { verifyLocalAccessToken } from '../auth/local';
 import { getString, isRecord } from '../utils/object';
 import { readJsonBody, sendJson } from './utils';
 import { logActivity } from '../analytics/log-activity';
+import type { PouchLiquifiaClient } from '@wheleers/pouch-client';
+import { provisionPouchAccount } from '../onboarding/user-onboarding';
 import {
   checkTwilioVerify,
   deliverOtp,
@@ -21,6 +23,10 @@ const PHONE_OTP_TTL_SECONDS = 300;
 export interface PhoneRouteDeps {
   jwtSecret: string;
   redisClient: RedisClient;
+  // Optional: when present, a freshly verified phone kicks off Pouch
+  // provisioning. Accounts that signed up with no contact info have no
+  // virtual account until this moment.
+  pouchLiquifiaClient?: PouchLiquifiaClient;
   // Meta WhatsApp Cloud API — the same credentials the bot replies with.
   metaAccessToken?: string;
   metaPhoneNumberId?: string;
@@ -347,6 +353,20 @@ export async function handleVerifyPhoneOtpRoute(
     await deps.redisClient.del(buildOtpRedisKey(user.id));
 
     logActivity({ userId: user.id, eventType: 'phone_verified', metadata: {} });
+
+    if (deps.pouchLiquifiaClient) {
+      void provisionPouchAccount(
+        deps.pouchLiquifiaClient,
+        user.id,
+        updatedUser.name ?? undefined,
+        updatedUser.phone ?? undefined,
+      ).catch((provisionError) => {
+        console.warn('[phone] pouch provisioning after phone verify failed (non-blocking)', {
+          userId: user.id,
+          error: provisionError instanceof Error ? provisionError.message : String(provisionError),
+        });
+      });
+    }
 
     sendJson(res, 200, {
       verified: true,

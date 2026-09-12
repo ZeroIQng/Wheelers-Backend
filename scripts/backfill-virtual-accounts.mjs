@@ -66,17 +66,25 @@ const users = await prisma.user.findMany({
     ],
     ...(ONLY_WHATSAPP ? { privyDid: { startsWith: 'whatsapp:' } } : {}),
   },
-  select: { id: true, name: true, phone: true, privyDid: true, pouchCustomerId: true, createdAt: true },
+  select: { id: true, name: true, phone: true, email: true, privyDid: true, pouchCustomerId: true, createdAt: true },
   orderBy: { createdAt: 'asc' },
 });
+
+const hasContact = (u) => Boolean(u.phone || u.email);
+const eligible = users.filter(hasContact);
+const noContact = users.filter((u) => !hasContact(u));
 
 console.log(`\n${users.length} real user(s) without a virtual account${CONFIRM ? '' : ' (dry run)'}\n`);
 for (const u of users) {
   const { firstName, lastName } = pouchNameParts(u.name);
   console.log(
     `  ${u.id}  ${u.privyDid.padEnd(28)}  ${JSON.stringify(u.name ?? '')}  →  ${firstName} ${lastName}` +
-      (u.pouchCustomerId ? '  (customer exists)' : ''),
+      (u.pouchCustomerId ? '  (customer exists)' : '') +
+      (hasContact(u) ? '' : '  (no phone or email — skipped; provisions when they verify a phone)'),
   );
+}
+if (noContact.length) {
+  console.log(`\n  ${noContact.length} skipped: Pouch needs a phone or email, and these accounts have neither.`);
 }
 
 if (!CONFIRM) {
@@ -87,7 +95,7 @@ if (!CONFIRM) {
 
 let ok = 0;
 let failed = 0;
-for (const u of users.slice(0, LIMIT)) {
+for (const u of eligible.slice(0, LIMIT)) {
   try {
     await provisionPouchAccount(pouch, u.id, u.name ?? undefined, u.phone ?? undefined);
     const va = await prisma.virtualAccount.findUnique({ where: { userId: u.id } });

@@ -917,6 +917,7 @@ async function bootstrap(): Promise<void> {
       await handleVerifyPhoneOtpRoute(req, res, {
         jwtSecret: gatewayEnv.JWT_SECRET,
         redisClient: redisCommandClient,
+        pouchLiquifiaClient,
         metaAccessToken: gatewayEnv.META_ACCESS_TOKEN,
         metaPhoneNumberId: gatewayEnv.META_PHONE_NUMBER_ID,
         metaOtpTemplateName: gatewayEnv.META_OTP_TEMPLATE_NAME,

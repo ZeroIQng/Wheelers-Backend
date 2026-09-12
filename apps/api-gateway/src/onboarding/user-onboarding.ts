@@ -82,16 +82,32 @@ export async function provisionPouchAccount(
   const user = await userClient.findById(userId);
   // The display name keeps its emoji; Pouch gets the letters-only version.
   const { firstName, lastName } = pouchNameParts(name ?? user.name);
+  const contactPhone = phone ?? user.phone ?? undefined;
+  const contactEmail = user.email ?? undefined;
+
+  // Pouch refuses to open a virtual account for a customer with neither a
+  // phone nor an email. Fail here, with a message that says so, instead of
+  // creating a contact-less Pouch customer that the VA call then rejects.
+  if (!contactPhone && !contactEmail) {
+    throw new Error('NO_CONTACT_INFO: user has no phone or email; provisioning will run once a phone is verified');
+  }
 
   let pouchCustomerId = user.pouchCustomerId ?? undefined;
-  if (!pouchCustomerId) {
+  if (pouchCustomerId) {
+    // The customer was created on an earlier attempt — possibly before the
+    // user had any contact info. Patch it so the VA call below can succeed.
+    const remote = await pouch.getCustomer(pouchCustomerId).catch(() => null);
+    if (remote && !remote.phone_number && !remote.email) {
+      await pouch.updateCustomer(pouchCustomerId, { email: contactEmail, phoneNumber: contactPhone });
+    }
+  } else {
     try {
       const customer = await pouch.createCustomer({
         customerReference: userId,
         firstName,
         lastName,
-        phoneNumber: phone ?? user.phone ?? undefined,
-        email: user.email ?? undefined,
+        phoneNumber: contactPhone,
+        email: contactEmail,
       });
       pouchCustomerId = customer.id;
     } catch (error) {
@@ -104,12 +120,12 @@ export async function provisionPouchAccount(
       pouchCustomerId = existing.id;
 
       // Patch missing contact info so virtual account creation succeeds
-      const needsEmail = !existing.email && user.email;
-      const needsPhone = !existing.phone_number && (phone ?? user.phone);
+      const needsEmail = !existing.email && contactEmail;
+      const needsPhone = !existing.phone_number && contactPhone;
       if (needsEmail || needsPhone) {
         await pouch.updateCustomer(pouchCustomerId, {
-          email: needsEmail ? (user.email ?? undefined) : undefined,
-          phoneNumber: needsPhone ? (phone ?? user.phone ?? undefined) : undefined,
+          email: needsEmail ? contactEmail : undefined,
+          phoneNumber: needsPhone ? contactPhone : undefined,
         });
       }
     }
