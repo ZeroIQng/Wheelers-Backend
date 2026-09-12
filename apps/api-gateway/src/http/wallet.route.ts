@@ -16,6 +16,7 @@ import {
   classifyPouchPayoutStatus,
   type PouchBankAccount,
   type PouchPayout,
+  pouchNameParts,
 } from "@wheleers/pouch-client";
 import type { RedisClient } from "../redis/client";
 import type { PayoutCreatedEvent } from "@wheleers/kafka-schemas";
@@ -1005,9 +1006,7 @@ export async function handleProvisionVirtualAccountRoute(
 
     // Fetch full user for name
     const fullUser = await userClient.findById(user.id);
-    const nameParts = (fullUser?.name ?? "Wheelers User").trim().split(/\s+/);
-    const firstName = nameParts[0] ?? "Wheelers";
-    const lastName = nameParts.slice(1).join(" ") || "User";
+    const { firstName, lastName } = pouchNameParts(fullUser?.name);
 
     // Create or retrieve Pouch customer
     let pouchCustomerId = fullUser?.pouchCustomerId;

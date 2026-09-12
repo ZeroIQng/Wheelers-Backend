@@ -12,3 +12,4 @@ export {
   type PouchPayout,
   type ApiResponse,
 } from './types';
+export { pouchNameParts, sanitizePouchName, type PouchNameParts } from './names';

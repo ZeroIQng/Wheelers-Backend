@@ -1,5 +1,5 @@
 import { userClient, virtualAccountClient } from '@wheleers/db';
-import { classifyPouchPayoutStatus } from '@wheleers/pouch-client';
+import { classifyPouchPayoutStatus, pouchNameParts } from '@wheleers/pouch-client';
 import type { PouchLiquifiaClient } from '@wheleers/pouch-client';
 
 const TAG = '[cash-escrow]';
@@ -107,14 +107,17 @@ export function createCashEscrow(
     // Mirror of the gateway's provisioning flow.
     const user = await userClient.findById(driverUserId).catch(() => null);
     if (!user) return null;
-    const nameParts = (user.name ?? 'Wheelers Driver').trim().split(/\s+/);
+    const { firstName, lastName } = pouchNameParts(user.name, {
+      firstName: 'Wheelers',
+      lastName: 'Driver',
+    });
 
     let pouchCustomerId = user.pouchCustomerId;
     if (!pouchCustomerId) {
       const customer = await pouchClient.createCustomer({
         customerReference: driverUserId,
-        firstName: nameParts[0] ?? 'Wheelers',
-        lastName: nameParts.slice(1).join(' ') || 'Driver',
+        firstName,
+        lastName,
       });
       pouchCustomerId = customer.id;
       await userClient.updatePouchCustomerId(driverUserId, pouchCustomerId);

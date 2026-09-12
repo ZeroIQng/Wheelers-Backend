@@ -9,7 +9,7 @@ import {
   virtualAccountClient,
   walletClient,
 } from '@wheleers/db';
-import type { PouchLiquifiaClient } from '@wheleers/pouch-client';
+import { pouchNameParts, type PouchLiquifiaClient } from '@wheleers/pouch-client';
 import type { GatewayPublisher } from '../websocket/publisher';
 
 export interface UserOnboardingDeps {
@@ -80,9 +80,8 @@ export async function provisionPouchAccount(
   }
 
   const user = await userClient.findById(userId);
-  const nameParts = (name ?? user.name ?? 'Wheelers User').trim().split(/\s+/);
-  const firstName = nameParts[0] ?? 'Wheelers';
-  const lastName = nameParts.slice(1).join(' ') || 'User';
+  // The display name keeps its emoji; Pouch gets the letters-only version.
+  const { firstName, lastName } = pouchNameParts(name ?? user.name);
 
   let pouchCustomerId = user.pouchCustomerId ?? undefined;
   if (!pouchCustomerId) {
