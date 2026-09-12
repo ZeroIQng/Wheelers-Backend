@@ -106,8 +106,10 @@ if (!CONFIRM) {
 //    taken, so suffix it: -r2, then -r3 if a previous run already made -r2
 //    (a reference that exists is reused, never duplicated).
 let customerId = null;
+let chosenAttempt = 0;
 let fresh = null;
 for (let attempt = 2; attempt <= 5 && !customerId; attempt += 1) {
+  chosenAttempt = attempt;
   const reference = `${user.id}-r${attempt}`;
   const existing = await pouch.findCustomerByReference(reference).catch(() => null);
   if (existing) {
@@ -133,11 +135,12 @@ if (!customerId) {
 }
 
 // 2. One virtual account under it. If the customer already had one (re-run),
-//    Pouch hands the same account back, which is what we want.
+//    Pouch hands the same account back, which is what we want. Keys are
+//    capped at 64 characters, so keep the suffix short and stable.
 fresh = await pouch.createVirtualAccount(customerId, {
   country: 'NG',
   currency: 'NGN',
-  idempotencyKey: `va-reissue-${user.id}-${customerId}`,
+  idempotencyKey: `va-reissue-${user.id}-r${chosenAttempt}`,
 });
 console.log(`✓ account ${fresh.bank_name} ${fresh.account_number}  "${fresh.account_name}"`);
 if (!isClean(fresh.account_name)) {
